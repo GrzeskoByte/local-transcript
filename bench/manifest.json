@@ -1,0 +1,28 @@
+{
+  "datasets": {
+    "librispeech": {
+      "name": "hf-internal-testing/librispeech_asr_dummy",
+      "config": "clean",
+      "split": "validation"
+    }
+  },
+  "cases": [
+    {
+      "id": "silence-8s",
+      "kind": "synthetic",
+      "generator": { "type": "silence", "seconds": 8 },
+      "expected": ""
+    },
+    {
+      "id": "noise-5s",
+      "kind": "synthetic",
+      "generator": { "type": "noise", "seconds": 5, "amplitude": 0.02, "seed": 42 },
+      "expected": ""
+    },
+    { "id": "librispeech-0", "kind": "hf", "dataset": "librispeech", "row": 0 },
+    { "id": "librispeech-1", "kind": "hf", "dataset": "librispeech", "row": 1 },
+    { "id": "librispeech-2", "kind": "hf", "dataset": "librispeech", "row": 2 },
+    { "id": "librispeech-3", "kind": "hf", "dataset": "librispeech", "row": 3 },
+    { "id": "librispeech-4", "kind": "hf", "dataset": "librispeech", "row": 4 }
+  ]
+}
