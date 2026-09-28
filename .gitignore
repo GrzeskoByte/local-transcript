@@ -4,3 +4,6 @@ dist/
 playwright-report/
 test-results/
 bench/fixtures/cache/
+
+# promo showreel (local only)
+promo/
