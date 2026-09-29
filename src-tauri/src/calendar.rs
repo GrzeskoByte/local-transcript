@@ -6,7 +6,7 @@
 //! process, never logged.
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::Deserialize;
 
@@ -54,7 +54,7 @@ fn curl_send(req: &CalendarCreateRequest) -> Result<String, String> {
     {
         return Err("Calendar method must be PUT, POST, PROPFIND, GET or REPORT.".to_string());
     }
-    let mut cmd = Command::new(curl_program());
+    let mut cmd = crate::process::command(curl_program());
     cmd.args(["-sS", "-f", "-X", &req.method]);
     cmd.arg("--connect-timeout")
         .arg("15")

@@ -83,7 +83,7 @@ pub fn native_open_storage_dir(app: AppHandle) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    std::process::Command::new(opener)
+    crate::process::command(opener)
         .arg(&dir)
         .spawn()
         .map_err(|e| format!("Could not open {}: {e}", dir.display()))?;
@@ -111,7 +111,7 @@ pub fn native_open_url(url: String) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    std::process::Command::new(opener)
+    crate::process::command(opener)
         .arg(&url)
         .spawn()
         .map_err(|e| format!("Could not open link: {e}"))?;

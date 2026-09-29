@@ -3,6 +3,7 @@ mod native_asr;
 mod opencode;
 mod storage;
 mod calendar;
+mod process;
 
 pub use native_asr::AppState;
 

@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Headless summarization can take a while on long transcripts.
@@ -69,7 +69,7 @@ fn quick_output(bin: &PathBuf, args: &[&str]) -> Option<String> {
     // Bounded wait: these are local informational commands, but `service
     // status` can block if the background service is wedged — never hang
     // the Settings "Test connection" button forever.
-    let mut child = Command::new(bin)
+    let mut child = crate::process::command(bin)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -206,7 +206,7 @@ fn summarize_blocking(
     let tmp = TempTranscript::create(&request.transcript)?;
     let file_arg = tmp.path.to_string_lossy().to_string();
 
-    let mut child = Command::new(&bin)
+    let mut child = crate::process::command(&bin)
         .args([
             "run",
             "--model",
