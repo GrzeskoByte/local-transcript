@@ -29,3 +29,11 @@ test('settings fills the SOGo CalDAV address from host + username', async ({ pag
     'mail.host.com/SOGo/dav/me@host.com/Calendar/personal/',
   );
 });
+
+test('calendar detection explains it needs the desktop app in a browser', async ({ page }) => {
+  await page.goto('/#/settings');
+  await page.getByRole('tab', { name: 'Calendar' }).or(page.getByRole('button', { name: 'Calendar', exact: true })).last().click();
+  const card = page.getByLabel('Company calendar');
+  await card.getByRole('button', { name: 'Find in Thunderbird' }).click();
+  await expect(card.getByRole('status')).toHaveText('Detection needs the desktop app.');
+});

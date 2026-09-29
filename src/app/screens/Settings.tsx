@@ -19,6 +19,13 @@ import {
   validateCalendarConfig,
 } from '../../integrations/calendar';
 import type { CalendarProvider } from '../../integrations/calendar';
+import {
+  CALENDAR_SYSTEM_LABELS,
+  detectFromServer,
+  scanThunderbird,
+  type DetectedCalendar,
+  type MailAccount,
+} from '../../integrations/calendar-detect';
 import { isDesktopApp } from '../../platform/desktop';
 import {
   isSecureMediaContext,
@@ -67,6 +74,10 @@ export function Settings(): React.JSX.Element {
   const [calDraft, setCalDraft] = useState(calendarConfig);
   const [calBusy, setCalBusy] = useState(false);
   const [calMessage, setCalMessage] = useState<string | null>(null);
+  const [detected, setDetected] = useState<DetectedCalendar[] | null>(null);
+  const [mailAccounts, setMailAccounts] = useState<MailAccount[]>([]);
+  const [detectBusy, setDetectBusy] = useState(false);
+  const [detectMessage, setDetectMessage] = useState<string | null>(null);
   const [llmDraft, setLlmDraft] = useState(llmConfig);
   const [llmBusy, setLlmBusy] = useState(false);
   const [llmMessage, setLlmMessage] = useState<string | null>(null);
@@ -420,6 +431,107 @@ export function Settings(): React.JSX.Element {
           Create calendar events from a meeting summary on your company server.
           Credentials stay on this device; transport runs through the desktop shell.
         </div>
+        <div className="btn-row">
+          <button
+            className="btn"
+            type="button"
+            disabled={detectBusy}
+            onClick={() => {
+              if (!isDesktopApp()) {
+                setDetectMessage('Detection needs the desktop app.');
+                return;
+              }
+              setDetectBusy(true);
+              setDetectMessage(null);
+              scanThunderbird()
+                .then(({ calendars, mailAccounts: accounts }) => {
+                  setDetected(calendars);
+                  setMailAccounts(accounts);
+                  setDetectMessage(
+                    calendars.length
+                      ? `Found ${calendars.length} calendar(s) in Thunderbird.`
+                      : accounts.length
+                        ? `No network calendar in Thunderbird; mail server ${accounts[0].host} found — try "Detect from server".`
+                        : 'No Thunderbird profile with calendars found.',
+                  );
+                })
+                .catch((e: unknown) => setDetectMessage(e instanceof Error ? e.message : String(e)))
+                .finally(() => setDetectBusy(false));
+            }}
+          >
+            Find in Thunderbird
+          </button>
+          <button
+            className="btn"
+            type="button"
+            disabled={detectBusy}
+            onClick={() => {
+              if (!isDesktopApp()) {
+                setDetectMessage('Detection needs the desktop app.');
+                return;
+              }
+              const host = calDraft.serverUrl.trim() || mailAccounts[0]?.host || '';
+              const user = calDraft.username.trim() || mailAccounts[0]?.username || '';
+              if (!host) {
+                setDetectMessage('Enter the server host below (e.g. mail.host.com), then detect.');
+                return;
+              }
+              setDetectBusy(true);
+              setDetectMessage(`Checking ${host}…`);
+              detectFromServer(host, user, calDraft.password)
+                .then((found) => {
+                  setDetected(found);
+                  setDetectMessage(`${CALENDAR_SYSTEM_LABELS[found[0].system]} detected on ${host}.`);
+                })
+                .catch((e: unknown) => setDetectMessage(e instanceof Error ? e.message : String(e)))
+                .finally(() => setDetectBusy(false));
+            }}
+          >
+            {detectBusy ? 'Detecting…' : 'Detect from server'}
+          </button>
+        </div>
+        <div className="muted small" style={{ marginBottom: 0 }}>
+          Thunderbird is read on this device only (no passwords). Server detection
+          tries standard calendar addresses on the host (plus your password, if
+          entered, to list calendars).
+        </div>
+        {detectMessage && <p className="muted small" role="status" style={{ marginBottom: 0 }}>{detectMessage}</p>}
+        {detected && detected.length > 0 && (
+          <ul className="model-list" aria-label="Detected calendars">
+            {detected.map((d) => (
+              <li key={d.source + d.url} className="model-row">
+                <div className="model-main">
+                  <span className="model-name">{d.name} · {CALENDAR_SYSTEM_LABELS[d.system]}</span>
+                  <span className="muted small" style={{ wordBreak: 'break-all' }}>
+                    {d.url}{d.username ? ` · ${d.username}` : ''}{d.detail ? ` · ${d.detail}` : ''}
+                  </span>
+                </div>
+                <div className="model-actions">
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => {
+                      setCalDraft({
+                        ...calDraft,
+                        provider: d.provider,
+                        serverUrl: d.url,
+                        calendarUrl: '',
+                        username: d.username || calDraft.username,
+                      });
+                      setCalMessage(
+                        calDraft.password
+                          ? 'Filled in. Save, then Test connection.'
+                          : 'Filled in. Enter your password, Save, then Test connection.',
+                      );
+                    }}
+                  >
+                    Use
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
         <label className="field-label" htmlFor="cal-provider">Server type</label>
         <select
           id="cal-provider"

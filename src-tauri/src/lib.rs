@@ -3,6 +3,7 @@ mod native_asr;
 mod opencode;
 mod storage;
 mod calendar;
+mod calendar_detect;
 
 pub use native_asr::AppState;
 
@@ -40,6 +41,8 @@ pub fn run() {
             calendar::native_calendar_create,
             calendar::native_calendar_fetch,
             calendar::native_calendar_test,
+            calendar_detect::native_calendar_thunderbird,
+            calendar_detect::native_calendar_probe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
