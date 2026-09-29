@@ -14,11 +14,28 @@ import { LLM_PRESETS, LLM_PRESET_LABELS, createLlmClient, getOpencodeStatus } fr
 import type { LlmPreset } from '../../integrations/llm';
 import {
   CALENDAR_PROVIDER_LABELS,
+  sogoCalendarUrl,
   testCalendarConnection,
   validateCalendarConfig,
 } from '../../integrations/calendar';
 import type { CalendarProvider } from '../../integrations/calendar';
-import { isDesktopApp } from '../../platform/desktop';
+import {
+  CALENDAR_SYSTEM_LABELS,
+  detectFromServer,
+  scanThunderbird,
+  type DetectedCalendar,
+  type MailAccount,
+} from '../../integrations/calendar-detect';
+import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
+import {
+  getAutoCheck,
+  getUpdateProgress,
+  installUpdate,
+  setAutoCheck,
+  updateBlockedReason,
+  updateRatio,
+  type UpdateProgress,
+} from '../../platform/updater';
 import {
   isSecureMediaContext,
   primeMicrophonePermission,
@@ -51,6 +68,11 @@ export function Settings(): React.JSX.Element {
     saveCalendarConfig,
     llmConfig,
     saveLlmConfig,
+    route,
+    recordingState,
+    txStage,
+    updateInfo,
+    checkUpdates,
   } = useApp();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [gpuBusy, setGpuBusy] = useState(false);
@@ -66,6 +88,10 @@ export function Settings(): React.JSX.Element {
   const [calDraft, setCalDraft] = useState(calendarConfig);
   const [calBusy, setCalBusy] = useState(false);
   const [calMessage, setCalMessage] = useState<string | null>(null);
+  const [detected, setDetected] = useState<DetectedCalendar[] | null>(null);
+  const [mailAccounts, setMailAccounts] = useState<MailAccount[]>([]);
+  const [detectBusy, setDetectBusy] = useState(false);
+  const [detectMessage, setDetectMessage] = useState<string | null>(null);
   const [llmDraft, setLlmDraft] = useState(llmConfig);
   const [llmBusy, setLlmBusy] = useState(false);
   const [llmMessage, setLlmMessage] = useState<string | null>(null);
@@ -118,7 +144,44 @@ export function Settings(): React.JSX.Element {
       });
   }, [llmDraft.preset]);
 
-  const [tab, setTab] = useState<'models' | 'calendar' | 'sharing' | 'ai' | 'app'>('models');
+  const [tab, setTab] = useState<'models' | 'calendar' | 'sharing' | 'ai' | 'app'>(
+    route.name === 'settings' && route.tab ? route.tab : 'models',
+  );
+  useEffect(() => {
+    if (route.name === 'settings' && route.tab) setTab(route.tab);
+  }, [route]);
+  const [autoCheck, setAutoCheckState] = useState(getAutoCheck);
+  const [updateBusy, setUpdateBusy] = useState<'checking' | 'installing' | null>(null);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const updateBlocked = updateBlockedReason(recordingState, Object.keys(txStage).length);
+
+  const runUpdateCheck = () => {
+    setUpdateBusy('checking');
+    setUpdateMessage(null);
+    checkUpdates()
+      .then((info) =>
+        setUpdateMessage(info.available ? null : `You're up to date (v${info.currentVersion}).`),
+      )
+      .catch((e: unknown) => setUpdateMessage(e instanceof Error ? e.message : String(e)))
+      .finally(() => setUpdateBusy(null));
+  };
+
+  const runUpdateInstall = () => {
+    setUpdateBusy('installing');
+    setUpdateMessage(null);
+    const poll = window.setInterval(() => {
+      void getUpdateProgress().then(setUpdateProgress).catch(() => undefined);
+    }, 400);
+    // Resolves only on failure: success restarts the app.
+    installUpdate()
+      .catch((e: unknown) => setUpdateMessage(e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        window.clearInterval(poll);
+        setUpdateBusy(null);
+        setUpdateProgress(null);
+      });
+  };
 
   const gpu = nativeStatus?.gpu ?? null;
   const groups = groupByTier(modelCatalog);
@@ -228,6 +291,100 @@ export function Settings(): React.JSX.Element {
 
       {tab === 'app' && (
       <>
+      <section className="card" aria-label="Updates">
+        <div className="model-title" style={{ marginBottom: 4 }}>
+          <strong>Updates</strong>
+          {updateInfo && !updateInfo.available && (
+            <span className="badge badge-ok">
+              <CheckIcon /> Up to date
+            </span>
+          )}
+        </div>
+        {!isDesktopApp() ? (
+          <div className="muted">Updates are installed from the desktop app.</div>
+        ) : (
+          <>
+            <div className="muted">
+              {updateInfo
+                ? `Installed version: v${updateInfo.currentVersion}.`
+                : 'Check GitHub for a newer version.'}{' '}
+              Updates are signed and verified before installing; your recordings
+              and transcripts are kept.
+            </div>
+            {updateInfo?.available && (
+              <>
+                <p style={{ marginBottom: 4 }}>
+                  <strong>Version {updateInfo.version} is available.</strong>
+                </p>
+                {updateInfo.notes && (
+                  <p className="muted small" style={{ whiteSpace: 'pre-wrap', marginTop: 0 }}>{updateInfo.notes}</p>
+                )}
+                {!updateInfo.canSelfUpdate && (
+                  <p className="muted small">
+                    This installation (.deb/.rpm) can't replace itself — download the new
+                    version and install it the same way.
+                  </p>
+                )}
+                {updateBlocked && updateInfo.canSelfUpdate && (
+                  <p className="warn small" role="status">{updateBlocked}</p>
+                )}
+              </>
+            )}
+            {updateBusy === 'installing' && (
+              <div style={{ marginTop: 10 }} aria-label="Update progress">
+                {updateProgress && updateRatio(updateProgress) !== null ? (
+                  <progress max={1} value={updateRatio(updateProgress) ?? 0} />
+                ) : (
+                  <progress />
+                )}
+                <div className="muted small">
+                  {updateProgress?.stage === 'installing'
+                    ? 'Installing… the app restarts when done.'
+                    : updateProgress?.stage === 'restarting'
+                      ? 'Restarting…'
+                      : 'Downloading update…'}
+                </div>
+              </div>
+            )}
+            {updateMessage && <p className="muted small" role="status" style={{ marginBottom: 0 }}>{updateMessage}</p>}
+            <div className="btn-row">
+              {updateInfo?.available && updateInfo.canSelfUpdate && (
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  disabled={!!updateBusy || !!updateBlocked}
+                  onClick={runUpdateInstall}
+                >
+                  {updateBusy === 'installing' ? 'Updating…' : 'Update & restart'}
+                </button>
+              )}
+              {updateInfo?.available && !updateInfo.canSelfUpdate && (
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={() => void openExternalUrl(updateInfo.downloadUrl)}
+                >
+                  Download v{updateInfo.version}
+                </button>
+              )}
+              <button className="btn" type="button" disabled={!!updateBusy} onClick={runUpdateCheck}>
+                {updateBusy === 'checking' ? 'Checking…' : 'Check for updates'}
+              </button>
+            </div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+              <input
+                type="checkbox"
+                checked={autoCheck}
+                onChange={(e) => {
+                  setAutoCheck(e.target.checked);
+                  setAutoCheckState(e.target.checked);
+                }}
+              />
+              Check for updates when the app starts (contacts GitHub only)
+            </label>
+          </>
+        )}
+      </section>
       <section className="card" aria-label="Microphone access">
         <div className="model-title" style={{ marginBottom: 4 }}>
           <strong>Microphone access</strong>
@@ -419,6 +576,107 @@ export function Settings(): React.JSX.Element {
           Create calendar events from a meeting summary on your company server.
           Credentials stay on this device; transport runs through the desktop shell.
         </div>
+        <div className="btn-row">
+          <button
+            className="btn"
+            type="button"
+            disabled={detectBusy}
+            onClick={() => {
+              if (!isDesktopApp()) {
+                setDetectMessage('Detection needs the desktop app.');
+                return;
+              }
+              setDetectBusy(true);
+              setDetectMessage(null);
+              scanThunderbird()
+                .then(({ calendars, mailAccounts: accounts }) => {
+                  setDetected(calendars);
+                  setMailAccounts(accounts);
+                  setDetectMessage(
+                    calendars.length
+                      ? `Found ${calendars.length} calendar(s) in Thunderbird.`
+                      : accounts.length
+                        ? `No network calendar in Thunderbird; mail server ${accounts[0].host} found — try "Detect from server".`
+                        : 'No Thunderbird profile with calendars found.',
+                  );
+                })
+                .catch((e: unknown) => setDetectMessage(e instanceof Error ? e.message : String(e)))
+                .finally(() => setDetectBusy(false));
+            }}
+          >
+            Find in Thunderbird
+          </button>
+          <button
+            className="btn"
+            type="button"
+            disabled={detectBusy}
+            onClick={() => {
+              if (!isDesktopApp()) {
+                setDetectMessage('Detection needs the desktop app.');
+                return;
+              }
+              const host = calDraft.serverUrl.trim() || mailAccounts[0]?.host || '';
+              const user = calDraft.username.trim() || mailAccounts[0]?.username || '';
+              if (!host) {
+                setDetectMessage('Enter the server host below (e.g. mail.host.com), then detect.');
+                return;
+              }
+              setDetectBusy(true);
+              setDetectMessage(`Checking ${host}…`);
+              detectFromServer(host, user, calDraft.password)
+                .then((found) => {
+                  setDetected(found);
+                  setDetectMessage(`${CALENDAR_SYSTEM_LABELS[found[0].system]} detected on ${host}.`);
+                })
+                .catch((e: unknown) => setDetectMessage(e instanceof Error ? e.message : String(e)))
+                .finally(() => setDetectBusy(false));
+            }}
+          >
+            {detectBusy ? 'Detecting…' : 'Detect from server'}
+          </button>
+        </div>
+        <div className="muted small" style={{ marginBottom: 0 }}>
+          Thunderbird is read on this device only (no passwords). Server detection
+          tries standard calendar addresses on the host (plus your password, if
+          entered, to list calendars).
+        </div>
+        {detectMessage && <p className="muted small" role="status" style={{ marginBottom: 0 }}>{detectMessage}</p>}
+        {detected && detected.length > 0 && (
+          <ul className="model-list" aria-label="Detected calendars">
+            {detected.map((d) => (
+              <li key={d.source + d.url} className="model-row">
+                <div className="model-main">
+                  <span className="model-name">{d.name} · {CALENDAR_SYSTEM_LABELS[d.system]}</span>
+                  <span className="muted small" style={{ wordBreak: 'break-all' }}>
+                    {d.url}{d.username ? ` · ${d.username}` : ''}{d.detail ? ` · ${d.detail}` : ''}
+                  </span>
+                </div>
+                <div className="model-actions">
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => {
+                      setCalDraft({
+                        ...calDraft,
+                        provider: d.provider,
+                        serverUrl: d.url,
+                        calendarUrl: '',
+                        username: d.username || calDraft.username,
+                      });
+                      setCalMessage(
+                        calDraft.password
+                          ? 'Filled in. Save, then Test connection.'
+                          : 'Filled in. Enter your password, Save, then Test connection.',
+                      );
+                    }}
+                  >
+                    Use
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
         <label className="field-label" htmlFor="cal-provider">Server type</label>
         <select
           id="cal-provider"
@@ -521,6 +779,28 @@ export function Settings(): React.JSX.Element {
         )}
         {calDraft.provider === 'caldav' && (
           <>
+            <div className="btn-row">
+              <button
+                className="btn"
+                type="button"
+                onClick={() => {
+                  const url = sogoCalendarUrl(calDraft.serverUrl, calDraft.username);
+                  if (!url) {
+                    setCalMessage('Enter the SOGo host (e.g. mail.host.com) and your username first.');
+                    return;
+                  }
+                  setCalDraft({ ...calDraft, serverUrl: url, calendarUrl: '' });
+                  setCalMessage('SOGo address filled in (personal calendar). Save, then Test connection.');
+                }}
+              >
+                Use SOGo address
+              </button>
+            </div>
+            <div className="muted small" style={{ marginBottom: 0 }}>
+              SOGo (also what Thunderbird uses): enter the mail host and username,
+              then fill in the default calendar path. Another calendar? Copy its
+              Location from Thunderbird → calendar Properties.
+            </div>
             <label className="field-label" htmlFor="cal-collection">
               Calendar collection URL (optional override)
             </label>

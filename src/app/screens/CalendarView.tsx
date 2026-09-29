@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../store';
 import { CALENDAR_PROVIDERS, type CalendarProvider, type ServerEvent } from '../../integrations/calendar';
+import { readCachedMonth, writeCachedMonth } from '../../integrations/calendar-cache';
+import { isDesktopApp } from '../../platform/desktop';
 
 function dayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -28,19 +30,39 @@ export function CalendarView(): React.JSX.Element {
   const { start, end } = useMemo(() => monthRange(year, month), [year, month]);
   const monthKey = `${year}-${month}`;
 
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  const [reload, setReload] = useState(0);
+
   useEffect(() => {
     let cancelled = false;
+    let live = false;
+    const config = calendarConfig;
     setLoading(true);
     setFetchError(null);
+    setCachedAt(null);
+    setServerEvents([]);
+    // Show the last fetched copy right away; the live fetch replaces it.
+    void readCachedMonth(config, start).then((hit) => {
+      if (cancelled || live || !hit) return;
+      setServerEvents(hit.events);
+      setCachedAt(hit.fetchedAt);
+    });
     void fetchCalendarEvents(start, end)
       .then((events) => {
-        if (!cancelled) setServerEvents(events);
+        if (cancelled) return;
+        live = true;
+        setServerEvents(events);
+        setCachedAt(null);
+        if (isDesktopApp()) void writeCachedMonth(config, start, events);
       })
-      .catch((e) => {
-        if (!cancelled) {
-          setServerEvents([]);
-          setFetchError(e instanceof Error ? e.message : String(e));
-        }
+      .catch(async (e) => {
+        if (cancelled) return;
+        live = true;
+        const hit = await readCachedMonth(config, start);
+        if (cancelled) return;
+        setServerEvents(hit?.events ?? []);
+        setCachedAt(hit?.fetchedAt ?? null);
+        setFetchError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -49,7 +71,7 @@ export function CalendarView(): React.JSX.Element {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monthKey, calendarConfig.provider]);
+  }, [monthKey, calendarConfig, reload]);
 
   const localByDay = useMemo(() => {
     const map = new Map<string, typeof meetings>();
@@ -133,11 +155,26 @@ export function CalendarView(): React.JSX.Element {
               Today
             </button>
             <button className="btn" type="button" onClick={() => shift(1)} aria-label="Next month">›</button>
+            <button
+              className="btn"
+              type="button"
+              disabled={loading}
+              onClick={() => setReload((n) => n + 1)}
+              aria-label="Refresh server events"
+            >
+              Refresh
+            </button>
           </div>
           <strong>{MONTHS[month]} {year}</strong>
         </div>
         {loading && <p className="muted">Loading server events…</p>}
         {fetchError && <p className="warn" role="alert">{fetchError}</p>}
+        {cachedAt !== null && (
+          <p className="muted small" role="status">
+            {fetchError ? 'Offline — showing' : 'Showing'} events saved on this device at{' '}
+            {new Date(cachedAt).toLocaleString()}.
+          </p>
+        )}
         <div className="cal-grid" role="grid" aria-label={`${MONTHS[month]} ${year}`}>
           {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
             <div key={d} className="cal-dow">{d}</div>

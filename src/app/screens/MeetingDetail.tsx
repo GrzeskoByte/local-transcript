@@ -295,8 +295,9 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             <strong>Calendar event</strong>
           </div>
           <div className="muted">
-            Create a follow-up on your company calendar from this summary.
-            Configure the server under Settings → Company calendar.
+            Create follow-up events on your company calendar from this summary.
+            Nothing is sent until you approve the draft. Configure the server
+            under Settings → Calendar.
           </div>
           {!calDraft ? (
             <div className="btn-row">
@@ -313,7 +314,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
                   )
                 }
               >
-                Prepare event from summary
+                {m.calendarEvents?.length ? 'Prepare another event' : 'Prepare event from summary'}
               </button>
             </div>
           ) : (
@@ -347,6 +348,14 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
                   />
                 </label>
               </div>
+              <label className="field-label" htmlFor="cal-description">Description</label>
+              <textarea
+                id="cal-description"
+                className="input"
+                rows={5}
+                value={calDraft.description}
+                onChange={(e) => setCalDraft({ ...calDraft, description: e.target.value })}
+              />
               <label className="field-label" htmlFor="cal-location">Location (optional)</label>
               <input
                 id="cal-location"
@@ -374,7 +383,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
                       .finally(() => setCalBusy(false));
                   }}
                 >
-                  {calBusy ? 'Creating…' : 'Create on server'}
+                  {calBusy ? 'Creating…' : 'Approve & create on server'}
                 </button>
                 <button className="btn" disabled={calBusy} onClick={() => setCalDraft(null)}>
                   Discard
@@ -382,10 +391,28 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               </div>
             </>
           )}
-          {m.calendarEvent && (
-            <p className="muted small" style={{ marginBottom: 0 }}>
-              Last event created: {new Date(m.calendarEvent.createdAt).toLocaleString()} · {m.calendarEvent.provider}
-            </p>
+          {m.calendarEvents && m.calendarEvents.length > 0 ? (
+            <>
+              <p className="muted small" style={{ marginBottom: 0 }}>Events created from this meeting</p>
+              <ul className="model-list" aria-label="Created calendar events">
+                {m.calendarEvents.map((ev) => (
+                  <li key={ev.uid} className="model-row">
+                    <div className="model-main">
+                      <span className="model-name">{ev.title}</span>
+                      <span className="muted small">
+                        {ev.startIso.replace('T', ' ')} · {ev.provider} · created {new Date(ev.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            m.calendarEvent && (
+              <p className="muted small" style={{ marginBottom: 0 }}>
+                Last event created: {new Date(m.calendarEvent.createdAt).toLocaleString()} · {m.calendarEvent.provider}
+              </p>
+            )
           )}
         </section>
       )}

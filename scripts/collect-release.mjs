@@ -17,19 +17,25 @@ if (!bundleDir || !outDir || !version || !platform || !arch) {
   process.exit(2);
 }
 
-// bundle sub-directory → [file extension, output suffix]
-const RULES = {
-  nsis: ['.exe', '-setup.exe'],
-  msi: ['.msi', '.msi'],
-  dmg: ['.dmg', '.dmg'],
-  deb: ['.deb', '.deb'],
-  rpm: ['.rpm', '.rpm'],
-  appimage: ['.AppImage', '.AppImage'],
-};
+// [bundle sub-directory, file extension, output suffix]. The `.sig` files and
+// the macOS `.app.tar.gz` exist only when updater artifacts are built
+// (tauri.updater.conf.json + TAURI_SIGNING_PRIVATE_KEY); they feed latest.json.
+const RULES = [
+  ['nsis', '.exe', '-setup.exe'],
+  ['nsis', '.exe.sig', '-setup.exe.sig'],
+  ['msi', '.msi', '.msi'],
+  ['dmg', '.dmg', '.dmg'],
+  ['macos', '.app.tar.gz', '.app.tar.gz'],
+  ['macos', '.app.tar.gz.sig', '.app.tar.gz.sig'],
+  ['deb', '.deb', '.deb'],
+  ['rpm', '.rpm', '.rpm'],
+  ['appimage', '.AppImage', '.AppImage'],
+  ['appimage', '.AppImage.sig', '.AppImage.sig'],
+];
 
 mkdirSync(outDir, { recursive: true });
 const collected = [];
-for (const [dir, [ext, suffix]] of Object.entries(RULES)) {
+for (const [dir, ext, suffix] of RULES) {
   const src = path.join(bundleDir, dir);
   if (!existsSync(src)) continue;
   for (const file of readdirSync(src).filter((f) => f.endsWith(ext))) {

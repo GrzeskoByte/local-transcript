@@ -18,6 +18,7 @@ import {
   parseCaldavReport,
   parseEwsFindItem,
   parseGraphEvents,
+  sogoCalendarUrl,
   parseIcsEvents,
   toIcsUtc,
   toLocalIso,
@@ -138,7 +139,8 @@ describe('builders', () => {
     expect(
       buildTestTransport({ ...DEFAULT_CALENDAR_CONFIG, serverUrl: 'https://cal.example/dav/', username: 'u', password: 'p' }).endpoint,
     ).toBe('https://cal.example/dav');
-    expect(eventUid('abc123')).toBe('abc123@local-transcribe');
+    expect(eventUid('abc123', 36)).toBe('abc123-10@local-transcribe');
+    expect(eventUid('abc123', 1)).not.toBe(eventUid('abc123', 2));
   });
 });
 
@@ -235,5 +237,31 @@ describe('composeUrl', () => {
   });
   it('rejects a non-numeric port', () => {
     expect(validateCalendarConfig({ ...DEFAULT_CALENDAR_CONFIG, serverUrl: 'cal.example', port: 'abc', username: 'u', password: 'p' })).toMatch(/Port/);
+  });
+});
+
+describe('sogoCalendarUrl', () => {
+  it('builds the default personal calendar path', () => {
+    expect(sogoCalendarUrl('mail.host.com', 'me@host.com')).toBe(
+      'mail.host.com/SOGo/dav/me@host.com/Calendar/personal/',
+    );
+  });
+  it('keeps scheme/port, replaces any path, encodes names', () => {
+    expect(sogoCalendarUrl('https://mail.host.com:8443/SOGo/', 'j doe', 'work')).toBe(
+      'https://mail.host.com:8443/SOGo/dav/j%20doe/Calendar/work/',
+    );
+  });
+  it('returns empty without host or user', () => {
+    expect(sogoCalendarUrl('', 'me')).toBe('');
+    expect(sogoCalendarUrl('mail.host.com', ' ')).toBe('');
+  });
+  it('composes into a valid CalDAV endpoint', () => {
+    const serverUrl = sogoCalendarUrl('mail.host.com', 'me@host.com');
+    const t = buildTransport(
+      { ...DEFAULT_CALENDAR_CONFIG, serverUrl, username: 'me@host.com', password: 'p' },
+      { title: 'x', startIso: '2026-10-01T09:00', endIso: '2026-10-01T10:00', description: '', location: '' },
+      'u1@local-transcribe',
+    );
+    expect(t.endpoint).toBe('https://mail.host.com/SOGo/dav/me@host.com/Calendar/personal/u1@local-transcribe.ics');
   });
 });

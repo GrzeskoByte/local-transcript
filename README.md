@@ -191,6 +191,24 @@ Every release includes `SHA256SUMS.txt`; files are named
 2. Commit, then `git tag v0.1.0 && git push origin v0.1.0`.
 3. The three releases are created as **drafts** — review them on GitHub and publish.
 
+### In-app updates
+
+Settings → App → **Updates** checks GitHub (on launch, opt-out, and on demand)
+and, on a click, downloads, verifies, installs and restarts
+(`tauri-plugin-updater`, `src-tauri/src/updater.rs`). Windows (NSIS) and macOS
+update themselves; on Linux only the AppImage does — `.deb`/`.rpm` installs get a
+download link. Installing is disabled while recording or transcribing.
+
+- The app reads `latest.json` from the fixed **`updater`** release. It is rebuilt
+  by `.github/workflows/update-manifest.yml` (`scripts/updater-manifest.mjs`)
+  whenever a release is published, from the newest *published* version.
+- Update artifacts (`-setup.exe`, `.app.tar.gz`, `.AppImage` + `.sig`) are signed
+  with the key whose public half is in `tauri.conf.json` → `plugins.updater.pubkey`.
+  **Required repo secret:** `TAURI_SIGNING_PRIVATE_KEY` (the private key file's
+  contents; `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` only if it has one). Without it
+  releases still build, just without in-app update artifacts. Losing the private
+  key means installed apps can no longer update — keep a backup.
+
 Run it manually from **Actions → Release** to test (drafts by default). Builds are
 not code-signed or notarized yet; the release notes (`.github/release-notes/`)
 tell users how to get past SmartScreen / Gatekeeper.
