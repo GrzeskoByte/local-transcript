@@ -1,6 +1,7 @@
 mod models;
 mod native_asr;
 mod opencode;
+mod proc;
 mod storage;
 mod calendar;
 mod calendar_detect;
