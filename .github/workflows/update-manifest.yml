@@ -1,0 +1,46 @@
+# Rebuilds latest.json — the manifest the app's "Check for updates" reads —
+# from the published per-platform releases and uploads it to the fixed
+# `updater` release:
+#   https://github.com/GrzeskoByte/local-transcript/releases/download/updater/latest.json
+# Runs whenever a release is published (e.g. a reviewed draft), when
+# release.yml publishes directly, or by hand (Actions → Update manifest).
+name: Update manifest
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-manifest
+  cancel-in-progress: false
+
+jobs:
+  manifest:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.tag_name != 'updater' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build latest.json
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/releases" > releases.json
+          node scripts/updater-manifest.mjs releases.json latest.json
+          cat latest.json
+
+      - name: Upload to the `updater` release
+        run: |
+          if ! gh release view updater >/dev/null 2>&1; then
+            gh release create updater --title "In-app update manifest" \
+              --notes "latest.json for the app's built-in updater. Do not delete." --latest=false
+          fi
+          gh release upload updater latest.json --clobber

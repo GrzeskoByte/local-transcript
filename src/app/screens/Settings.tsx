@@ -26,7 +26,16 @@ import {
   type DetectedCalendar,
   type MailAccount,
 } from '../../integrations/calendar-detect';
-import { isDesktopApp } from '../../platform/desktop';
+import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
+import {
+  getAutoCheck,
+  getUpdateProgress,
+  installUpdate,
+  setAutoCheck,
+  updateBlockedReason,
+  updateRatio,
+  type UpdateProgress,
+} from '../../platform/updater';
 import {
   isSecureMediaContext,
   primeMicrophonePermission,
@@ -59,6 +68,11 @@ export function Settings(): React.JSX.Element {
     saveCalendarConfig,
     llmConfig,
     saveLlmConfig,
+    route,
+    recordingState,
+    txStage,
+    updateInfo,
+    checkUpdates,
   } = useApp();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [gpuBusy, setGpuBusy] = useState(false);
@@ -130,7 +144,44 @@ export function Settings(): React.JSX.Element {
       });
   }, [llmDraft.preset]);
 
-  const [tab, setTab] = useState<'models' | 'calendar' | 'sharing' | 'ai' | 'app'>('models');
+  const [tab, setTab] = useState<'models' | 'calendar' | 'sharing' | 'ai' | 'app'>(
+    route.name === 'settings' && route.tab ? route.tab : 'models',
+  );
+  useEffect(() => {
+    if (route.name === 'settings' && route.tab) setTab(route.tab);
+  }, [route]);
+  const [autoCheck, setAutoCheckState] = useState(getAutoCheck);
+  const [updateBusy, setUpdateBusy] = useState<'checking' | 'installing' | null>(null);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const updateBlocked = updateBlockedReason(recordingState, Object.keys(txStage).length);
+
+  const runUpdateCheck = () => {
+    setUpdateBusy('checking');
+    setUpdateMessage(null);
+    checkUpdates()
+      .then((info) =>
+        setUpdateMessage(info.available ? null : `You're up to date (v${info.currentVersion}).`),
+      )
+      .catch((e: unknown) => setUpdateMessage(e instanceof Error ? e.message : String(e)))
+      .finally(() => setUpdateBusy(null));
+  };
+
+  const runUpdateInstall = () => {
+    setUpdateBusy('installing');
+    setUpdateMessage(null);
+    const poll = window.setInterval(() => {
+      void getUpdateProgress().then(setUpdateProgress).catch(() => undefined);
+    }, 400);
+    // Resolves only on failure: success restarts the app.
+    installUpdate()
+      .catch((e: unknown) => setUpdateMessage(e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        window.clearInterval(poll);
+        setUpdateBusy(null);
+        setUpdateProgress(null);
+      });
+  };
 
   const gpu = nativeStatus?.gpu ?? null;
   const groups = groupByTier(modelCatalog);
@@ -240,6 +291,100 @@ export function Settings(): React.JSX.Element {
 
       {tab === 'app' && (
       <>
+      <section className="card" aria-label="Updates">
+        <div className="model-title" style={{ marginBottom: 4 }}>
+          <strong>Updates</strong>
+          {updateInfo && !updateInfo.available && (
+            <span className="badge badge-ok">
+              <CheckIcon /> Up to date
+            </span>
+          )}
+        </div>
+        {!isDesktopApp() ? (
+          <div className="muted">Updates are installed from the desktop app.</div>
+        ) : (
+          <>
+            <div className="muted">
+              {updateInfo
+                ? `Installed version: v${updateInfo.currentVersion}.`
+                : 'Check GitHub for a newer version.'}{' '}
+              Updates are signed and verified before installing; your recordings
+              and transcripts are kept.
+            </div>
+            {updateInfo?.available && (
+              <>
+                <p style={{ marginBottom: 4 }}>
+                  <strong>Version {updateInfo.version} is available.</strong>
+                </p>
+                {updateInfo.notes && (
+                  <p className="muted small" style={{ whiteSpace: 'pre-wrap', marginTop: 0 }}>{updateInfo.notes}</p>
+                )}
+                {!updateInfo.canSelfUpdate && (
+                  <p className="muted small">
+                    This installation (.deb/.rpm) can't replace itself — download the new
+                    version and install it the same way.
+                  </p>
+                )}
+                {updateBlocked && updateInfo.canSelfUpdate && (
+                  <p className="warn small" role="status">{updateBlocked}</p>
+                )}
+              </>
+            )}
+            {updateBusy === 'installing' && (
+              <div style={{ marginTop: 10 }} aria-label="Update progress">
+                {updateProgress && updateRatio(updateProgress) !== null ? (
+                  <progress max={1} value={updateRatio(updateProgress) ?? 0} />
+                ) : (
+                  <progress />
+                )}
+                <div className="muted small">
+                  {updateProgress?.stage === 'installing'
+                    ? 'Installing… the app restarts when done.'
+                    : updateProgress?.stage === 'restarting'
+                      ? 'Restarting…'
+                      : 'Downloading update…'}
+                </div>
+              </div>
+            )}
+            {updateMessage && <p className="muted small" role="status" style={{ marginBottom: 0 }}>{updateMessage}</p>}
+            <div className="btn-row">
+              {updateInfo?.available && updateInfo.canSelfUpdate && (
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  disabled={!!updateBusy || !!updateBlocked}
+                  onClick={runUpdateInstall}
+                >
+                  {updateBusy === 'installing' ? 'Updating…' : 'Update & restart'}
+                </button>
+              )}
+              {updateInfo?.available && !updateInfo.canSelfUpdate && (
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={() => void openExternalUrl(updateInfo.downloadUrl)}
+                >
+                  Download v{updateInfo.version}
+                </button>
+              )}
+              <button className="btn" type="button" disabled={!!updateBusy} onClick={runUpdateCheck}>
+                {updateBusy === 'checking' ? 'Checking…' : 'Check for updates'}
+              </button>
+            </div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+              <input
+                type="checkbox"
+                checked={autoCheck}
+                onChange={(e) => {
+                  setAutoCheck(e.target.checked);
+                  setAutoCheckState(e.target.checked);
+                }}
+              />
+              Check for updates when the app starts (contacts GitHub only)
+            </label>
+          </>
+        )}
+      </section>
       <section className="card" aria-label="Microphone access">
         <div className="model-title" style={{ marginBottom: 4 }}>
           <strong>Microphone access</strong>

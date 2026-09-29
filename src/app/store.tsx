@@ -25,6 +25,12 @@ import type { TranscriptionStage } from '../asr/engine';
 import { deleteRecording, estimateStorage, isStorageLow, listChunkNames, listTracks, readRecordingBlob } from '../storage/recordings';
 import { trackSpeakerLabel } from '../domain/meeting';
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
+import {
+  checkForUpdate,
+  getAutoCheck,
+  setLastCheck,
+  type UpdateInfo,
+} from '../platform/updater';
 import { nativeDownloadModel, nativeDownloadProgress, nativeEnableGpu, nativeStatus as fetchNativeStatus } from '../asr/native-engine';
 import type { NativeAsrStatus, NativeModelInfo } from '../asr/native-types';
 import { desktopStorageDir, openDesktopStorageDir } from '../platform/desktop-storage';
@@ -42,12 +48,15 @@ import { createLlmClient, DEFAULT_LLM_CONFIG } from '../integrations/llm';
 import type { LlmConfig, MeetingSummary } from '../integrations/llm';
 import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
 
+export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'app';
+const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'app'];
+
 export type Route =
   | { name: 'dashboard' }
   | { name: 'new' }
   | { name: 'active' }
   | { name: 'detail'; id: string }
-  | { name: 'settings' }
+  | { name: 'settings'; tab?: SettingsTab }
   | { name: 'calendar' };
 
 /** One playable track of a recording (single-track recordings have track ''). */
@@ -132,6 +141,10 @@ interface AppState {
   saveLlmConfig: (config: LlmConfig) => Promise<void>;
   /** Summarize a transcribed meeting with the configured LLM provider. */
   summarizeMeeting: (meetingId: string) => Promise<MeetingSummary>;
+  /** Result of the last update check (desktop only; null before any check). */
+  updateInfo: UpdateInfo | null;
+  /** Ask GitHub for a newer release (never installs anything). */
+  checkUpdates: () => Promise<UpdateInfo>;
   /** Enable GPU acceleration via the desktop backend (desktop only). */
   enableGpu: () => Promise<void>;
   // recovery
@@ -161,6 +174,22 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [detailTracks, setDetailTracks] = useState<AudioTrackView[]>([]);
   const [txProgress, setTxProgress] = useState<Record<string, number>>({});
   const [txStage, setTxStage] = useState<Record<string, TranscriptionStage>>({});
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+
+  const checkUpdates = useCallback(async (): Promise<UpdateInfo> => {
+    const info = await checkForUpdate();
+    setLastCheck(Date.now());
+    setUpdateInfo(info);
+    return info;
+  }, []);
+
+  // Launch check (desktop, opt-out in Settings): only tells the user a new
+  // version exists; installing always needs a click.
+  useEffect(() => {
+    if (!isDesktopApp() || !getAutoCheck()) return;
+    const t = window.setTimeout(() => void checkUpdates().catch(() => undefined), 5000);
+    return () => window.clearTimeout(t);
+  }, [checkUpdates]);
   const [modelMeta, setModelMetaState] = useState<ModelMeta>({
     modelId: NATIVE_DEFAULT_MODEL,
     state: 'not_installed',
@@ -218,6 +247,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       else if (h === '#/new') setRoute({ name: 'new' });
       else if (h === '#/active') setRoute({ name: 'active' });
       else if (h === '#/settings') setRoute({ name: 'settings' });
+      else if (h.startsWith('#/settings/')) {
+        const tab = h.slice(11) as SettingsTab;
+        setRoute(SETTINGS_TABS.includes(tab) ? { name: 'settings', tab } : { name: 'settings' });
+      }
       else if (h === '#/calendar') setRoute({ name: 'calendar' });
       else setRoute({ name: 'dashboard' });
     };
@@ -267,7 +300,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     if (r.name === 'dashboard') window.location.hash = '#/';
     else if (r.name === 'new') window.location.hash = '#/new';
     else if (r.name === 'active') window.location.hash = '#/active';
-    else if (r.name === 'settings') window.location.hash = '#/settings';
+    else if (r.name === 'settings') window.location.hash = r.tab ? `#/settings/${r.tab}` : '#/settings';
     else if (r.name === 'calendar') window.location.hash = '#/calendar';
     else window.location.hash = `#/meeting/${encodeURIComponent(r.id)}`;
     setRoute(r);
@@ -790,6 +823,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       meetings,
       refresh,
       recordingState,
+      updateInfo,
+      checkUpdates,
       recordingError,
       activeMeeting,
       elapsedMs,
@@ -852,6 +887,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
       gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab,
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
+      updateInfo, checkUpdates,
       llmConfig, saveLlmConfig, summarizeMeeting,
       unfinished, recoverUnfinished, discardUnfinished,
     ],

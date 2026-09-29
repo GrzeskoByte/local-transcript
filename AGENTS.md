@@ -26,12 +26,18 @@ Spec source of truth: `/home/gsierock/obsidian_vaults/gs_n/local-transcribe/MVP.
 - Model + language storage are native-only: `getModelMeta()` / `setModelMeta()` (key `asr-model-meta-desktop`) and `getTranscriptionLanguage()` / `setTranscriptionLanguage()` (key `asr-language-desktop`).
 - Native ASR is not exercised by Playwright (no display/GPU in CI); unit-test the pure helpers and keep the browser suite green.
 - **Cross-platform (Linux/Windows/macOS):** the frontend is platform-agnostic.
-  Rust uses only std + the 4 crates in `Cargo.toml` (no `dirs`/`reqwest`).
+  Rust uses only std + the 5 crates in `Cargo.toml` (no `dirs`/`reqwest`; `tauri-plugin-updater` is the one plugin, for in-app updates).
   OS-specific code paths: `models.rs` (`home_dir` falls back to `USERPROFILE`,
   `split_paths` for `PATH`, `.exe` probing in `which`, per-OS model dirs) and
   `native_asr.rs` (generic `ggml-*.bin` download from Hugging Face via curl with
   a Windows PowerShell fallback; `valid_model_name` guards the URL/path).
   The Settings GPU card renders only for the voxtype backend (`nativeStatus.backend`).
+
+## In-app updates (desktop)
+- `src-tauri/src/updater.rs` wraps `tauri-plugin-updater` as `native_update_check` / `native_update_install` / `native_update_progress` (polled, like model downloads; no `@tauri-apps/api`). Frontend: `src/platform/updater.ts`, store `updateInfo`/`checkUpdates` (launch check unless the `update-auto-check` localStorage pref is `false`), sidebar **Update available** chip → `#/settings/app`, Settings → App **Updates** card.
+- Never install without a click; `updateBlockedReason` disables install while recording (any non-IDLE/COMPLETED state) or transcribing — install restarts the app. Linux installs self-update only as AppImage (`APPIMAGE` env); .deb/.rpm get `downloadUrl`.
+- Manifest: `plugins.updater.endpoints` = `releases/download/updater/latest.json`, built by `scripts/updater-manifest.mjs` (newest published `v<ver>-<platform>` releases, drafts ignored; tested in `scripts/updater-manifest.test.mjs`) in `.github/workflows/update-manifest.yml` (on `release: published`, dispatch, and from release.yml when it publishes non-drafts).
+- Signing: `release.yml` adds `--config src-tauri/tauri.updater.conf.json` (`createUpdaterArtifacts`) only when secret `TAURI_SIGNING_PRIVATE_KEY` is set; `collect-release.mjs` copies the `.sig` files and the macOS `.app.tar.gz` (macOS bundles `app,dmg`). Public key lives in `tauri.conf.json`; never commit the private key.
 
 ## Dev bench (not shipped)
 - `bench/` is a **dev-only** accuracy harness (WER) that runs the real `preprocessForASR` + `compactSpeech` and the chunking/decoding config from `src/asr/pipeline-config.ts` against Whisper fixtures in Node `cpu`/q8, using `@huggingface/transformers` (a **devDependency**). It is not part of the app bundle.

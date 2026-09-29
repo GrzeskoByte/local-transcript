@@ -4,6 +4,7 @@ mod opencode;
 mod storage;
 mod calendar;
 mod calendar_detect;
+mod updater;
 
 pub use native_asr::AppState;
 
@@ -13,6 +14,8 @@ use tauri::webview::{PermissionKind, PermissionResponse};
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(updater::UpdateState::default())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // WebKitGTK denies any media request the embedder does not handle, so
         // without this handler getUserMedia/getDisplayMedia always fail inside
         // the desktop shell (the cryptic NotAllowedError). Allow exactly the
@@ -43,6 +46,9 @@ pub fn run() {
             calendar::native_calendar_test,
             calendar_detect::native_calendar_thunderbird,
             calendar_detect::native_calendar_probe,
+            updater::native_update_check,
+            updater::native_update_install,
+            updater::native_update_progress,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

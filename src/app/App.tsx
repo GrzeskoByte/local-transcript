@@ -8,7 +8,7 @@ import { CalendarView } from './screens/CalendarView.tsx';
 import { GearIcon, CalendarIcon, ListIcon, LogoMark, MicIcon } from './components/icons.tsx';
 
 function Shell(): React.JSX.Element {
-  const { route, go, recordingState, modelMeta } = useApp();
+  const { route, go, recordingState, modelMeta, updateInfo } = useApp();
   const recording = recordingState === 'RECORDING' || recordingState === 'PAUSED';
   const modelDot = modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'not_installed' ? '' : 'working';
 
@@ -72,6 +72,16 @@ function Shell(): React.JSX.Element {
           {nav}
         </nav>
         <div className="sidebar-footer">
+          {updateInfo?.available && (
+            <button
+              type="button"
+              className="update-chip"
+              onClick={() => go({ name: 'settings', tab: 'app' })}
+            >
+              <span className="model-dot ready" />
+              Update available · v{updateInfo.version}
+            </button>
+          )}
           <div className="model-chip" title={modelMeta.modelId}>
             <span className={`model-dot ${modelDot}`} />
             {modelMeta.state === 'ready'

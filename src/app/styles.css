@@ -92,6 +92,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-vis
 .model-dot { width: 8px; height: 8px; border-radius: 50%; background: #64748b; flex: none; }
 .model-dot.ready { background: #34d399; }
 .model-dot.working { background: #fbbf24; animation: pulse 1.2s infinite; }
+.update-chip {
+  display: flex; align-items: center; gap: 8px; font-size: 0.8rem; font: inherit; font-size: 0.8rem;
+  background: rgb(52 211 153 / 0.14); border: 1px solid rgb(52 211 153 / 0.35); border-radius: 10px;
+  padding: 9px 12px; color: #d1fae5; cursor: pointer; text-align: left;
+}
+.update-chip:hover { background: rgb(52 211 153 / 0.22); }
 .privacy-note { font-size: 0.72rem; color: #64748b; padding: 0 4px; }
 
 .mobilebar { display: none; }
