@@ -14,6 +14,7 @@ import { LLM_PRESETS, LLM_PRESET_LABELS, createLlmClient, getOpencodeStatus } fr
 import type { LlmPreset } from '../../integrations/llm';
 import {
   CALENDAR_PROVIDER_LABELS,
+  sogoCalendarUrl,
   testCalendarConnection,
   validateCalendarConfig,
 } from '../../integrations/calendar';
@@ -521,6 +522,28 @@ export function Settings(): React.JSX.Element {
         )}
         {calDraft.provider === 'caldav' && (
           <>
+            <div className="btn-row">
+              <button
+                className="btn"
+                type="button"
+                onClick={() => {
+                  const url = sogoCalendarUrl(calDraft.serverUrl, calDraft.username);
+                  if (!url) {
+                    setCalMessage('Enter the SOGo host (e.g. mail.host.com) and your username first.');
+                    return;
+                  }
+                  setCalDraft({ ...calDraft, serverUrl: url, calendarUrl: '' });
+                  setCalMessage('SOGo address filled in (personal calendar). Save, then Test connection.');
+                }}
+              >
+                Use SOGo address
+              </button>
+            </div>
+            <div className="muted small" style={{ marginBottom: 0 }}>
+              SOGo (also what Thunderbird uses): enter the mail host and username,
+              then fill in the default calendar path. Another calendar? Copy its
+              Location from Thunderbird → calendar Properties.
+            </div>
             <label className="field-label" htmlFor="cal-collection">
               Calendar collection URL (optional override)
             </label>

@@ -326,9 +326,26 @@ export function buildTestTransport(config: CalendarConfig): CalendarTestTranspor
   return { provider: 'caldav', endpoint: effectiveServerUrl(config), ...auth };
 }
 
-/** Event UID, unique per meeting. */
-export function eventUid(meetingId: string): string {
-  return `${meetingId}@local-transcribe`;
+/** Event UID, unique per created event (a meeting can have several). */
+export function eventUid(meetingId: string, createdAt: number = Date.now()): string {
+  return `${meetingId}-${createdAt.toString(36)}@local-transcribe`;
+}
+
+/**
+ * SOGo CalDAV collection URL from a host (or any URL on it) + login, e.g.
+ * `mail.host.com` + `me@host.com` → `mail.host.com/SOGo/dav/me@host.com/Calendar/personal/`.
+ * A scheme/port in `host` is kept; any path is replaced.
+ */
+export function sogoCalendarUrl(host: string, username: string, calendar = 'personal'): string {
+  const h = host.trim();
+  const user = username.trim();
+  if (!h || !user) return '';
+  const scheme = h.match(/^[a-z][a-z0-9+.-]*:\/\//i)?.[0] ?? '';
+  const rest = h.slice(scheme.length);
+  const authority = rest.split('/')[0];
+  if (!authority) return '';
+  const seg = (v: string) => encodeURIComponent(v).replace(/%40/g, '@');
+  return `${scheme}${authority}/SOGo/dav/${seg(user)}/Calendar/${seg(calendar.trim() || 'personal')}/`;
 }
 
 /** Probe the configured server (creates nothing). Desktop only. */

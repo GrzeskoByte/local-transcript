@@ -497,11 +497,22 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     async (meetingId: string, draft: CalendarEventDraft): Promise<CalendarCreateResult> => {
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw new Error('Meeting not found');
-      const transport = buildTransport(calendarConfig, draft, eventUid(meetingId));
+      const createdAt = Date.now();
+      const uid = eventUid(meetingId, createdAt);
+      const transport = buildTransport(calendarConfig, draft, uid);
       await invokeDesktop<string>('native_calendar_create', { request: transport });
-      const updated = await updateMeeting(meetingId, {
-        calendarEvent: { provider: calendarConfig.provider, createdAt: Date.now() },
-      });
+      const record = {
+        uid,
+        provider: calendarConfig.provider,
+        title: draft.title,
+        startIso: draft.startIso,
+        createdAt,
+      };
+      const updated = await updateMeeting(meetingId, (cur) => ({
+        ...cur,
+        calendarEvent: { provider: calendarConfig.provider, createdAt },
+        calendarEvents: [...(cur.calendarEvents ?? []), record],
+      }));
       if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
       return { provider: calendarConfig.provider };
     },

@@ -72,6 +72,17 @@ export interface Meeting {
   summary?: { text: string; keyPoints: string[]; model: string; createdAt: number };
   /** Last calendar event created from this meeting, if any. */
   calendarEvent?: { provider: string; createdAt: number };
+  /** Every calendar event created from this meeting (newest last). */
+  calendarEvents?: CalendarEventRecord[];
+}
+
+/** One calendar event created (after user approval) from a meeting summary. */
+export interface CalendarEventRecord {
+  uid: string;
+  provider: string;
+  title: string;
+  startIso: string;
+  createdAt: number;
 }
 
 /** MediaRecorder timeslice: every stored chunk holds about this much audio. */
