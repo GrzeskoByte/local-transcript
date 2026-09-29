@@ -34,17 +34,34 @@ audio.
 
 | What | Why |
 | --- | --- |
-| Linux with `webkit2gtk-4.1` | Tauri webview |
+| Linux (`webkit2gtk-4.1`), Windows 10+, or macOS 12+ | Tauri webview |
 | Node 20+ and `npm` | Frontend build |
 | Rust toolchain (`cargo`) | Desktop backend build |
 | `voxtype` **or** `whisper-cli` on `PATH` | Transcription (recording works without it) |
+| `curl` (or PowerShell on Windows) | Model download for `whisper-cli` backends |
 | `ffmpeg` | Dev bench fixtures only |
 
 Install the ASR backend with your distro's voxtype package (e.g. Omarchy's
-`voxtype-bin`); the app auto-detects it and lists its models.
+`voxtype-bin`), or any whisper.cpp build that provides `whisper-cli`
+([releases](https://github.com/ggerganov/whisper.cpp/releases)); the app
+auto-detects either and lists its models. With a `whisper-cli` backend, model
+**Download** buttons fetch `ggml-*.bin` straight from Hugging Face into the
+platform model folder (`WHISPER_MODEL_DIR` overrides it).
 
 > `npm install` must be run with `--ignore-scripts` here (a transitive native
 > dependency fails to build and is not needed at runtime).
+
+### Platform notes
+
+- **Linux** — full features, including the voxtype GPU-enable button.
+- **Windows** — needs the WebView2 runtime (preinstalled on Win 10/11).
+  The GPU card is hidden: GPU acceleration comes from the whisper.cpp build
+  itself (CUDA/Vulkan), no app step needed.
+- **macOS** — Metal acceleration is built into whisper.cpp CPU/Metal binaries.
+  Packaging note: the released `.dmg` must add `NSMicrophoneUsageDescription`
+  to `Info.plist` (Tauri doesn't inject it), and `getDisplayMedia` is not
+  supported in WKWebView — Device / Mic + Device capture may be unavailable,
+  use Speaker mode or Import audio file instead.
 
 ## Quickstart
 
@@ -73,15 +90,35 @@ npm run build         # frontend only (dist/)
 3. **Meeting Detail** — play back, then **Transcribe** (pick a downloaded model first
    in Settings). Search the transcript, export it, or delete everything.
 4. **Settings** — download/select models (tiered S–D), spoken language, microphone
-   access, GPU acceleration, local-files folder, and GitLab credentials.
+   access, GPU acceleration, local-files folder, GitLab credentials, and LLM provider.
+5. **Meeting Detail** — **Summarize with LLM** (needs Settings → LLM provider) writes
+   a summary + key points onto the meeting.
+
+### LLM setup
+
+Settings → **LLM provider**: preset (OpenAI-compatible API, local Ollama, Open WebUI,
+**OpenCode (local agent)**, custom), base URL, completions path, optional API key, model. **Test connection**
+sends a one-word probe. Note: this is the one feature that sends transcript text
+off-device unless you point it at local Ollama.
+
+The **OpenCode** preset needs the desktop app and an installed OpenCode CLI: it runs
+headless `opencode run` with your OpenCode login and the `provider/model` id you enter
+(see `opencode models`), so no URL or key is required. Meeting Detail → **Summarize
+with LLM** / **Re-summarize** then writes the summary + key points onto the meeting
+(`Meeting.summary { text, keyPoints, model, createdAt }`).
 
 ### GitLab setup
 
 Settings → **GitLab team sharing**: instance URL (default `https://gitlab.com`),
-project path (`group/project`), a personal access token with `api` scope, and the
-target (wiki page / issue / repository file). **Test connection** verifies the token
+project path (`group/project`) or full project URL for self-hosted instances
+(pasting the URL fills in the instance automatically), a personal access token
+with `api` scope, and the target (wiki page / issue / repository file). **Test connection** verifies the token
 and project. Then each meeting detail page gets **Upload to GitLab** plus an
 **Open in GitLab** link. The token lives only in this device's IndexedDB.
+Repository uploads go into a folder per meeting (`meetings/<title>-<id>/transcript.md`;
+re-uploading updates the file). Once a meeting has a summary, **Upload summary**
+writes `summary.md` into the same folder (wiki target: companion page; issue target:
+not supported) with an **Open summary in GitLab** link.
 
 ## Architecture
 
@@ -134,3 +171,26 @@ Verify order: typecheck → unit → e2e. See `bench/README.md` for the harness.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Releasing
+
+`.github/workflows/release.yml` builds on real Windows, macOS and Ubuntu runners
+and publishes **one GitHub release per platform** for each version:
+
+| Release tag | Binaries |
+| --- | --- |
+| `v<version>-windows` | `…_windows_x64-setup.exe`, `…_windows_x64.msi`, `…_windows_arm64-setup.exe` |
+| `v<version>-macos` | `…_macos_arm64.dmg` (Apple Silicon), `…_macos_x64.dmg` (Intel) |
+| `v<version>-ubuntu` | `…_linux_{amd64,arm64}.deb`, `.AppImage`, `.rpm` (Ubuntu 22.04+) |
+
+Every release includes `SHA256SUMS.txt`; files are named
+`LocalTranscriber_<version>_<os>_<arch>.<ext>` by `scripts/collect-release.mjs`.
+
+1. Bump the version in `package.json`, `src-tauri/tauri.conf.json` and
+   `src-tauri/Cargo.toml` (the workflow refuses mismatches).
+2. Commit, then `git tag v0.1.0 && git push origin v0.1.0`.
+3. The three releases are created as **drafts** — review them on GitHub and publish.
+
+Run it manually from **Actions → Release** to test (drafts by default). Builds are
+not code-signed or notarized yet; the release notes (`.github/release-notes/`)
+tell users how to get past SmartScreen / Gatekeeper.
