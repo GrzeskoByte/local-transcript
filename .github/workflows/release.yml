@@ -26,6 +26,10 @@ on:
         description: Mark the releases as pre-releases
         type: boolean
         default: false
+      platforms:
+        description: Platforms to build (comma-separated) — e.g. `windows` to rebuild just Windows
+        type: string
+        default: windows,macos,ubuntu
 
 permissions:
   contents: write
@@ -44,6 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      build-matrix: ${{ steps.matrix.outputs.build }}
+      publish-matrix: ${{ steps.matrix.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
       - id: version
@@ -60,20 +66,34 @@ jobs:
             echo "::error::Tag ${GITHUB_REF_NAME} does not match version v$pkg."; exit 1
           fi
           echo "version=$pkg" >> "$GITHUB_OUTPUT"
+      - id: matrix
+        name: Select platforms
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'windows,macos,ubuntu' }}
+        run: |
+          node - <<'JS' >> "$GITHUB_OUTPUT"
+          const want = new Set(process.env.PLATFORMS.split(',').map((p) => p.trim()).filter(Boolean));
+          const builds = [
+            { platform: 'windows', os: 'windows-latest',   target: 'x86_64-pc-windows-msvc',    arch: 'x64',   bundles: 'nsis,msi' },
+            { platform: 'windows', os: 'windows-latest',   target: 'aarch64-pc-windows-msvc',   arch: 'arm64', bundles: 'nsis' },
+            { platform: 'macos',   os: 'macos-latest',     target: 'aarch64-apple-darwin',      arch: 'arm64', bundles: 'dmg' },
+            { platform: 'macos',   os: 'macos-latest',     target: 'x86_64-apple-darwin',       arch: 'x64',   bundles: 'dmg' },
+            { platform: 'ubuntu',  os: 'ubuntu-22.04',     target: 'x86_64-unknown-linux-gnu',  arch: 'amd64', bundles: 'deb,appimage,rpm' },
+            { platform: 'ubuntu',  os: 'ubuntu-22.04-arm', target: 'aarch64-unknown-linux-gnu', arch: 'arm64', bundles: 'deb,appimage,rpm' },
+          ].filter((b) => want.has(b.platform));
+          const titles = { windows: 'Windows', macos: 'macOS', ubuntu: 'Ubuntu / Linux' };
+          const publish = [...want].filter((p) => titles[p]).map((platform) => ({ platform, title: titles[platform] }));
+          if (!builds.length) { console.error('No known platforms in: ' + process.env.PLATFORMS); process.exit(1); }
+          console.log('build=' + JSON.stringify({ include: builds }));
+          console.log('publish=' + JSON.stringify({ include: publish }));
+          JS
 
   build:
     name: Build ${{ matrix.platform }} ${{ matrix.arch }}
     needs: prepare
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { platform: windows, os: windows-latest,   target: x86_64-pc-windows-msvc,    arch: x64,   bundles: 'nsis,msi' }
-          - { platform: windows, os: windows-latest,   target: aarch64-pc-windows-msvc,   arch: arm64, bundles: 'nsis' }
-          - { platform: macos,   os: macos-latest,     target: aarch64-apple-darwin,      arch: arm64, bundles: 'dmg' }
-          - { platform: macos,   os: macos-latest,     target: x86_64-apple-darwin,       arch: x64,   bundles: 'dmg' }
-          - { platform: ubuntu,  os: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,  arch: amd64, bundles: 'deb,appimage,rpm' }
-          - { platform: ubuntu,  os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, arch: arm64, bundles: 'deb,appimage,rpm' }
+      matrix: ${{ fromJSON(needs.prepare.outputs.build-matrix) }}
     runs-on: ${{ matrix.os }}
     env:
       # AppImage tooling runs without FUSE on CI.
@@ -143,11 +163,7 @@ jobs:
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { platform: windows, title: Windows }
-          - { platform: macos,   title: macOS }
-          - { platform: ubuntu,  title: Ubuntu / Linux }
+      matrix: ${{ fromJSON(needs.prepare.outputs.publish-matrix) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
