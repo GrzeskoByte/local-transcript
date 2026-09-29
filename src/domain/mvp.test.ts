@@ -71,3 +71,11 @@ describe('storage warnings', () => {
     expect(isStorageLow({})).toBe(false);
   });
 });
+
+import { estimateDurationFromChunks } from './meeting';
+describe('recovery duration estimate', () => {
+  it('uses the longest track, 5 s per chunk', () => {
+    expect(estimateDurationFromChunks([12, 10])).toBe(60000);
+    expect(estimateDurationFromChunks([])).toBe(0);
+  });
+});

@@ -1,6 +1,8 @@
 mod models;
 mod native_asr;
+mod opencode;
 mod storage;
+mod calendar;
 
 pub use native_asr::AppState;
 
@@ -28,9 +30,15 @@ pub fn run() {
             native_asr::native_asr_enable_gpu,
             native_asr::native_asr_transcribe,
             native_asr::native_asr_cancel,
+            opencode::native_opencode_status,
+            opencode::native_opencode_summarize,
             storage::native_storage_dir,
             storage::native_save_file,
             storage::native_open_storage_dir,
+            storage::native_open_url,
+            calendar::native_calendar_create,
+            calendar::native_calendar_fetch,
+            calendar::native_calendar_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

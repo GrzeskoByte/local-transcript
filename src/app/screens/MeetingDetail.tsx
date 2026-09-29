@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useApp, formatDuration } from '../store.tsx';
-import { modeLabel } from '../../domain/meeting';
+import { CHUNK_MS, modeLabel } from '../../domain/meeting';
 import type { TranscriptionStage } from '../../asr/engine';
 import {
   nativeAccuracyHint,
@@ -8,19 +8,35 @@ import {
   NATIVE_LANGUAGE_OPTIONS,
 } from '../../asr/model-manager';
 import { searchSegments } from '../../domain/transcript';
-import { deleteMeetingEverywhere, exportAudio, exportTranscript } from '../../features/meetings/exports';
+import { exportAudio, exportTranscript } from '../../features/meetings/exports';
+import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
+import { extractEventDraft } from '../../integrations/calendar';
+import type { CalendarEventDraft } from '../../integrations/calendar';
 
 export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const {
-    detailMeeting, detailSegments, detailTracks, loadDetail, go, refresh,
+    detailMeeting, detailSegments, detailTracks, loadDetail, go, deleteMeeting,
     txProgress, txStage, transcribe, cancelTranscription, modelMeta,
     selectModel, language, setLanguage, nativeStatus, installedModels,
-    uploadToGitlab,
+    uploadToGitlab, uploadSummaryToGitlab, summarizeMeeting, createCalendarEvent,
   } = useApp();
   const [error, setError] = useState<string | null>(null);
   const [gitlabBusy, setGitlabBusy] = useState(false);
   const [gitlabMessage, setGitlabMessage] = useState<string | null>(null);
+  const [llmBusy, setLlmBusy] = useState(false);
   const [filter, setFilter] = useState('');
+  const [calDraft, setCalDraft] = useState<CalendarEventDraft | null>(null);
+  const [calBusy, setCalBusy] = useState(false);
+  const [calMessage, setCalMessage] = useState<string | null>(null);
+
+  /** Desktop webview swallows target="_blank": open GitLab links externally. */
+  const openGitlabLink = (e: React.MouseEvent, url: string): void => {
+    if (!isDesktopApp()) return;
+    e.preventDefault();
+    openExternalUrl(url).catch((err: unknown) =>
+      setError(err instanceof Error ? err.message : String(err)),
+    );
+  };
 
   useEffect(() => {
     void loadDetail(id);
@@ -46,6 +62,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
     m.transcriptionStatus === 'processing' ||
     (m.transcriptionStatus === 'not_started' && txStage[m.id] !== undefined);
   const stageLabel: Record<TranscriptionStage, string> = {
+    queued: 'Waiting for the current transcription to finish…',
     'loading-model': 'Loading local model…',
     'decoding-audio': 'Decoding audio…',
     transcribing: 'Transcribing…',
@@ -64,7 +81,8 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
       <div className="mt-3">
         <h1>{m.title}</h1>
         <p className="muted">
-          {formatDuration(m.durationMs)} · Recorded {new Date(m.createdAt).toLocaleString()}
+          {m.durationEstimated ? '≈ ' : ''}{formatDuration(m.durationMs)} · Recorded {new Date(m.createdAt).toLocaleString()}
+          {m.durationEstimated ? ' · recovered after an interruption' : ''}
         </p>
         <div className="pill-row">
           <span className={`pill pill-${m.mode}`}>{modeLabel(m.mode)}</span>
@@ -73,6 +91,16 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           </span>
         </div>
       </div>
+
+      {(m.unsavedChunks ?? 0) > 0 && (
+        <section className="banner mt-3" role="alert" aria-label="Recording has gaps">
+          <strong>Part of this recording could not be saved.</strong>
+          <p className="muted mb-0">
+            Up to {formatDuration(Math.min((m.unsavedChunks ?? 0) * CHUNK_MS, m.durationMs))} of audio failed
+            to write to disk and is missing. Everything else was stored normally.
+          </p>
+        </section>
+      )}
 
       <section className="card" aria-label="Recording playback">
         {detailTracks.length === 0 ? (
@@ -220,7 +248,142 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           >
             Re-transcribe
           </button>
+          <button
+            className="btn"
+            disabled={llmBusy}
+            title="Summarize with your configured LLM provider (Settings → LLM provider)"
+            onClick={() => {
+              setLlmBusy(true);
+              setError(null);
+              summarizeMeeting(m.id)
+                .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                .finally(() => setLlmBusy(false));
+            }}
+          >
+            {llmBusy ? 'Summarizing…' : m.summary ? 'Re-summarize' : 'Summarize with LLM'}
+          </button>
         </div>
+      )}
+
+      {m.summary && (
+        <section className="card" aria-label="Meeting summary">
+          <div className="model-title" style={{ marginBottom: 4 }}>
+            <strong>Summary</strong>
+            <span className="badge">{m.summary.model}</span>
+          </div>
+          <p className="muted" style={{ whiteSpace: 'pre-wrap' }}>{m.summary.text}</p>
+          {m.summary.keyPoints.length > 0 && (
+            <>
+              <strong>Key points</strong>
+              <ul className="transcript">
+                {m.summary.keyPoints.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+      )}
+
+      {m.summary && (
+        <section className="card" aria-label="Calendar event">
+          <div className="model-title" style={{ marginBottom: 4 }}>
+            <strong>Calendar event</strong>
+          </div>
+          <div className="muted">
+            Create a follow-up on your company calendar from this summary.
+            Configure the server under Settings → Company calendar.
+          </div>
+          {!calDraft ? (
+            <div className="btn-row">
+              <button
+                className="btn"
+                onClick={() =>
+                  setCalDraft(
+                    extractEventDraft(
+                      m.summary?.text ?? '',
+                      m.summary?.keyPoints ?? [],
+                      m.title,
+                      m.startedAt,
+                    ),
+                  )
+                }
+              >
+                Prepare event from summary
+              </button>
+            </div>
+          ) : (
+            <>
+              <label className="field-label" htmlFor="cal-title">Title</label>
+              <input
+                id="cal-title"
+                className="input"
+                value={calDraft.title}
+                onChange={(e) => setCalDraft({ ...calDraft, title: e.target.value })}
+              />
+              <div className="row-selects">
+                <label>
+                  Starts
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    aria-label="Event start"
+                    value={calDraft.startIso}
+                    onChange={(e) => setCalDraft({ ...calDraft, startIso: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Ends
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    aria-label="Event end"
+                    value={calDraft.endIso}
+                    onChange={(e) => setCalDraft({ ...calDraft, endIso: e.target.value })}
+                  />
+                </label>
+              </div>
+              <label className="field-label" htmlFor="cal-location">Location (optional)</label>
+              <input
+                id="cal-location"
+                className="input"
+                value={calDraft.location}
+                onChange={(e) => setCalDraft({ ...calDraft, location: e.target.value })}
+                placeholder="Room, link…"
+              />
+              {calMessage && <p className="muted small" style={{ marginBottom: 0 }}>{calMessage}</p>}
+              <div className="btn-row">
+                <button
+                  className="btn btn-primary"
+                  disabled={calBusy || !calDraft.title.trim()}
+                  onClick={() => {
+                    setCalBusy(true);
+                    setCalMessage(null);
+                    createCalendarEvent(m.id, calDraft)
+                      .then(() => {
+                        setCalMessage('Event created on the company calendar.');
+                        setCalDraft(null);
+                      })
+                      .catch((e: unknown) =>
+                        setCalMessage(e instanceof Error ? e.message : String(e)),
+                      )
+                      .finally(() => setCalBusy(false));
+                  }}
+                >
+                  {calBusy ? 'Creating…' : 'Create on server'}
+                </button>
+                <button className="btn" disabled={calBusy} onClick={() => setCalDraft(null)}>
+                  Discard
+                </button>
+              </div>
+            </>
+          )}
+          {m.calendarEvent && (
+            <p className="muted small" style={{ marginBottom: 0 }}>
+              Last event created: {new Date(m.calendarEvent.createdAt).toLocaleString()} · {m.calendarEvent.provider}
+            </p>
+          )}
+        </section>
       )}
 
       {error && <p className="error">{error}</p>}
@@ -279,9 +442,55 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           >
             {gitlabBusy ? 'Uploading…' : 'Upload to GitLab'}
           </button>
-          {m.gitlab && (
-            <a className="btn" href={m.gitlab.url} target="_blank" rel="noreferrer">
+          <button
+            className="btn"
+            disabled={gitlabBusy || !m.summary}
+            title={
+              m.summary
+                ? 'Publish the summary + key points into the meeting folder on GitLab'
+                : 'Summarize the meeting first — GitLab receives summary.md'
+            }
+            onClick={() => {
+              setGitlabBusy(true);
+              setGitlabMessage(null);
+              uploadSummaryToGitlab(m.id)
+                .then((r) => setGitlabMessage(`Summary published to GitLab (${r.target}).`))
+                .catch((e: unknown) => {
+                  const msg = e instanceof Error ? e.message : String(e);
+                  setGitlabMessage(null);
+                  setError(msg);
+                })
+                .finally(() => setGitlabBusy(false));
+            }}
+          >
+            {gitlabBusy ? 'Uploading…' : 'Upload summary'}
+          </button>
+          {m.gitlab?.url ? (
+            <a
+              className="btn"
+              href={m.gitlab.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => openGitlabLink(e, m.gitlab?.url ?? '')}
+            >
               Open in GitLab
+            </a>
+          ) : (
+            m.gitlab && (
+              <span className="muted small" style={{ alignSelf: 'center' }}>
+                Re-upload to get a working link.
+              </span>
+            )
+          )}
+          {m.gitlabSummary?.url && (
+            <a
+              className="btn"
+              href={m.gitlabSummary.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => openGitlabLink(e, m.gitlabSummary?.url ?? '')}
+            >
+              Open summary in GitLab
             </a>
           )}
         </div>
@@ -289,6 +498,11 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
         {m.gitlab && (
           <p className="muted small" style={{ marginBottom: 0 }}>
             Last upload: {new Date(m.gitlab.uploadedAt).toLocaleString()} · {m.gitlab.target}
+          </p>
+        )}
+        {m.gitlabSummary && (
+          <p className="muted small" style={{ marginBottom: 0 }}>
+            Last summary upload: {new Date(m.gitlabSummary.uploadedAt).toLocaleString()} · {m.gitlabSummary.target}
           </p>
         )}
         <div className="btn-row">
@@ -311,8 +525,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             className="btn btn-danger"
             onClick={() => {
               if (!window.confirm('Delete this meeting and all its local data?')) return;
-              deleteMeetingEverywhere(m.id).then(() => {
-                void refresh();
+              deleteMeeting(m.id).then(() => {
                 go({ name: 'dashboard' });
               }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}

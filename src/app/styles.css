@@ -239,6 +239,14 @@ h2 { font-size: var(--text-lg); margin: var(--space-5) 0 var(--space-3); letter-
 .btn-stop:hover { background: #dc2626; border-color: #dc2626; }
 .btn-ghostlight { background: transparent; border-color: rgb(255 255 255 / 0.25); color: #fff; padding: 12px 22px; border-radius: 12px; }
 .btn-ghostlight:hover { background: rgb(255 255 255 / 0.1); }
+.rec-alert {
+  margin: var(--space-5) auto 0; max-width: 520px; text-align: left;
+  background: rgb(239 68 68 / 0.12); border: 1px solid rgb(248 113 113 / 0.45);
+  border-radius: var(--radius-md); padding: var(--space-4); color: #fecaca;
+}
+.rec-alert strong { color: #fff; }
+.rec-alert p { margin: var(--space-1) 0 0; font-size: var(--text-sm); }
+.rec-alert .btn-row { justify-content: flex-start; margin-top: var(--space-3); }
 .saved-note { display: flex; align-items: center; justify-content: center; gap: 6px; color: #86efac; font-size: 0.82rem; margin-top: 18px; }
 
 /* ---------- detail ---------- */
@@ -338,6 +346,34 @@ details.tier-card[open] > summary { border-bottom: 1px solid var(--border); }
   cursor: pointer; text-decoration: underline; font-size: inherit;
 }
 .link-btn:hover { color: var(--brand-dark); }
+
+/* ---------- settings tabs ---------- */
+.tabs { display: flex; gap: var(--space-1); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.tab {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-pill);
+  padding: 6px 14px; font-size: var(--text-sm); font-weight: 650; color: var(--muted); cursor: pointer;
+}
+.tab:hover { color: var(--ink); border-color: var(--border-strong); }
+.tab.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+/* ---------- calendar view ---------- */
+/* Month grid: 7 columns, Monday-first; dots mark recorded meetings (brand) and server events (green). */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-dow { text-align: center; font-size: var(--text-xs); font-weight: 700; color: var(--faint); padding: 4px 0; }
+.cal-day {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  min-height: 52px; padding: 6px 4px; cursor: pointer; display: flex; flex-direction: column;
+  align-items: center; gap: 4px; font-size: var(--text-sm); color: var(--ink);
+}
+.cal-day:hover { border-color: var(--border-strong); }
+.cal-day.out { opacity: 0.4; }
+.cal-day.today .cal-num { background: var(--brand-tint); color: var(--brand-dark); border-radius: var(--radius-pill); }
+.cal-day.selected { border-color: var(--brand); box-shadow: var(--shadow-focus); }
+.cal-num { font-weight: 650; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; }
+.cal-dots { display: flex; gap: 3px; min-height: 8px; }
+.cal-dot { width: 7px; height: 7px; border-radius: var(--radius-pill); display: inline-block; }
+.cal-dot.local { background: var(--brand); }
+.cal-dot.server { background: var(--ok); }
 
 /* ---------- utilities ---------- */
 /* Use these instead of inline spacing so gaps stay on the scale. */

@@ -8,8 +8,17 @@ import {
   describeGpu,
 } from '../../asr/model-manager';
 import { CheckIcon, GearIcon } from '../components/icons.tsx';
-import { GITLAB_TARGET_LABELS, createGitlabClient } from '../../integrations/gitlab';
+import { GITLAB_TARGET_LABELS, createGitlabClient, parseProjectUrl } from '../../integrations/gitlab';
 import type { GitlabTarget } from '../../integrations/gitlab';
+import { LLM_PRESETS, LLM_PRESET_LABELS, createLlmClient, getOpencodeStatus } from '../../integrations/llm';
+import type { LlmPreset } from '../../integrations/llm';
+import {
+  CALENDAR_PROVIDER_LABELS,
+  testCalendarConnection,
+  validateCalendarConfig,
+} from '../../integrations/calendar';
+import type { CalendarProvider } from '../../integrations/calendar';
+import { isDesktopApp } from '../../platform/desktop';
 import {
   isSecureMediaContext,
   primeMicrophonePermission,
@@ -38,6 +47,10 @@ export function Settings(): React.JSX.Element {
     openStorageDir,
     gitlabConfig,
     saveGitlabConfig,
+    calendarConfig,
+    saveCalendarConfig,
+    llmConfig,
+    saveLlmConfig,
   } = useApp();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [gpuBusy, setGpuBusy] = useState(false);
@@ -50,6 +63,14 @@ export function Settings(): React.JSX.Element {
   const [gitlabDraft, setGitlabDraft] = useState(gitlabConfig);
   const [gitlabBusy, setGitlabBusy] = useState(false);
   const [gitlabMessage, setGitlabMessage] = useState<string | null>(null);
+  const [calDraft, setCalDraft] = useState(calendarConfig);
+  const [calBusy, setCalBusy] = useState(false);
+  const [calMessage, setCalMessage] = useState<string | null>(null);
+  const [llmDraft, setLlmDraft] = useState(llmConfig);
+  const [llmBusy, setLlmBusy] = useState(false);
+  const [llmMessage, setLlmMessage] = useState<string | null>(null);
+  const [opencodeModels, setOpencodeModels] = useState<string[] | null>(null);
+  const [opencodeModelsError, setOpencodeModelsError] = useState<string | null>(null);
 
   const secure = isSecureMediaContext();
 
@@ -59,6 +80,45 @@ export function Settings(): React.JSX.Element {
       .then(setMicPermission)
       .catch(() => setMicPermission('unknown'));
   }, [secure]);
+
+  useEffect(() => {
+    if (llmDraft.preset !== 'opencode') {
+      setOpencodeModels(null);
+      setOpencodeModelsError(null);
+      return;
+    }
+    if (!isDesktopApp()) {
+      setOpencodeModels([]);
+      setOpencodeModelsError('The OpenCode provider needs the desktop app.');
+      return;
+    }
+    setOpencodeModels(null);
+    setOpencodeModelsError(null);
+    getOpencodeStatus()
+      .then((s) => {
+        if (!s.available) {
+          setOpencodeModels([]);
+          setOpencodeModelsError('OpenCode CLI not found. Install it from opencode.ai.');
+          return;
+        }
+        setOpencodeModels(s.models);
+        if (s.models.length === 0) {
+          setOpencodeModelsError('No OpenCode models reported. Check `opencode models`.');
+        }
+        const first = s.models[0];
+        if (first) {
+          setLlmDraft((d) =>
+            d.preset === 'opencode' && !d.model.trim() ? { ...d, model: first } : d,
+          );
+        }
+      })
+      .catch((e: unknown) => {
+        setOpencodeModels([]);
+        setOpencodeModelsError(e instanceof Error ? e.message : String(e));
+      });
+  }, [llmDraft.preset]);
+
+  const [tab, setTab] = useState<'models' | 'calendar' | 'sharing' | 'ai' | 'app'>('models');
 
   const gpu = nativeStatus?.gpu ?? null;
   const groups = groupByTier(modelCatalog);
@@ -114,13 +174,38 @@ export function Settings(): React.JSX.Element {
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p className="muted">Models and language. Everything runs on this device.</p>
+          <p className="muted">Models, calendar, sharing, AI, and app preferences.</p>
         </div>
         <button className="btn" onClick={() => go({ name: 'dashboard' })}>
           Done
         </button>
       </div>
 
+      <div className="tabs" role="tablist" aria-label="Settings sections">
+        {(
+          [
+            ['models', 'Models'],
+            ['calendar', 'Calendar'],
+            ['sharing', 'Team sharing'],
+            ['ai', 'AI assistant'],
+            ['app', 'App'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            className={`tab${tab === id ? ' active' : ''}`}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'models' && (
+      <>
       <section className="card" aria-label="Engine">
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           <span className="media-art" style={{ width: 36, height: 36 }}>
@@ -138,7 +223,11 @@ export function Settings(): React.JSX.Element {
           models appear in the transcription options.
         </p>
       </section>
+      </>
+      )}
 
+      {tab === 'app' && (
+      <>
       <section className="card" aria-label="Microphone access">
         <div className="model-title" style={{ marginBottom: 4 }}>
           <strong>Microphone access</strong>
@@ -200,7 +289,11 @@ export function Settings(): React.JSX.Element {
           </button>
         </div>
       </section>
+      </>
+      )}
 
+      {tab === 'sharing' && (
+      <>
       <section className="card" aria-label="GitLab team sharing">
         <div className="model-title" style={{ marginBottom: 4 }}>
           <strong>GitLab team sharing</strong>
@@ -208,6 +301,8 @@ export function Settings(): React.JSX.Element {
         <div className="muted">
           Publish transcripts to a GitLab project as a wiki page, issue, or repository file.
           Your team sees them through normal GitLab project membership — no account here.
+          Paste a full project URL (works with self-hosted instances) or a bare
+          <code>group/project</code> path.
         </div>
         <label className="field-label" htmlFor="gitlab-url">Instance URL</label>
         <input
@@ -218,13 +313,22 @@ export function Settings(): React.JSX.Element {
           placeholder="https://gitlab.com"
           inputMode="url"
         />
-        <label className="field-label" htmlFor="gitlab-project">Project path</label>
+        <label className="field-label" htmlFor="gitlab-project">Project path or URL</label>
         <input
           id="gitlab-project"
           className="input"
           value={gitlabDraft.project}
-          onChange={(e) => setGitlabDraft({ ...gitlabDraft, project: e.target.value })}
-          placeholder="my-group/my-project"
+          onChange={(e) => {
+            const raw = e.target.value;
+            const parsed = parseProjectUrl(raw);
+            setGitlabDraft({
+              ...gitlabDraft,
+              project: parsed.project || raw,
+              url: parsed.url ?? gitlabDraft.url,
+            });
+          }}
+          placeholder="my-group/my-project or https://git.example.com/my-group/my-project"
+          inputMode="url"
         />
         <label className="field-label" htmlFor="gitlab-token">Personal access token</label>
         <input
@@ -302,8 +406,333 @@ export function Settings(): React.JSX.Element {
           </button>
         </div>
       </section>
+      </>
+      )}
 
-      <section className="card" aria-label="GPU acceleration">
+      {tab === 'calendar' && (
+      <>
+      <section className="card" aria-label="Company calendar">
+        <div className="model-title" style={{ marginBottom: 4 }}>
+          <strong>Company calendar</strong>
+        </div>
+        <div className="muted">
+          Create calendar events from a meeting summary on your company server.
+          Credentials stay on this device; transport runs through the desktop shell.
+        </div>
+        <label className="field-label" htmlFor="cal-provider">Server type</label>
+        <select
+          id="cal-provider"
+          className="input"
+          value={calDraft.provider}
+          onChange={(e) => setCalDraft({ ...calDraft, provider: e.target.value as CalendarProvider })}
+        >
+          {(Object.keys(CALENDAR_PROVIDER_LABELS) as CalendarProvider[]).map((p) => (
+            <option key={p} value={p}>{CALENDAR_PROVIDER_LABELS[p]}</option>
+          ))}
+        </select>
+        <label className="field-label" htmlFor="cal-server">
+          {calDraft.provider === 'ews'
+            ? 'Exchange host + path'
+            : calDraft.provider === 'graph'
+              ? 'Graph host (blank = Microsoft cloud)'
+              : 'Server host + path'}
+        </label>
+        <input
+          id="cal-server"
+          className="input"
+          value={calDraft.serverUrl}
+          onChange={(e) => setCalDraft({ ...calDraft, serverUrl: e.target.value })}
+          placeholder={
+            calDraft.provider === 'ews'
+              ? 'mail.company.example/EWS/Exchange.asmx'
+              : calDraft.provider === 'graph'
+                ? 'graph.microsoft.com/v1.0'
+                : 'cal.company.example/dav/calendars/user/me/work/'
+          }
+          inputMode="url"
+        />
+        <div className="row-selects">
+          <label>
+            Protocol
+            <select
+              className="input"
+              aria-label="Calendar protocol"
+              value={calDraft.protocol}
+              onChange={(e) =>
+                setCalDraft({ ...calDraft, protocol: e.target.value as 'http' | 'https' })
+              }
+            >
+              <option value="https">https</option>
+              <option value="http">http</option>
+            </select>
+          </label>
+          <label>
+            Port (blank = default)
+            <input
+              className="input"
+              aria-label="Calendar port"
+              value={calDraft.port}
+              onChange={(e) => setCalDraft({ ...calDraft, port: e.target.value })}
+              placeholder="8443"
+              inputMode="numeric"
+            />
+          </label>
+        </div>
+        <div className="muted small" style={{ marginBottom: 0 }}>
+          A full URL with its own scheme (https://…) is used as-is; otherwise
+          protocol + port above are applied.
+        </div>
+        {calDraft.provider !== 'graph' && (
+          <>
+            <label className="field-label" htmlFor="cal-user">Username</label>
+            <input
+              id="cal-user"
+              className="input"
+              value={calDraft.username}
+              onChange={(e) => setCalDraft({ ...calDraft, username: e.target.value })}
+              placeholder="you@company.example"
+              autoComplete="username"
+            />
+            <label className="field-label" htmlFor="cal-pass">Password</label>
+            <input
+              id="cal-pass"
+              className="input"
+              type="password"
+              value={calDraft.password}
+              onChange={(e) => setCalDraft({ ...calDraft, password: e.target.value })}
+              placeholder="password or app password"
+              autoComplete="off"
+            />
+          </>
+        )}
+        {calDraft.provider === 'graph' && (
+          <>
+            <label className="field-label" htmlFor="cal-token">Access token</label>
+            <input
+              id="cal-token"
+              className="input"
+              type="password"
+              value={calDraft.token}
+              onChange={(e) => setCalDraft({ ...calDraft, token: e.target.value })}
+              placeholder="token from your Azure app registration"
+              autoComplete="off"
+            />
+          </>
+        )}
+        {calDraft.provider === 'caldav' && (
+          <>
+            <label className="field-label" htmlFor="cal-collection">
+              Calendar collection URL (optional override)
+            </label>
+            <input
+              id="cal-collection"
+              className="input"
+              value={calDraft.calendarUrl}
+              onChange={(e) => setCalDraft({ ...calDraft, calendarUrl: e.target.value })}
+              placeholder="Leave blank to use the server URL above"
+              inputMode="url"
+            />
+          </>
+        )}
+        {calDraft.provider === 'ews' && (
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+            <input
+              type="checkbox"
+              checked={calDraft.useNtlm}
+              onChange={(e) => setCalDraft({ ...calDraft, useNtlm: e.target.checked })}
+            />
+            Use NTLM authentication
+          </label>
+        )}
+        {calMessage && <p className="muted small" style={{ marginBottom: 0 }}>{calMessage}</p>}
+        <div className="btn-row">
+          <button
+            className="btn btn-primary"
+            disabled={calBusy}
+            onClick={() => {
+              const err = validateCalendarConfig(calDraft);
+              if (err) {
+                setCalMessage(err);
+                return;
+              }
+              setCalBusy(true);
+              setCalMessage(null);
+              saveCalendarConfig(calDraft)
+                .then(() => setCalMessage('Calendar settings saved on this device.'))
+                .catch((e: unknown) =>
+                  setCalMessage(e instanceof Error ? e.message : String(e)),
+                )
+                .finally(() => setCalBusy(false));
+            }}
+          >
+            {calBusy ? 'Saving…' : 'Save calendar settings'}
+          </button>
+          <button
+            className="btn"
+            disabled={calBusy}
+            onClick={() => {
+              setCalBusy(true);
+              setCalMessage(null);
+              testCalendarConnection(calDraft)
+                .then((r) => setCalMessage(r))
+                .catch((e: unknown) =>
+                  setCalMessage(e instanceof Error ? e.message : String(e)),
+                )
+                .finally(() => setCalBusy(false));
+            }}
+          >
+            Test connection
+          </button>
+        </div>
+      </section>
+      </>
+      )}
+
+      {tab === 'ai' && (
+      <>
+      <section className="card" aria-label="LLM provider">
+        <div className="model-title" style={{ marginBottom: 4 }}>
+          <strong>LLM provider</strong>
+        </div>
+        <div className="muted">
+          Optional summarization of transcripts. Local Ollama stays on this device;
+          API keys and Open WebUI send transcript text to that service.
+          OpenCode runs headless on this machine with your OpenCode login.
+        </div>
+        <label className="field-label" htmlFor="llm-preset">Provider</label>
+        <select
+          id="llm-preset"
+          className="input"
+          aria-label="LLM provider"
+          value={llmDraft.preset}
+          onChange={(e) => {
+            const preset = e.target.value as LlmPreset;
+            const defaults = LLM_PRESETS[preset];
+            setLlmDraft({
+              ...llmDraft,
+              preset,
+              baseUrl: defaults.baseUrl || llmDraft.baseUrl,
+              model: defaults.model || llmDraft.model,
+            });
+          }}
+        >
+          {(Object.keys(LLM_PRESET_LABELS) as LlmPreset[]).map((p) => (
+            <option key={p} value={p}>{LLM_PRESET_LABELS[p]}</option>
+          ))}
+        </select>
+        {llmDraft.preset !== 'opencode' && (
+          <>
+            <label className="field-label" htmlFor="llm-base">Base URL</label>
+            <input
+              id="llm-base"
+              className="input"
+              value={llmDraft.baseUrl}
+              onChange={(e) => setLlmDraft({ ...llmDraft, baseUrl: e.target.value })}
+              placeholder="https://api.openai.com/v1"
+              inputMode="url"
+            />
+            <label className="field-label" htmlFor="llm-path">Completions path</label>
+            <input
+              id="llm-path"
+              className="input"
+              value={llmDraft.completionsPath}
+              onChange={(e) => setLlmDraft({ ...llmDraft, completionsPath: e.target.value })}
+              placeholder="/chat/completions"
+            />
+            <label className="field-label" htmlFor="llm-key">API key (optional)</label>
+            <input
+              id="llm-key"
+              className="input"
+              type="password"
+              value={llmDraft.apiKey}
+              onChange={(e) => setLlmDraft({ ...llmDraft, apiKey: e.target.value })}
+              placeholder="Not needed for local Ollama"
+              autoComplete="off"
+            />
+          </>
+        )}
+        {llmDraft.preset === 'opencode' && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            Uses the OpenCode CLI on this machine — no URL or key needed.
+            Pick a model below.
+          </div>
+        )}
+        <label className="field-label" htmlFor="llm-model">Model</label>
+        {llmDraft.preset === 'opencode' && opencodeModels !== null && opencodeModels.length > 0 ? (
+          <select
+            id="llm-model"
+            className="input"
+            aria-label="OpenCode model"
+            value={opencodeModels.includes(llmDraft.model.trim()) ? llmDraft.model : ''}
+            onChange={(e) => setLlmDraft({ ...llmDraft, model: e.target.value })}
+          >
+            {!opencodeModels.includes(llmDraft.model.trim()) && (
+              <option value="">{llmDraft.model.trim() ? `${llmDraft.model} (saved)` : 'Select a model…'}</option>
+            )}
+            {opencodeModels.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            id="llm-model"
+            className="input"
+            value={llmDraft.model}
+            onChange={(e) => setLlmDraft({ ...llmDraft, model: e.target.value })}
+            placeholder={llmDraft.preset === 'opencode' ? 'Loading OpenCode models…' : 'llama3.1'}
+            disabled={llmDraft.preset === 'opencode' && opencodeModels === null}
+          />
+        )}
+        {llmDraft.preset === 'opencode' && opencodeModels === null && !opencodeModelsError && (
+          <div className="muted small">Loading OpenCode models…</div>
+        )}
+        {llmDraft.preset === 'opencode' && opencodeModelsError && (
+          <div className="warn small" role="alert">{opencodeModelsError}</div>
+        )}
+        {llmMessage && <p className="muted small" style={{ marginBottom: 0 }}>{llmMessage}</p>}
+        <div className="btn-row">
+          <button
+            className="btn btn-primary"
+            disabled={llmBusy}
+            onClick={() => {
+              setLlmBusy(true);
+              setLlmMessage(null);
+              saveLlmConfig(llmDraft)
+                .then(() => setLlmMessage('LLM settings saved on this device.'))
+                .catch((e: unknown) =>
+                  setLlmMessage(e instanceof Error ? e.message : String(e)),
+                )
+                .finally(() => setLlmBusy(false));
+            }}
+          >
+            {llmBusy ? 'Saving…' : 'Save LLM settings'}
+          </button>
+          <button
+            className="btn"
+            disabled={llmBusy}
+            onClick={() => {
+              setLlmBusy(true);
+              setLlmMessage(null);
+              createLlmClient(llmDraft)
+                .testConnection()
+                .then(() => setLlmMessage('LLM endpoint answered.'))
+                .catch((e: unknown) =>
+                  setLlmMessage(e instanceof Error ? e.message : String(e)),
+                )
+                .finally(() => setLlmBusy(false));
+            }}
+          >
+            Test connection
+          </button>
+        </div>
+      </section>
+      </>
+      )}
+
+      {tab === 'app' && (
+      <>
+      {(!nativeStatus || nativeStatus.backend === 'voxtype') && (
+        <section className="card" aria-label="GPU acceleration">
         <div className="model-title" style={{ marginBottom: 4 }}>
           <strong>GPU acceleration</strong>
           {gpu?.active && <span className="badge badge-ok">Active</span>}
@@ -326,8 +755,13 @@ export function Settings(): React.JSX.Element {
             Or run: <code>{gpu.hint}</code>
           </p>
         )}
-      </section>
+        </section>
+      )}
+      </>
+      )}
 
+      {tab === 'models' && (
+      <>
       <section className="card" aria-label="Language">
         <label className="field-label" htmlFor="settings-language">
           Spoken language
@@ -455,6 +889,8 @@ export function Settings(): React.JSX.Element {
         <p className="muted">
           Ready to transcribe with: {installedModels.map((m) => m.label).join(', ')}.
         </p>
+      )}
+      </>
       )}
     </>
   );

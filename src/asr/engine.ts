@@ -21,6 +21,7 @@ export interface ASREngine {
 }
 
 export type TranscriptionStage =
+  | 'queued'
   | 'loading-model'
   | 'decoding-audio'
   | 'transcribing'

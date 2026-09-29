@@ -147,17 +147,132 @@ fn enable_gpu_blocking() -> Result<String, String> {
     ))
 }
 
+/// File name of a whisper.cpp model on disk / on Hugging Face.
+fn ggml_filename(name: &str) -> String {
+    format!("ggml-{name}.bin")
+}
+
+/// Direct download URL for a whisper.cpp model weight file.
+fn model_download_url(name: &str) -> String {
+    format!(
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
+        ggml_filename(name)
+    )
+}
+
+/// Reject anything that is not a plain model name (no paths, no flags).
+fn valid_model_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('.')
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
+/// First model dir that exists, creatingcandidates as needed for a download.
+fn writable_model_dir() -> Result<std::path::PathBuf, String> {
+    if let Some(existing) = models::first_existing_model_dir() {
+        return Ok(std::path::PathBuf::from(existing));
+    }
+    let first = models::model_dirs()
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No model directory is configured for this system.".to_string())?;
+    std::fs::create_dir_all(&first)
+        .map_err(|e| format!("Could not create model directory {}: {e}", first.display()))?;
+    Ok(first)
+}
+
+/// Download a `ggml-*.bin` weight file with curl (ships with macOS, Windows
+/// 10+ and most Linux distros), falling back to PowerShell on Windows.
+fn download_with_system_tools(url: &str, dest_tmp: &std::path::Path) -> Result<(), String> {
+    let dest_str = dest_tmp.to_string_lossy().to_string();
+    let curl_err = match Command::new("curl")
+        .args([
+            "-fSL",
+            "--retry",
+            "3",
+            "--speed-limit",
+            "1000",
+            "--speed-time",
+            "120",
+            "-o",
+            &dest_str,
+            url,
+        ])
+        .output()
+    {
+        Ok(out) if out.status.success() => return Ok(()),
+        Ok(out) => {
+            let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if detail.is_empty() {
+                "curl reported an error".to_string()
+            } else {
+                detail
+            }
+        }
+        Err(e) => format!("could not run `curl`: {e}"),
+    };
+    powershell_fallback(url, &dest_str, &curl_err)
+}
+
+/// PowerShell fallback for stripped Windows images without curl.
+#[cfg(windows)]
+fn powershell_fallback(url: &str, dest_str: &str, curl_err: &str) -> Result<(), String> {
+    let ps = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!("Invoke-WebRequest -Uri '{url}' -OutFile '{dest_str}'"),
+        ])
+        .output()
+        .map_err(|e| format!("Model download failed ({curl_err}; PowerShell failed: {e})"))?;
+    if ps.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Model download failed ({curl_err}; PowerShell: {})",
+            String::from_utf8_lossy(&ps.stderr).trim()
+        ))
+    }
+}
+
+/// Outside Windows there is no fallback: surface the curl error.
+#[cfg(not(windows))]
+fn powershell_fallback(_url: &str, _dest_str: &str, curl_err: &str) -> Result<(), String> {
+    Err(format!(
+        "Model download failed ({curl_err}). Install curl and retry."
+    ))
+}
+
+fn download_generic_model(name: &str) -> Result<(), String> {
+    if !valid_model_name(name) {
+        return Err(format!("Refusing to download suspicious model name: {name}"));
+    }
+    let dir = writable_model_dir()?;
+    let dest = dir.join(ggml_filename(name));
+    if dest.is_file() {
+        return Ok(()); // Already on disk (raced or manually placed).
+    }
+    let tmp = dir.join(format!("{}.part", ggml_filename(name)));
+    let url = model_download_url(name);
+    download_with_system_tools(&url, &tmp)?;
+    std::fs::rename(&tmp, &dest).map_err(|e| format!("Could not save model file: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn native_asr_download_model(name: String) -> Result<(), String> {
     let backend = models::discover_backend()
         .ok_or_else(|| "No transcription backend available. Install Voxtype to download models.".to_string())?;
 
     if backend.name != "voxtype" {
-        return Err(format!(
-            "Model downloads require the Voxtype backend (found: {}). \
-             Download whisper.cpp models manually with the whisper.cpp download script.",
-            backend.name
-        ));
+        // whisper.cpp backends: fetch the ggml weight file straight from
+        // Hugging Face into the model dir. Works on Linux, Windows and macOS.
+        return download_generic_model(&name);
     }
 
     let output = Command::new(&backend.path)
@@ -811,6 +926,25 @@ fn write_wav(path: &Path, samples: &[f32]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_download_url_points_at_whisper_cpp_repo() {
+        assert_eq!(
+            model_download_url("base.en"),
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+        );
+        assert_eq!(ggml_filename("large-v3-turbo"), "ggml-large-v3-turbo.bin");
+    }
+
+    #[test]
+    fn valid_model_name_rejects_paths_and_flags() {
+        for good in ["tiny", "base.en", "small", "medium", "large-v3", "large-v3-turbo"] {
+            assert!(valid_model_name(good), "{good}");
+        }
+        for bad in ["", "../evil", "/abs/path", "a b", "x;rm", "--model", &"a".repeat(65)] {
+            assert!(!valid_model_name(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn parses_offsets_json() {

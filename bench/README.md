@@ -4,14 +4,40 @@ Measures transcription accuracy as **word error rate (WER)** so accuracy changes
 are a number, not an opinion. Modelled on the `bench/` suite in
 [omarchy-meeting-recorder](https://github.com/jankeesvw/omarchy-meeting-recorder).
 
-It runs the **same code the app runs**:
+Two harnesses:
+
+### `npm run bench:native` — the app's real pipeline (use this)
+
+`bench/native.mjs` runs **exactly what the desktop app runs** and the real CLI:
 
 - `src/asr/preprocess.ts` — gain + in-place silence attenuation
-- `src/asr/vad.ts` — speech-only compaction
-- `src/asr/pipeline-config.ts` — chunking / `no_repeat_ngram_size` / dtype config
+- `src/asr/chunking.ts` — speech-only chunks (≤24 s, cut at pauses, long
+  silences removed) for text-only backends such as voxtype
+- `src/asr/wav.ts` → `voxtype transcribe` (or `whisper-cli` via `--backend` /
+  `WHISPER_CLI_PATH`)
 
-Each case is scored twice: `raw` (model on untouched audio) and `pipeline`
-(after preprocess + VAD), so a DSP/VAD change shows up as a WER delta.
+It adds a long-form "meeting" case (every fixture joined with 2.5 s pauses) and
+prints its per-chunk timestamps. `--compare-whole` also runs the previous
+approach (whole file in one call) so a change is a WER/time delta, not a claim.
+
+```bash
+npm run bench:native                                  # base.en, all fixtures
+npm run bench:native -- --model large-v3-turbo --compare-whole
+npm run bench:native -- --only long-form-meeting --max-chunk-ms 20000 --verbose
+npm run bench:native -- --max-wer 0.15 --json bench/native-results.json
+```
+
+Measured on voxtype 1.0.1 (Intel iGPU, Vulkan), chunked vs whole-file:
+silence/noise 0% vs 100% WER (no hallucination); speech clips equal or better;
+long-form 10.6% vs 9.9% (base.en) and 5.3% vs 5.3% (large-v3-turbo). A 28 s
+chunk budget lost trailing words at the window edge (16.6%), hence 24 s.
+
+### `npm run bench` — DSP/VAD research harness (transformers.js)
+
+`bench/run.mjs` scores `preprocessForASR` + `compactSpeech` (`src/asr/vad.ts`)
+with Hugging Face `Xenova/*` models in Node. It is useful for comparing DSP/VAD
+ideas, but it is **not** the app's transcription path (the app is native-CLI
+only). Each case is scored twice: `raw` and `pipeline` (after preprocess + VAD).
 
 ## Why Node, not Playwright
 

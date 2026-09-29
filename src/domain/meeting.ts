@@ -59,8 +59,27 @@ export interface Meeting {
   transcriptionStatus: TranscriptionStatus;
   /** Set when a crash/interrupt leaves endedAt undefined. */
   unfinished?: boolean;
+  /** Audio chunks that could not be written to storage (§19): the saved
+   * recording has gaps. Absent/0 when everything was stored. */
+  unsavedChunks?: number;
+  /** True when durationMs was estimated from recovered chunks (§15). */
+  durationEstimated?: boolean;
   /** Last GitLab upload of this transcript, if any. */
   gitlab?: { url: string; target: string; uploadedAt: number };
+  /** Last GitLab summary upload of this meeting, if any. */
+  gitlabSummary?: { url: string; target: string; uploadedAt: number };
+  /** LLM-generated summary + key points, if any. */
+  summary?: { text: string; keyPoints: string[]; model: string; createdAt: number };
+  /** Last calendar event created from this meeting, if any. */
+  calendarEvent?: { provider: string; createdAt: number };
+}
+
+/** MediaRecorder timeslice: every stored chunk holds about this much audio. */
+export const CHUNK_MS = 5000;
+
+/** Approximate recorded length from stored chunk counts (longest track). */
+export function estimateDurationFromChunks(chunkCounts: number[]): number {
+  return Math.max(0, ...chunkCounts) * CHUNK_MS;
 }
 
 export function newMeetingId(): string {

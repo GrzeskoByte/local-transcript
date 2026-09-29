@@ -15,7 +15,8 @@
     "bench": "node bench/run.mjs",
     "tauri": "npx --yes @tauri-apps/cli@2",
     "tauri:dev": "npx --yes @tauri-apps/cli@2 dev",
-    "tauri:build": "npx --yes @tauri-apps/cli@2 build"
+    "tauri:build": "npx --yes @tauri-apps/cli@2 build",
+    "bench:native": "node bench/native.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

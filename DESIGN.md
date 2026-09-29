@@ -210,6 +210,18 @@ Loader is a card-like block with `.loader-head` (flex, gap 10), a `.spinner`
 `.banner` — warn border `#fcd34d` on `#fffbeb`, card radius/padding/shadow.
 `.empty` — centred, `padding: 36px 20px`, with a `64×64` brand-tint `.art`.
 
+### Settings tabs — `.tabs` / `.tab`
+Pill tab bar (`gap --space-1`, `margin-bottom --space-4`). Inactive tab:
+surface bg, `--border`, `--text-sm`, `--muted`. Active: brand bg, white text.
+Settings groups cards under Models / Calendar / Team sharing / AI assistant / App.
+
+### Calendar view — `.cal-grid` / `.cal-day` / `.cal-dot`
+7-column grid (`gap 4px`), Monday-first, with `.cal-dow` weekday headers
+(`--text-xs`, `--faint`). Day cell: min-height 52px, `--radius-sm`,
+selected = brand border + focus shadow, today = tinted number pill.
+`.cal-dot.local` (brand) = recorded meeting, `.cal-dot.server` (green) =
+server event. Day detail reuses `.model-list` / `.model-row`.
+
 ---
 
 ## 4. Utilities

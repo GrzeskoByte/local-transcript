@@ -72,6 +72,22 @@ export const db = {
         }),
     );
   },
+  /**
+   * Run `fn` inside one transaction over `stores`; resolves when it commits.
+   * `fn` may issue further requests from request callbacks.
+   */
+  transaction(stores: string[], mode: IDBTransactionMode, fn: (t: IDBTransaction) => void): Promise<void> {
+    return openDatabase().then(
+      (dbInstance) =>
+        new Promise<void>((resolve, reject) => {
+          const transaction = dbInstance.transaction(stores, mode);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB transaction failed'));
+          transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted'));
+          fn(transaction);
+        }),
+    );
+  },
   kvGet<T>(key: string): Promise<T | undefined> {
     return db.get<{ key: string; value: T }>('kv', key).then((row) => row?.value);
   },
