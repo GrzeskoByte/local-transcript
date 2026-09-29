@@ -14,6 +14,13 @@ TARGET="${1:?usage: build-engine.sh <target-triple> [whisper.cpp tag]}"
 VERSION="${2:-${WHISPER_CPP_VERSION:-v1.9.4}}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${RUNNER_TEMP:-/tmp}/whisper.cpp-$VERSION-$TARGET"
+# Git Bash on Windows: RUNNER_TEMP is a backslash path (D:\a\_temp) that MSYS
+# tools such as `find` mishandle; use the POSIX form (MSYS converts it back
+# for native programs like cmake and git).
+if command -v cygpath >/dev/null 2>&1; then
+  WORK="$(cygpath -u "$WORK")"
+  ROOT="$(cygpath -u "$ROOT")"
+fi
 OUT_DIR="$ROOT/src-tauri/binaries"
 
 rm -rf "$WORK"
@@ -45,21 +52,23 @@ case "$TARGET" in
            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON "${X86_BASELINE[@]}")
     ;;
   x86_64-pc-windows-msvc)
+    # Default generator = newest installed Visual Studio (runner images move on).
     EXT=".exe"
-    ARGS+=(-G "Visual Studio 17 2022" -A x64
+    ARGS+=(-A x64
            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
            "${X86_BASELINE[@]}")
     ;;
   aarch64-pc-windows-msvc)
     # ggml does not support MSVC for ARM64; use the clang-cl toolset.
     EXT=".exe"
-    ARGS+=(-G "Visual Studio 17 2022" -A ARM64 -T ClangCL
+    ARGS+=(-A ARM64 -T ClangCL
            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)
     ;;
   *)
     echo "unsupported target: $TARGET" >&2; exit 2 ;;
 esac
 
+echo "cmake $(cmake --version | head -1); args: ${ARGS[*]}"
 cmake -S "$WORK" -B "$WORK/build" "${ARGS[@]}"
 cmake --build "$WORK/build" --config Release --target whisper-cli -j 4
 
