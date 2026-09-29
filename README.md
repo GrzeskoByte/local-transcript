@@ -37,7 +37,7 @@ audio.
 | Linux (`webkit2gtk-4.1`), Windows 10+, or macOS 12+ | Tauri webview |
 | Node 20+ and `npm` | Frontend build |
 | Rust toolchain (`cargo`) | Desktop backend build |
-| `voxtype` **or** `whisper-cli` on `PATH` | Transcription (recording works without it) |
+| — | Transcription: release builds bundle whisper.cpp; a user-installed `voxtype` / `whisper-cli` (e.g. GPU builds) takes precedence |
 | `curl` (or PowerShell on Windows) | Model download for `whisper-cli` backends |
 | `ffmpeg` | Dev bench fixtures only |
 

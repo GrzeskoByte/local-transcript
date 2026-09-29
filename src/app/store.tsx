@@ -25,7 +25,7 @@ import type { TranscriptionStage } from '../asr/engine';
 import { deleteRecording, estimateStorage, isStorageLow, listChunkNames, listTracks, readRecordingBlob } from '../storage/recordings';
 import { trackSpeakerLabel } from '../domain/meeting';
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
-import { nativeDownloadModel, nativeEnableGpu, nativeStatus as fetchNativeStatus } from '../asr/native-engine';
+import { nativeDownloadModel, nativeDownloadProgress, nativeEnableGpu, nativeStatus as fetchNativeStatus } from '../asr/native-engine';
 import type { NativeAsrStatus, NativeModelInfo } from '../asr/native-types';
 import { desktopStorageDir, openDesktopStorageDir } from '../platform/desktop-storage';
 import { mirrorMeetingToDisk } from '../features/meetings/disk-sync';
@@ -84,7 +84,13 @@ interface AppState {
   // transcription
   txProgress: Record<string, number>;
   txStage: Record<string, TranscriptionStage>;
-  transcribe: (id: string) => Promise<void>;
+  transcribe: (id: string, modelId?: string) => Promise<void>;
+  /** One click: download the recommended model if none is installed, then transcribe. */
+  setupAndTranscribe: (id: string) => Promise<void>;
+  /** Model download in flight (bytes), for progress bars; null when idle. */
+  modelDownload: { name: string; received: number; total: number } | null;
+  /** Model the app downloads on first use for the current engine. */
+  firstRunModel: string;
   cancelTranscription: (id: string) => Promise<void>;
   // model
   modelMeta: ModelMeta;
@@ -176,6 +182,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [llmConfig, setLlmConfigState] = useState<LlmConfig>(DEFAULT_LLM_CONFIG);
   const [calendarConfig, setCalendarConfigState] = useState<CalendarConfig>(DEFAULT_CALENDAR_CONFIG);
   const [unfinished, setUnfinished] = useState<Meeting[]>([]);
+  const [modelDownload, setModelDownload] = useState<{ name: string; received: number; total: number } | null>(null);
   const recorderRef = useRef<MediaRecorderAudioRecorder | null>(null);
   const timerRef = useRef<number | null>(null);
   /** Id of the recording in progress: it is never "unfinished" (§15). */
@@ -586,7 +593,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, []);
 
   const transcribe = useCallback(
-    async (id: string) => {
+    async (id: string, modelId?: string) => {
       setTxProgress((p) => ({ ...p, [id]: 0 }));
       setTxStage((p) => ({ ...p, [id]: 'loading-model' }));
       // Optimistic: flip the detail screen into the loader immediately.
@@ -595,7 +602,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         d && d.id === id ? { ...d, transcriptionStatus: 'processing' } : d,
       );
       try {
-        await txService.transcribe(id, modelMeta.modelId);
+        await txService.transcribe(id, modelId ?? modelMeta.modelId);
       } finally {
         // Drop stale progress/stage so a later visit never shows a ghost loader.
         setTxProgress((p) => {
@@ -648,7 +655,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await setModelMeta(meta);
     setModelMetaState(meta);
 
-    // Let the native backend fetch the model (voxtype/whisper.cpp).
+    // Let the native backend fetch the model (voxtype/whisper.cpp), polling
+    // the bytes written so the UI can show a real progress bar.
+    setModelDownload({ name: targetId, received: 0, total: 0 });
+    const poll = window.setInterval(() => {
+      void nativeDownloadProgress(targetId)
+        .then((p) => {
+          setModelDownload({ name: targetId, received: p.received, total: p.total });
+          if (p.total > 0) setModelMetaState((m) => ({ ...m, progress: Math.min(0.99, p.received / p.total) }));
+        })
+        .catch(() => undefined);
+    }, 500);
     try {
       await nativeDownloadModel(meta.modelId);
       meta = { ...meta, state: 'ready', progress: 1 };
@@ -664,6 +681,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await setModelMeta(meta);
       setModelMetaState(meta);
       throw err;
+    } finally {
+      window.clearInterval(poll);
+      setModelDownload(null);
     }
   }, [refreshNativeStatus]);
 
@@ -729,6 +749,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   );
 
   const nativeModels = nativeStatus?.models ?? [];
+  const firstRunModel = nativeStatus?.recommendedModel ?? NATIVE_DEFAULT_MODEL;
 
   const modelCatalog = useMemo<CatalogModel[]>(
     () => nativeCatalog(nativeModels),
@@ -738,6 +759,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const installedModels = useMemo(
     () => modelCatalog.filter((m) => m.installed),
     [modelCatalog],
+  );
+
+  const setupAndTranscribe = useCallback(
+    async (id: string) => {
+      if (installedModels.length > 0) return transcribe(id);
+      // First transcription on a fresh install: fetch the recommended model
+      // (with progress), then run — no trip to Settings.
+      await downloadModel(firstRunModel);
+      await transcribe(id, firstRunModel);
+    },
+    [installedModels, transcribe, downloadModel, firstRunModel],
   );
 
   const value = useMemo<AppState>(
@@ -764,6 +796,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       txProgress,
       txStage,
       transcribe,
+      setupAndTranscribe,
+      modelDownload,
+      firstRunModel,
       cancelTranscription,
       modelMeta,
       downloadModel,
@@ -801,7 +836,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       route, go, meetings, refresh, recordingState, recordingError, activeMeeting,
       elapsedMs, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
       stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
-      txProgress, txStage, transcribe, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
+      txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
       gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab,

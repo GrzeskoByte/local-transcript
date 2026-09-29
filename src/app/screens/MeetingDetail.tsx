@@ -12,11 +12,12 @@ import { exportAudio, exportTranscript } from '../../features/meetings/exports';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { extractEventDraft } from '../../integrations/calendar';
 import type { CalendarEventDraft } from '../../integrations/calendar';
+import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 
 export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const {
     detailMeeting, detailSegments, detailTracks, loadDetail, go, deleteMeeting,
-    txProgress, txStage, transcribe, cancelTranscription, modelMeta,
+    txProgress, txStage, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta,
     selectModel, language, setLanguage, nativeStatus, installedModels,
     uploadToGitlab, uploadSummaryToGitlab, summarizeMeeting, createCalendarEvent,
   } = useApp();
@@ -161,12 +162,14 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               </select>
             </label>
           </div>
-          {installedModels.length === 0 && (
+          {installedModels.length === 0 && nativeStatus?.available && (
             <p className="muted" style={{ margin: '10px 0 0' }}>
-              No speech model downloaded yet.{' '}
+              Your first transcription downloads the speech model ({firstRunModel}) once — about{' '}
+              {firstRunModel.includes('q5') ? '550 MB' : '1.6 GB'}. Other models live in{' '}
               <button className="link-btn" onClick={() => go({ name: 'settings' })}>
-                Open Settings
+                Settings
               </button>
+              .
             </p>
           )}
           <p className="muted" style={{ marginBottom: 0 }}>
@@ -182,7 +185,8 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           </p>
         </div>
       )}
-      {m.transcriptionStatus === 'not_started' && !busy && (
+      <ModelDownloadProgress />
+      {m.transcriptionStatus === 'not_started' && !busy && !modelDownload && (
         <div className="card">
           <p className="muted" style={{ marginTop: 0 }}>
             Not transcribed yet. Transcription runs fully on this device.
@@ -191,10 +195,10 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             className="btn btn-primary"
             onClick={() => {
               setError(null);
-              transcribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+              setupAndTranscribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}
           >
-            Transcribe
+            {installedModels.length > 0 ? 'Transcribe' : 'Download model & transcribe'}
           </button>
         </div>
       )}
@@ -229,7 +233,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             className="btn btn-primary"
             onClick={() => {
               setError(null);
-              transcribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+              setupAndTranscribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}
           >
             Retry
@@ -243,7 +247,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             className="btn"
             onClick={() => {
               setError(null);
-              transcribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+              setupAndTranscribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}
           >
             Re-transcribe

@@ -27,6 +27,7 @@ pub fn run() {
             native_asr::native_asr_status,
             native_asr::native_asr_models,
             native_asr::native_asr_download_model,
+            native_asr::native_asr_download_progress,
             native_asr::native_asr_enable_gpu,
             native_asr::native_asr_transcribe,
             native_asr::native_asr_cancel,

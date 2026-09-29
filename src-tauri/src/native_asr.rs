@@ -63,6 +63,12 @@ fn build_status() -> NativeAsrStatus {
     match backend {
         Some(b) => NativeAsrStatus {
             available: true,
+            bundled: b.bundled,
+            recommended_model: Some(if b.name == "voxtype" {
+                "large-v3-turbo".to_string()
+            } else {
+                models::WHISPER_CLI_FIRST_MODEL.to_string()
+            }),
             acceleration: models::read_acceleration(&b),
             gpu: models::read_gpu(&b),
             backend: b.name,
@@ -84,6 +90,8 @@ fn build_status() -> NativeAsrStatus {
             model_dir,
             models: models_list,
             install_hint: Some(models::install_hint()),
+            bundled: false,
+            recommended_model: None,
         },
     }
 }
@@ -171,18 +179,65 @@ fn valid_model_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
 }
 
-/// First model dir that exists, creatingcandidates as needed for a download.
+/// The app's own model folder (created on demand). Downloads always land
+/// here; discovery still scans every known model dir.
 fn writable_model_dir() -> Result<std::path::PathBuf, String> {
-    if let Some(existing) = models::first_existing_model_dir() {
-        return Ok(std::path::PathBuf::from(existing));
-    }
-    let first = models::model_dirs()
-        .into_iter()
-        .next()
+    let dir = models::app_model_dir()
         .ok_or_else(|| "No model directory is configured for this system.".to_string())?;
-    std::fs::create_dir_all(&first)
-        .map_err(|e| format!("Could not create model directory {}: {e}", first.display()))?;
-    Ok(first)
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Could not create model directory {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Expected byte size of each in-flight download (from the HTTP headers),
+/// so the UI can show real progress and truncated files are rejected.
+fn download_sizes() -> &'static Mutex<std::collections::HashMap<String, u64>> {
+    static SIZES: std::sync::OnceLock<Mutex<std::collections::HashMap<String, u64>>> =
+        std::sync::OnceLock::new();
+    SIZES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Final Content-Length after redirects (Hugging Face → CDN), via `curl -I`.
+fn remote_size(url: &str) -> Option<u64> {
+    let out = Command::new("curl").args(["-sIL", "--max-time", "20", url]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim().eq_ignore_ascii_case("content-length").then(|| v.trim().parse::<u64>().ok())?
+        })
+        .last()
+        .filter(|n| *n > 0)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    pub received: u64,
+    /// 0 when the size is not known (progress is then indeterminate).
+    pub total: u64,
+    pub done: bool,
+}
+
+/// Poll a model download started by `native_asr_download_model`.
+#[tauri::command]
+pub fn native_asr_download_progress(name: String) -> Result<DownloadProgress, String> {
+    if !valid_model_name(&name) {
+        return Err("Invalid model name".to_string());
+    }
+    let dir = writable_model_dir()?;
+    let total = download_sizes().lock().ok().and_then(|m| m.get(&name).copied()).unwrap_or(0);
+    let done_path = dir.join(ggml_filename(&name));
+    if done_path.is_file() {
+        let size = done_path.metadata().map(|m| m.len()).unwrap_or(0);
+        return Ok(DownloadProgress { received: size, total: total.max(size), done: true });
+    }
+    let part = dir.join(format!("{}.part", ggml_filename(&name)));
+    let received = part.metadata().map(|m| m.len()).unwrap_or(0);
+    Ok(DownloadProgress { received, total, done: false })
 }
 
 /// Download a `ggml-*.bin` weight file with curl (ships with macOS, Windows
@@ -259,21 +314,43 @@ fn download_generic_model(name: &str) -> Result<(), String> {
     }
     let tmp = dir.join(format!("{}.part", ggml_filename(name)));
     let url = model_download_url(name);
+    let expected = remote_size(&url);
+    if let (Some(size), Ok(mut sizes)) = (expected, download_sizes().lock()) {
+        sizes.insert(name.to_string(), size);
+    }
+    let _ = std::fs::remove_file(&tmp);
     download_with_system_tools(&url, &tmp)?;
+    // Integrity: never accept a truncated or wrong-sized model file (§16).
+    let got = tmp.metadata().map(|m| m.len()).unwrap_or(0);
+    if let Some(size) = expected {
+        if got != size {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!(
+                "Model download was incomplete ({got} of {size} bytes). Check your connection and retry."
+            ));
+        }
+    }
     std::fs::rename(&tmp, &dest).map_err(|e| format!("Could not save model file: {e}"))?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn native_asr_download_model(name: String) -> Result<(), String> {
-    let backend = models::discover_backend()
-        .ok_or_else(|| "No transcription backend available. Install Voxtype to download models.".to_string())?;
+    // Off the async runtime: downloads take minutes and block on curl.
+    tauri::async_runtime::spawn_blocking(move || download_model_blocking(&name))
+        .await
+        .map_err(|e| format!("Download task failed: {e}"))?
+}
 
-    if backend.name != "voxtype" {
-        // whisper.cpp backends: fetch the ggml weight file straight from
-        // Hugging Face into the model dir. Works on Linux, Windows and macOS.
-        return download_generic_model(&name);
+fn download_model_blocking(name: &str) -> Result<(), String> {
+    let backend = models::discover_backend();
+    if backend.as_ref().map(|b| b.name != "voxtype").unwrap_or(true) {
+        // whisper.cpp backends (including the bundled engine): fetch the ggml
+        // weight file straight from Hugging Face into the app's model dir.
+        return download_generic_model(name);
     }
+    let backend = backend.expect("checked above");
+    let name = name.to_string();
 
     let output = Command::new(&backend.path)
         .args([

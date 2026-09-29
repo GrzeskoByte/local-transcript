@@ -30,6 +30,18 @@ export interface NativeAsrStatus {
   modelDir: string | null;
   models: NativeModelInfo[];
   installHint: string | null;
+  /** The whisper.cpp engine shipped inside the app is in use (zero setup). */
+  bundled?: boolean;
+  /** Model to download on first use for this backend (one-click setup). */
+  recommendedModel?: string | null;
+}
+
+/** Progress of a model download started through the desktop backend. */
+export interface NativeDownloadProgress {
+  received: number;
+  /** 0 when the size is unknown. */
+  total: number;
+  done: boolean;
 }
 
 /** A model offered by the desktop backend. */
