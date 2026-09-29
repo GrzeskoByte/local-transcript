@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/lt-whisper"],
+    "resources": {
+      "binaries/whisper.cpp-LICENSE.txt": "licenses/whisper.cpp-LICENSE.txt"
+    }
+  }
+}

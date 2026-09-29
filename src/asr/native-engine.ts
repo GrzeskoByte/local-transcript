@@ -3,7 +3,7 @@ import { toTranscriptSegments } from './engine';
 import { invokeDesktop } from '../platform/desktop';
 import { bytesToBase64, encodeWav16 } from './wav';
 import { NATIVE_DEFAULT_MODEL } from './model-manager';
-import type { NativeAsrStatus, NativeModelInfo, NativeSegment } from './native-types';
+import type { NativeAsrStatus, NativeDownloadProgress, NativeModelInfo, NativeSegment } from './native-types';
 import type { TranscriptSegment } from '../domain/transcript';
 import { preprocessForASR } from './preprocess';
 import { assembleChunk, planSpeechChunks } from './chunking';
@@ -57,6 +57,11 @@ export async function nativeModels(): Promise<NativeModelInfo[]> {
 /** Download a model through the backend (voxtype, or a direct ggml download). */
 export async function nativeDownloadModel(name: string): Promise<void> {
   await invokeDesktop('native_asr_download_model', { name });
+}
+
+/** Bytes received so far for a model download in progress. */
+export async function nativeDownloadProgress(name: string): Promise<NativeDownloadProgress> {
+  return invokeDesktop<NativeDownloadProgress>('native_asr_download_progress', { name });
 }
 
 /** Enable GPU acceleration (may open a system password prompt). */

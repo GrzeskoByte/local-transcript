@@ -73,6 +73,7 @@ export function describeNativeRuntime(status: NativeAsrStatus | null): string {
       'No desktop transcription engine found. Install whisper.cpp (whisper-cli) or voxtype.'
     );
   }
+  if (status.bundled) return 'Built-in engine: whisper.cpp, included with the app — nothing to install.';
   const ver = status.version ? ` ${status.version}` : '';
   const accel = status.acceleration ? ` · ${status.acceleration}` : '';
   return `Desktop engine: ${status.backend}${ver}${accel} — native models on disk.`;

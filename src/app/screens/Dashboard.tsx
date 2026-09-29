@@ -5,9 +5,14 @@ import { searchSegments } from '../../domain/transcript.ts';
 import { getSegments } from '../../storage/transcripts.ts';
 import { describeNativeRuntime } from '../../asr/model-manager.ts';
 import { MicIcon, PlusIcon, SearchIcon, WaveIcon } from '../components/icons.tsx';
+import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 
 export function Dashboard(): React.JSX.Element {
-  const { meetings, go, unfinished, recoverUnfinished, discardUnfinished, modelMeta, nativeStatus } = useApp();
+  const {
+    meetings, go, unfinished, recoverUnfinished, discardUnfinished, modelMeta, nativeStatus,
+    installedModels, downloadModel, modelDownload, firstRunModel,
+  } = useApp();
+  const [setupError, setSetupError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<{ meetingId: string; title: string; snippet: string }[]>([]);
 
@@ -75,27 +80,52 @@ export function Dashboard(): React.JSX.Element {
         </section>
       )}
 
-      {!modelReady && (
+      {!modelReady && nativeStatus?.available && installedModels.length === 0 && (
         <section className="card" aria-label="Local speech model">
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
             <div className="media-art">
               <WaveIcon />
             </div>
             <div style={{ flex: 1 }}>
-              <strong>Enable on-device transcription</strong>
+              <strong>Set up on-device transcription</strong>
               <div className="muted">
-                Choose and download a speech model in Settings. Recording works without one.
+                One click downloads the speech model ({firstRunModel}) once. Recording already works without it.
               </div>
               <p className="muted" style={{ marginTop: 8, marginBottom: 0 }} aria-label="Acceleration">
                 {describeNativeRuntime(nativeStatus)}
               </p>
-              <div className="btn-row">
-                <button className="btn btn-primary" onClick={() => go({ name: 'settings' })}>
-                  Manage models
-                </button>
-              </div>
+              {modelDownload ? (
+                <div className="mt-3">
+                  <ModelDownloadProgress />
+                </div>
+              ) : (
+                <div className="btn-row">
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => {
+                      setSetupError(null);
+                      downloadModel(firstRunModel).catch((e: unknown) =>
+                        setSetupError(e instanceof Error ? e.message : String(e)),
+                      );
+                    }}
+                  >
+                    Set up transcription
+                  </button>
+                  <button className="btn" onClick={() => go({ name: 'settings' })}>
+                    Choose another model
+                  </button>
+                </div>
+              )}
+              {setupError && <p className="error mb-0">{setupError}</p>}
             </div>
           </div>
+        </section>
+      )}
+
+      {nativeStatus && !nativeStatus.available && (
+        <section className="card" aria-label="Local speech model">
+          <strong>Transcription engine not found</strong>
+          <p className="muted mb-0">{describeNativeRuntime(nativeStatus)} Recording works without it.</p>
         </section>
       )}
 

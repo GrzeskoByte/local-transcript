@@ -1,7 +1,11 @@
 //! Backend / model discovery for the native ASR shell-out.
 //!
-//! No native compilation: the Rust side locates an already-installed CLI
-//! (`whisper-cli` from whisper.cpp, or `voxtype`) and reads its metadata.
+//! No native compilation: the Rust side locates a CLI and reads its metadata.
+//! Search order: `$WHISPER_CLI_PATH` → a user-installed `whisper-cli` /
+//! `whisper-cpp` / `voxtype` (PATH plus the Homebrew / `/usr/local` dirs that
+//! GUI apps on macOS do not get on their PATH) → the whisper.cpp engine bundled
+//! next to the app executable (`lt-whisper`, built by the release workflow), so
+//! a fresh install transcribes with zero setup.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -51,6 +55,10 @@ pub struct NativeAsrStatus {
     pub model_dir: Option<String>,
     pub models: Vec<NativeModel>,
     pub install_hint: Option<String>,
+    /// The engine shipped inside the app is in use (no user install needed).
+    pub bundled: bool,
+    /// Model to fetch on first use for this backend (one-click setup).
+    pub recommended_model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +66,7 @@ pub struct Backend {
     pub name: String,
     pub path: String,
     pub version: Option<String>,
+    pub bundled: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -73,10 +82,39 @@ fn home_dir() -> Option<PathBuf> {
 
 fn path_dirs() -> Vec<PathBuf> {
     // split_paths uses ';' on Windows and ':' everywhere else.
-    match std::env::var_os("PATH") {
+    let mut dirs: Vec<PathBuf> = match std::env::var_os("PATH") {
         Some(p) => std::env::split_paths(&p).collect(),
         None => Vec::new(),
+    };
+    // Apps launched from Finder / a desktop launcher get a minimal PATH that
+    // misses Homebrew and per-user bins, so `brew install whisper-cpp` would
+    // otherwise be invisible to the app.
+    #[cfg(not(windows))]
+    {
+        for extra in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            dirs.push(PathBuf::from(extra));
+        }
+        if let Some(home) = home_dir() {
+            dirs.push(home.join(".local/bin"));
+        }
     }
+    dirs
+}
+
+/// File name of the whisper.cpp engine bundled with the app (a Tauri sidecar).
+pub const BUNDLED_ENGINE: &str = "lt-whisper";
+
+/// The bundled engine, installed next to the app executable by every bundle
+/// format (deb/rpm/AppImage `usr/bin`, macOS `Contents/MacOS`, Windows install dir).
+pub fn bundled_engine_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let name = if cfg!(windows) {
+        format!("{BUNDLED_ENGINE}.exe")
+    } else {
+        BUNDLED_ENGINE.to_string()
+    };
+    let candidate = exe.parent()?.join(name);
+    candidate.is_file().then_some(candidate)
 }
 
 pub(crate) fn which(program: &str) -> Option<PathBuf> {
@@ -135,6 +173,7 @@ pub fn discover_backend() -> Option<Backend> {
                 name: backend_name_for(&pb),
                 version: probe_version(&pb),
                 path: pb.to_string_lossy().to_string(),
+                bundled: false,
             });
         }
     }
@@ -145,11 +184,43 @@ pub fn discover_backend() -> Option<Backend> {
                 name: backend_name_for(&pb),
                 version: probe_version(&pb),
                 path: pb.to_string_lossy().to_string(),
+                bundled: false,
             });
         }
     }
 
-    None
+    // Zero-setup fallback: the engine shipped inside the app.
+    bundled_engine_path().map(|pb| Backend {
+        name: "whisper-cli".to_string(),
+        version: probe_version(&pb),
+        path: pb.to_string_lossy().to_string(),
+        bundled: true,
+    })
+}
+
+/// Where this app stores models it downloads itself (per-OS app data dir).
+pub fn app_model_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("WHISPER_MODEL_DIR") {
+        return Some(PathBuf::from(d));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            return Some(PathBuf::from(local).join("Local Transcribe/models"));
+        }
+    }
+    let home = home_dir()?;
+    #[cfg(target_os = "macos")]
+    return Some(home.join("Library/Application Support/Local Transcribe/models"));
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/share"));
+        return Some(data.join("local-transcribe/models"));
+    }
+    #[allow(unreachable_code)]
+    Some(home.join("AppData/Local/Local Transcribe/models"))
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +231,9 @@ pub fn model_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(d) = std::env::var_os("WHISPER_MODEL_DIR") {
         dirs.push(PathBuf::from(d));
+    }
+    if let Some(app) = app_model_dir() {
+        dirs.push(app);
     }
     if let Some(home) = home_dir() {
         dirs.push(home.join(".local/share/voxtype/models"));
@@ -403,14 +477,14 @@ fn accuracy_rank(name: &str) -> u32 {
         "base" | "base.en" => 2,
         "small" | "small.en" => 3,
         "medium" | "medium.en" => 4,
-        "large-v3" | "large-v3-turbo" => 5,
+        "large-v3" | "large-v3-turbo" | "large-v3-turbo-q5_0" => 5,
         "parakeet-tdt-0.6b-v3" | "parakeet-tdt-0.6b-v2" => 6,
         _ => 0,
     }
 }
 
 fn is_recommended(name: &str) -> bool {
-    matches!(name, "large-v3-turbo" | "parakeet-tdt-0.6b-v3")
+    matches!(name, "large-v3-turbo" | "large-v3-turbo-q5_0" | "parakeet-tdt-0.6b-v3")
 }
 
 fn detail_for(name: &str, size: Option<u64>) -> String {
@@ -445,7 +519,12 @@ fn build_model(
     }
 }
 
-const STATIC_WHISPER_CATALOG: [&str; 10] = [
+/// Model a whisper.cpp backend fetches on first use: large-v3-turbo quantized
+/// to 5 bits — ~550 MB instead of 1.6 GB, practically the same accuracy, and
+/// faster on CPUs.
+pub const WHISPER_CLI_FIRST_MODEL: &str = "large-v3-turbo-q5_0";
+
+const STATIC_WHISPER_CATALOG: [&str; 11] = [
     "tiny",
     "tiny.en",
     "base",
@@ -456,6 +535,7 @@ const STATIC_WHISPER_CATALOG: [&str; 10] = [
     "medium.en",
     "large-v3",
     "large-v3-turbo",
+    "large-v3-turbo-q5_0",
 ];
 
 /// Merge the backend catalog with models present on disk.
