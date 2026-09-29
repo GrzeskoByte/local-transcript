@@ -1,12 +1,37 @@
 import type { TranscriptSegment } from '../domain/transcript';
+import type { Meeting } from '../domain/meeting';
 import { db } from './database';
 
 const STORE = 'segments';
 
-export async function saveSegments(segments: TranscriptSegment[]): Promise<void> {
-  for (const seg of segments) {
-    await db.put(STORE, seg);
-  }
+/**
+ * Commit a finished transcript: replace the meeting's segments and mark it
+ * completed in ONE transaction — and only if the meeting still exists, so a
+ * transcription that outlives a delete never leaves orphan segments (§23).
+ * Returns false when the meeting was deleted meanwhile.
+ */
+export async function commitTranscript(
+  meetingId: string,
+  segments: TranscriptSegment[],
+): Promise<boolean> {
+  let committed = false;
+  await db.transaction(['meetings', STORE], 'readwrite', (t) => {
+    const meetings = t.objectStore('meetings');
+    const segs = t.objectStore(STORE);
+    const req = meetings.get(meetingId);
+    req.onsuccess = () => {
+      const meeting = req.result as Meeting | undefined;
+      if (!meeting) return;
+      const keys = segs.index('by-meeting').getAllKeys(meetingId);
+      keys.onsuccess = () => {
+        for (const k of keys.result) segs.delete(k);
+        for (const s of segments) segs.put(s);
+        meetings.put({ ...meeting, transcriptionStatus: 'completed' });
+        committed = true;
+      };
+    };
+  });
+  return committed;
 }
 
 export async function getSegments(meetingId: string): Promise<TranscriptSegment[]> {

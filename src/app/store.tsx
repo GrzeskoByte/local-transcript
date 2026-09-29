@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Meeting, RecordingMode, RecordingState } from '../domain/meeting';
-import { DUAL_TRACKS, formatDuration, newMeetingId } from '../domain/meeting';
+import { DUAL_TRACKS, estimateDurationFromChunks, formatDuration, newMeetingId } from '../domain/meeting';
 import { DeviceAudioSource } from '../audio/device-audio';
 import { MicrophoneAudioSource } from '../audio/microphone';
 import { MediaRecorderAudioRecorder } from '../audio/recorder';
@@ -17,13 +17,14 @@ import {
 import type { ModelMeta } from '../asr/model-manager';
 import { nativeCatalog } from '../asr/model-tiers';
 import type { CatalogModel } from '../asr/model-tiers';
-import { findUnfinishedMeetings, getMeeting, listMeetings, saveMeeting } from '../storage/meetings';
+import { findUnfinishedMeetings, getMeeting, listMeetings, saveMeeting, updateMeeting } from '../storage/meetings';
+import { deleteMeetingEverywhere } from '../features/meetings/exports';
 import { getSegments } from '../storage/transcripts';
 import type { TranscriptSegment } from '../domain/transcript';
 import type { TranscriptionStage } from '../asr/engine';
-import { deleteRecording, estimateStorage, isStorageLow, listTracks, readRecordingBlob } from '../storage/recordings';
+import { deleteRecording, estimateStorage, isStorageLow, listChunkNames, listTracks, readRecordingBlob } from '../storage/recordings';
 import { trackSpeakerLabel } from '../domain/meeting';
-import { isDesktopApp } from '../platform/desktop';
+import { invokeDesktop, isDesktopApp } from '../platform/desktop';
 import { nativeDownloadModel, nativeEnableGpu, nativeStatus as fetchNativeStatus } from '../asr/native-engine';
 import type { NativeAsrStatus, NativeModelInfo } from '../asr/native-types';
 import { desktopStorageDir, openDesktopStorageDir } from '../platform/desktop-storage';
@@ -32,13 +33,22 @@ import { importAudioFile } from '../features/meetings/import-audio';
 import { createGitlabClient, DEFAULT_GITLAB_CONFIG } from '../integrations/gitlab';
 import type { GitlabConfig, GitlabUploadResult } from '../integrations/gitlab';
 import { getGitlabConfig, setGitlabConfig } from '../integrations/gitlab-store';
+import { buildTransport, DEFAULT_CALENDAR_CONFIG, eventUid } from '../integrations/calendar';
+import type { CalendarConfig, CalendarCreateResult, CalendarEventDraft, CalendarProvider, ServerEvent } from '../integrations/calendar';
+import { fetchServerEvents } from '../integrations/calendar';
+import { getCalendarConfig, setActiveCalendarProvider, setCalendarConfig } from '../integrations/calendar-store';
+
+import { createLlmClient, DEFAULT_LLM_CONFIG } from '../integrations/llm';
+import type { LlmConfig, MeetingSummary } from '../integrations/llm';
+import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
 
 export type Route =
   | { name: 'dashboard' }
   | { name: 'new' }
   | { name: 'active' }
   | { name: 'detail'; id: string }
-  | { name: 'settings' };
+  | { name: 'settings' }
+  | { name: 'calendar' };
 
 /** One playable track of a recording (single-track recordings have track ''). */
 export interface AudioTrackView {
@@ -61,6 +71,10 @@ interface AppState {
   startRecording: (title: string, mode: RecordingMode) => Promise<void>;
   pauseRecording: () => Promise<void>;
   resumeRecording: () => Promise<void>;
+  /** Retry writing audio chunks after a storage failure (§9 Retry). */
+  retrySaving: () => Promise<boolean>;
+  /** Delete a meeting everywhere, stopping its transcription first (§23). */
+  deleteMeeting: (id: string) => Promise<void>;
   stopRecording: () => Promise<Meeting | null>;
   // detail
   detailMeeting: Meeting | null;
@@ -99,6 +113,19 @@ interface AppState {
   saveGitlabConfig: (config: GitlabConfig) => Promise<void>;
   /** Upload a meeting's transcript to GitLab; returns the created URL. */
   uploadToGitlab: (meetingId: string) => Promise<GitlabUploadResult>;
+
+  uploadSummaryToGitlab: (meetingId: string) => Promise<GitlabUploadResult>;
+
+  calendarConfig: CalendarConfig;
+  saveCalendarConfig: (config: CalendarConfig) => Promise<void>;
+  switchCalendarProvider: (provider: CalendarProvider) => Promise<void>;
+  fetchCalendarEvents: (start: Date, end: Date) => Promise<ServerEvent[]>;
+  createCalendarEvent: (meetingId: string, draft: CalendarEventDraft) => Promise<CalendarCreateResult>;
+  /** Custom LLM provider settings (kept on-device in IndexedDB). */
+  llmConfig: LlmConfig;
+  saveLlmConfig: (config: LlmConfig) => Promise<void>;
+  /** Summarize a transcribed meeting with the configured LLM provider. */
+  summarizeMeeting: (meetingId: string) => Promise<MeetingSummary>;
   /** Enable GPU acceleration via the desktop backend (desktop only). */
   enableGpu: () => Promise<void>;
   // recovery
@@ -146,13 +173,27 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   });
   const [storageDir, setStorageDir] = useState<string | null>(null);
   const [gitlabConfig, setGitlabConfigState] = useState<GitlabConfig>(DEFAULT_GITLAB_CONFIG);
+  const [llmConfig, setLlmConfigState] = useState<LlmConfig>(DEFAULT_LLM_CONFIG);
+  const [calendarConfig, setCalendarConfigState] = useState<CalendarConfig>(DEFAULT_CALENDAR_CONFIG);
   const [unfinished, setUnfinished] = useState<Meeting[]>([]);
   const recorderRef = useRef<MediaRecorderAudioRecorder | null>(null);
   const timerRef = useRef<number | null>(null);
+  /** Id of the recording in progress: it is never "unfinished" (§15). */
+  const activeIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     setMeetings(await listMeetings());
-    setUnfinished(await findUnfinishedMeetings());
+    const found = (await findUnfinishedMeetings()).filter((m) => m.id !== activeIdRef.current);
+    // Estimate each interrupted recording's length from its stored chunks,
+    // not from "now - startedAt" (which grows for as long as the app was closed).
+    const withEstimates = await Promise.all(
+      found.map(async (m) => {
+        const tracks = await listTracks(m.id).catch(() => [] as string[]);
+        const counts = await Promise.all(tracks.map((t) => listChunkNames(m.id, t).then((n) => n.length)));
+        return { ...m, durationMs: estimateDurationFromChunks(counts), durationEstimated: true };
+      }),
+    );
+    setUnfinished(withEstimates);
   }, []);
 
   // Resolve the desktop storage folder once, for the Settings card.
@@ -170,6 +211,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       else if (h === '#/new') setRoute({ name: 'new' });
       else if (h === '#/active') setRoute({ name: 'active' });
       else if (h === '#/settings') setRoute({ name: 'settings' });
+      else if (h === '#/calendar') setRoute({ name: 'calendar' });
       else setRoute({ name: 'dashboard' });
     };
     sync();
@@ -210,6 +252,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     void getModelMeta().then(setModelMetaState).catch(() => undefined);
     void getTranscriptionLanguage().then(setLanguageState).catch(() => undefined);
     void getGitlabConfig().then(setGitlabConfigState).catch(() => undefined);
+    void getCalendarConfig().then(setCalendarConfigState).catch(() => undefined);
+    void getLlmConfig().then(setLlmConfigState).catch(() => undefined);
   }, []);
 
   const go = useCallback((r: Route) => {
@@ -217,15 +261,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     else if (r.name === 'new') window.location.hash = '#/new';
     else if (r.name === 'active') window.location.hash = '#/active';
     else if (r.name === 'settings') window.location.hash = '#/settings';
+    else if (r.name === 'calendar') window.location.hash = '#/calendar';
     else window.location.hash = `#/meeting/${encodeURIComponent(r.id)}`;
     setRoute(r);
   }, []);
 
   useEffect(() => {
-    if (recordingState === 'RECORDING' && activeMeeting) {
-      timerRef.current = window.setInterval(() => {
-        setElapsedMs(Date.now() - activeMeeting.startedAt);
-      }, 500);
+    const live = recordingState === 'RECORDING' || recordingState === 'PAUSED' || recordingState === 'ERROR';
+    if (live && activeMeeting) {
+      // Pause-aware: the recorder's clock excludes paused stretches.
+      const tick = () => setElapsedMs(recorderRef.current?.getElapsedMs() ?? 0);
+      tick();
+      timerRef.current = window.setInterval(tick, 500);
     } else if (timerRef.current) {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
@@ -282,7 +329,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
               ];
       const recorder = new MediaRecorderAudioRecorder();
       recorderRef.current = recorder;
-      recorder.onState((s) => setRecordingState(s));
+      recorder.onState((s) => {
+        setRecordingState(s);
+        // Surface storage failures instead of implying audio is safe (§19).
+        if (s === 'ERROR') setRecordingError(recorder.getError()?.message ?? 'Recording error');
+        else if (s === 'RECORDING' || s === 'PAUSED') setRecordingError(null);
+      });
+      activeIdRef.current = id;
       await saveMeeting(meeting);
       setActiveMeeting(meeting);
       setElapsedMs(0);
@@ -313,6 +366,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           await deleteMeetingRecord(id).catch(() => undefined);
         }
         setActiveMeeting(null);
+        activeIdRef.current = null;
         throw err;
       }
       await refresh();
@@ -326,6 +380,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const resumeRecording = useCallback(async () => {
     await recorderRef.current?.resume();
+  }, []);
+
+  const retrySaving = useCallback(async () => {
+    const recorder = recorderRef.current;
+    if (!recorder) return true;
+    const ok = await recorder.retryPending();
+    if (!ok) setRecordingError(recorder.getError()?.message ?? 'Audio could not be saved to disk.');
+    return ok;
   }, []);
 
   // Best-effort mirror of a finished meeting to the desktop folder.
@@ -378,15 +440,90 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (!meeting) throw new Error('Meeting not found');
       const segments = await getSegments(meetingId);
       const result = await createGitlabClient(gitlabConfig).uploadMeeting(meeting, segments);
-      const updated: Meeting = {
-        ...meeting,
+      const updated = await updateMeeting(meetingId, {
         gitlab: { url: result.url, target: result.target, uploadedAt: Date.now() },
-      };
-      await saveMeeting(updated);
-      setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      });
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
       return result;
     },
     [gitlabConfig],
+  );
+
+  const uploadSummaryToGitlab = useCallback(
+    async (meetingId: string): Promise<GitlabUploadResult> => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error('Meeting not found');
+      const result = await createGitlabClient(gitlabConfig).uploadSummary(meeting);
+      const updated = await updateMeeting(meetingId, {
+        gitlabSummary: { url: result.url, target: result.target, uploadedAt: Date.now() },
+      });
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      return result;
+    },
+    [gitlabConfig],
+  );
+
+  const saveLlmConfig = useCallback(async (config: LlmConfig) => {
+    await setLlmConfig(config);
+    setLlmConfigState(config);
+  }, []);
+
+  const saveCalendarConfig = useCallback(async (config: CalendarConfig) => {
+    await setCalendarConfig(config);
+    setCalendarConfigState(config);
+  }, []);
+
+  const switchCalendarProvider = useCallback(async (provider: CalendarProvider) => {
+    const store = await setActiveCalendarProvider(provider);
+    setCalendarConfigState(store.configs[store.activeProvider]);
+  }, []);
+
+  const fetchCalendarEvents = useCallback(
+    async (start: Date, end: Date): Promise<ServerEvent[]> => {
+      if (!isDesktopApp()) return [];
+      return fetchServerEvents(calendarConfig, start, end);
+    },
+    [calendarConfig],
+  );
+
+  const createCalendarEvent = useCallback(
+    async (meetingId: string, draft: CalendarEventDraft): Promise<CalendarCreateResult> => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error('Meeting not found');
+      const transport = buildTransport(calendarConfig, draft, eventUid(meetingId));
+      await invokeDesktop<string>('native_calendar_create', { request: transport });
+      const updated = await updateMeeting(meetingId, {
+        calendarEvent: { provider: calendarConfig.provider, createdAt: Date.now() },
+      });
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      return { provider: calendarConfig.provider };
+    },
+    [calendarConfig],
+  );
+
+  const summarizeMeeting = useCallback(
+    async (meetingId: string): Promise<MeetingSummary> => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error('Meeting not found');
+      if (meeting.transcriptionStatus !== 'completed') {
+        throw new Error('Transcribe the meeting before summarizing it');
+      }
+      const segments = await getSegments(meetingId);
+      const { segmentsToMarkdown } = await import('../domain/transcript');
+      const markdown = segmentsToMarkdown(meeting.title, meeting.startedAt, segments);
+      const client = createLlmClient(llmConfig);
+      const result = await client.summarize(meeting.title, markdown);
+      const summary: MeetingSummary = {
+        text: result.summary,
+        keyPoints: result.keyPoints,
+        model: llmConfig.model.trim(),
+        createdAt: Date.now(),
+      };
+      const updated = await updateMeeting(meetingId, { summary });
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      return summary;
+    },
+    [llmConfig],
   );
 
   const stopRecording = useCallback(async () => {
@@ -399,12 +536,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const updated: Meeting = {
       ...meeting,
       endedAt,
-      durationMs: endedAt - meeting.startedAt,
+      // Recorded time only: pauses are not part of the recording.
+      durationMs: result.durationMs,
       mimeType: result.mimeType || meeting.mimeType,
       tracks: recordedTracks.length > 1 ? recordedTracks : undefined,
       unfinished: false,
+      ...(result.unsavedChunks > 0 ? { unsavedChunks: result.unsavedChunks } : {}),
     };
     await saveMeeting(updated);
+    activeIdRef.current = null;
+    setRecordingError(null);
     setActiveMeeting(null);
     setElapsedMs(0);
     recorderRef.current = null;
@@ -477,6 +618,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [modelMeta.modelId, refresh, txService, mirrorToDisk],
   );
 
+  const deleteMeeting = useCallback(
+    async (id: string) => {
+      // A transcription outliving the delete could write the meeting back.
+      await txService.cancelAndWait(id);
+      await deleteMeetingEverywhere(id);
+      setDetailMeeting((d) => (d && d.id === id ? null : d));
+      await refresh();
+    },
+    [refresh, txService],
+  );
+
   const cancelTranscription = useCallback(
     async (id: string) => {
       await txService.cancel(id);
@@ -520,7 +672,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const m = await getMeeting(id);
       if (!m) return;
       // Chunks already persisted incrementally; finalize from what exists.
-      const { listChunkNames } = await import('../storage/recordings');
       const tracks = await listTracks(id).catch(() => [] as string[]);
       const counts = await Promise.all(tracks.map((t) => listChunkNames(id, t)));
       if (!counts.some((names) => names.length > 0)) {
@@ -528,8 +679,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         const { deleteMeetingRecord } = await import('../storage/meetings');
         await deleteMeetingRecord(id).catch(() => undefined);
       } else {
-        const endedAt = Date.now();
-        await saveMeeting({ ...m, endedAt, durationMs: endedAt - m.startedAt, unfinished: false });
+        const durationMs = estimateDurationFromChunks(counts.map((n) => n.length));
+        await saveMeeting({
+          ...m,
+          endedAt: m.startedAt + durationMs,
+          durationMs,
+          durationEstimated: true,
+          unfinished: false,
+        });
       }
       await refresh();
     },
@@ -597,6 +754,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       startRecording,
       pauseRecording,
       resumeRecording,
+      retrySaving,
+      deleteMeeting,
       stopRecording,
       detailMeeting,
       detailSegments,
@@ -624,6 +783,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       gitlabConfig,
       saveGitlabConfig,
       uploadToGitlab,
+      uploadSummaryToGitlab,
+      calendarConfig,
+      saveCalendarConfig,
+      switchCalendarProvider,
+      fetchCalendarEvents,
+      createCalendarEvent,
+      llmConfig,
+      saveLlmConfig,
+      summarizeMeeting,
       enableGpu,
       unfinished,
       recoverUnfinished,
@@ -631,12 +799,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, activeMeeting,
-      elapsedMs, storageWarning, startRecording, pauseRecording, resumeRecording,
+      elapsedMs, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
       stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
-      gitlabConfig, saveGitlabConfig, uploadToGitlab,
+      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab,
+      calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
+      llmConfig, saveLlmConfig, summarizeMeeting,
       unfinished, recoverUnfinished, discardUnfinished,
     ],
   );

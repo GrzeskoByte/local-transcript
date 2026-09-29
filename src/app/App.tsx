@@ -4,7 +4,8 @@ import { NewMeeting } from './screens/NewMeeting.tsx';
 import { ActiveMeeting } from './screens/ActiveMeeting.tsx';
 import { MeetingDetail } from './screens/MeetingDetail.tsx';
 import { Settings } from './screens/Settings.tsx';
-import { GearIcon, ListIcon, LogoMark, MicIcon } from './components/icons.tsx';
+import { CalendarView } from './screens/CalendarView.tsx';
+import { GearIcon, CalendarIcon, ListIcon, LogoMark, MicIcon } from './components/icons.tsx';
 
 function Shell(): React.JSX.Element {
   const { route, go, recordingState, modelMeta } = useApp();
@@ -36,6 +37,13 @@ function Shell(): React.JSX.Element {
           Recording…
         </button>
       )}
+      <button
+        className={`nav-item${route.name === 'calendar' ? ' active' : ''}`}
+        onClick={() => go({ name: 'calendar' })}
+      >
+        <CalendarIcon />
+        Calendar
+      </button>
       <button
         className={`nav-item${route.name === 'settings' ? ' active' : ''}`}
         onClick={() => go({ name: 'settings' })}
@@ -92,6 +100,8 @@ function Shell(): React.JSX.Element {
             <MeetingDetail id={route.id} />
           ) : route.name === 'settings' ? (
             <Settings />
+          ) : route.name === 'calendar' ? (
+            <CalendarView />
           ) : (
             <Dashboard />
           )}

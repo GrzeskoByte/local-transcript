@@ -1,7 +1,7 @@
 import type { ASREngine, TranscriptionStage } from './engine';
 import { NativeASREngine } from './native-engine';
-import { getMeeting, saveMeeting } from '../storage/meetings';
-import { getSegments, saveSegments } from '../storage/transcripts';
+import { getMeeting, updateMeeting } from '../storage/meetings';
+import { commitTranscript, getSegments } from '../storage/transcripts';
 import { listTracks, readRecordingBlob } from '../storage/recordings';
 import { decodeToMono16k } from '../audio/decode';
 import { getTranscriptionLanguage, DEFAULT_NATIVE_LANGUAGE } from './model-manager';
@@ -20,14 +20,20 @@ export interface TranscriptionCallbacks {
  * callers may inject a different one for tests.
  */
 export class TranscriptionService {
-  private engine: ASREngine;
-  private running = new Map<string, { cancel: () => void }>();
+  private createEngine: () => ASREngine;
+  private running = new Map<string, { cancel: () => void; done: Promise<void> }>();
+  /** Runs are serialized: the native side drives one CLI process at a time,
+   * and two large models at once would starve a laptop anyway. */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(
     private callbacks: TranscriptionCallbacks = {},
-    opts?: { engine?: ASREngine },
+    opts?: { engine?: ASREngine; createEngine?: () => ASREngine },
   ) {
-    this.engine = opts?.engine ?? new NativeASREngine();
+    // One engine per run, so two meetings transcribing at once never share
+    // (or dispose) each other's engine state.
+    const injected = opts?.engine;
+    this.createEngine = opts?.createEngine ?? (injected ? () => injected : () => new NativeASREngine());
   }
 
   async transcribe(meetingId: string, modelId: string): Promise<void> {
@@ -36,20 +42,30 @@ export class TranscriptionService {
     if (meeting.endedAt === undefined) throw new Error('Recording is not completed yet');
     if (this.running.has(meetingId)) return;
 
+    const engine = this.createEngine();
     let cancelled = false;
+    let finished!: () => void;
+    const done = new Promise<void>((resolve) => (finished = resolve));
     this.running.set(meetingId, {
       cancel: () => {
         cancelled = true;
-        this.engine.cancel?.();
+        engine.cancel?.();
       },
+      done,
     });
 
-    await saveMeeting({ ...meeting, transcriptionStatus: 'processing' });
+    await updateMeeting(meetingId, { transcriptionStatus: 'processing' });
     const report = (ratio: number) => this.callbacks.onProgress?.(meetingId, ratio);
     const stage = (s: TranscriptionStage) => this.callbacks.onStage?.(meetingId, s);
+    const previous = this.queue;
+    let release!: () => void;
+    this.queue = new Promise<void>((resolve) => (release = resolve));
     try {
+      stage('queued');
+      await previous;
+      if (cancelled) throw new Error('Transcription cancelled');
       stage('loading-model');
-      await this.engine.initialize(modelId, (ratio) => report(ratio * 0.15));
+      await engine.initialize(modelId, (ratio) => report(ratio * 0.15));
       // Two-way recordings store mic and device audio as separate tracks. They
       // start together, so each track's timestamps share one timeline; we
       // transcribe each independently (track = speaker) and merge by time.
@@ -69,7 +85,7 @@ export class TranscriptionService {
         const audio = await decodeToMono16k(blob, (r) => report(base + r * span * 0.2));
         if (cancelled) throw new Error('Transcription cancelled');
         stage('transcribing');
-        const segments = await this.engine.transcribe(
+        const segments = await engine.transcribe(
           audio,
           meetingId,
           (r) => report(base + span * 0.2 + r * span * 0.8),
@@ -86,32 +102,36 @@ export class TranscriptionService {
         id: `${meetingId}-seg-${i}`,
         sequence: i,
       }));
-      await saveSegments(merged);
-      const updated = await getMeeting(meetingId);
-      if (updated) await saveMeeting({ ...updated, transcriptionStatus: 'completed' });
+      // Atomic, and a no-op if the meeting was deleted while we worked.
+      await commitTranscript(meetingId, merged);
       this.callbacks.onProgress?.(meetingId, 1);
     } catch (err) {
-      const updated = await getMeeting(meetingId);
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.toLowerCase().includes('cancel')) {
-        if (updated) {
-          const prev = (await getSegments(meetingId)).length > 0 ? 'completed' : 'not_started';
-          await saveMeeting({ ...updated, transcriptionStatus: prev });
-        }
-      } else if (updated) {
-        await saveMeeting({ ...updated, transcriptionStatus: 'failed' });
+        const prev = (await getSegments(meetingId)).length > 0 ? 'completed' : 'not_started';
+        await updateMeeting(meetingId, { transcriptionStatus: prev });
+      } else {
+        await updateMeeting(meetingId, { transcriptionStatus: 'failed' });
       }
       throw err;
     } finally {
       this.running.delete(meetingId);
-      await this.engine.dispose();
-      // Fresh engine next run so disposed state never leaks.
-      this.engine = new NativeASREngine();
+      await engine.dispose().catch(() => undefined);
+      release();
+      finished();
     }
   }
 
   async cancel(meetingId: string): Promise<void> {
     this.running.get(meetingId)?.cancel();
+  }
+
+  /** Cancel a run and resolve once it has fully stopped writing. */
+  async cancelAndWait(meetingId: string): Promise<void> {
+    const run = this.running.get(meetingId);
+    if (!run) return;
+    run.cancel();
+    await run.done;
   }
 
   isRunning(meetingId: string): boolean {

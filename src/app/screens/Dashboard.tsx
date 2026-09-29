@@ -60,7 +60,7 @@ export function Dashboard(): React.JSX.Element {
             <div key={m.id} className="mt-2">
               <div className="muted">
                 Started {new Date(m.startedAt).toLocaleString()} · approximately{' '}
-                {formatDuration(Date.now() - m.startedAt)}
+                {formatDuration(m.durationMs)} saved
               </div>
               <div className="btn-row">
                 <button className="btn btn-primary" onClick={() => void recoverUnfinished(m.id)}>

@@ -30,3 +30,12 @@ export async function invokeDesktop<T>(
   if (!t) throw new Error('Not running in the desktop app');
   return t.invoke<T>(cmd, args);
 }
+
+/**
+ * Open an http(s) link in the system browser. The Tauri webview swallows
+ * `target="_blank"` clicks, so external anchors must call this on click
+ * (and `preventDefault`) when running in the desktop shell.
+ */
+export async function openExternalUrl(url: string): Promise<void> {
+  await invokeDesktop<void>('native_open_url', { url });
+}

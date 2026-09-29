@@ -29,7 +29,18 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.png"
-    ]
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "GrzeskoByte",
+    "copyright": "© 2026 GrzeskoByte. MIT License.",
+    "license": "MIT",
+    "category": "Productivity",
+    "shortDescription": "Private, on-device meeting recorder and transcriber",
+    "longDescription": "Record meetings (microphone, device audio, or both as separate tracks), transcribe them locally with whisper.cpp or voxtype, and summarize them with a local LLM. Your audio never leaves your machine.",
+    "homepage": "https://github.com/GrzeskoByte/local-transcript",
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
   }
 }

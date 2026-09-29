@@ -65,21 +65,40 @@ pub struct Backend {
 // ---------------------------------------------------------------------------
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    // HOME is usually unset on Windows; USERPROFILE is the equivalent there.
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 fn path_dirs() -> Vec<PathBuf> {
-    match std::env::var("PATH") {
-        Ok(p) => p.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
-        Err(_) => Vec::new(),
+    // split_paths uses ';' on Windows and ':' everywhere else.
+    match std::env::var_os("PATH") {
+        Some(p) => std::env::split_paths(&p).collect(),
+        None => Vec::new(),
     }
 }
 
-fn which(program: &str) -> Option<PathBuf> {
+pub(crate) fn which(program: &str) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let names: Vec<String> = if program.contains('.') {
+        vec![program.to_string()]
+    } else {
+        vec![
+            program.to_string(),
+            format!("{program}.exe"),
+            format!("{program}.cmd"),
+            format!("{program}.bat"),
+        ]
+    };
+    #[cfg(not(windows))]
+    let names: Vec<String> = vec![program.to_string()];
     for dir in path_dirs() {
-        let candidate = dir.join(program);
-        if candidate.is_file() {
-            return Some(candidate);
+        for name in &names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None
@@ -147,6 +166,15 @@ pub fn model_dirs() -> Vec<PathBuf> {
         dirs.push(home.join(".cache/whisper"));
         dirs.push(home.join("whisper.cpp/models"));
         dirs.push(home.join(".local/share/whisper.cpp/models"));
+        // Native per-OS app data locations (first pick for fresh installs).
+        #[cfg(windows)]
+        dirs.push(home.join("AppData/Local/Local Transcribe/models"));
+        #[cfg(target_os = "macos")]
+        dirs.push(home.join("Library/Application Support/Local Transcribe/models"));
+    }
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(local).join("Local Transcribe/models"));
     }
     dirs
 }

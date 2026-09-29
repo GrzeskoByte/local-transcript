@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * Accuracy bench for the on-device transcription pipeline.
+ * DSP/VAD research bench (transformers.js, in Node).
  *
- * Runs the SAME code the app uses -- `preprocessForASR` (src/asr/preprocess.ts)
- * and `compactSpeech` (src/asr/vad.ts), with the engine's chunking/decoding
- * options (src/asr/pipeline-config.ts) -- over fixtures with known transcripts,
- * then reports word error rate (WER).
+ * Scores `preprocessForASR` (src/asr/preprocess.ts) and `compactSpeech`
+ * (src/asr/vad.ts) with Xenova Whisper models over fixtures with known
+ * transcripts, reporting word error rate (WER). NOTE: this is not the desktop
+ * app's transcription path — the app runs the native CLI; measure that with
+ * `npm run bench:native` (bench/native.mjs).
  *
  * Why Node: in this sandbox headless Chromium cannot load the ONNX model, so
- * Playwright cannot exercise ASR. Node loads it fine. `--model` defaults to the
- * app's default `Xenova/whisper-base.en`; the *accuracy* number should be
+ * Playwright cannot exercise ASR. Node loads it fine. `--model` defaults to
+ * `Xenova/whisper-base.en`; the *accuracy* number should be
  * produced with `Xenova/whisper-small.en` (or larger).
  *
  * The pipeline is measured twice per case:

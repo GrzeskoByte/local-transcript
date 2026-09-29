@@ -1,5 +1,6 @@
 import { chunkFileName, pickSupportedMimeType } from './formats';
 import { appendChunk, writeMeta } from '../storage/recordings';
+import { CHUNK_MS } from '../domain/meeting';
 
 export interface AudioSource {
   start(): Promise<MediaStream>;
@@ -17,6 +18,16 @@ export interface Recording {
   chunkCount: number;
   /** Track ids that were recorded ('' for a single-track recording). */
   tracks: string[];
+  /** Recorded time, excluding pauses. */
+  durationMs: number;
+  /** Chunks that could not be written to storage even after a final retry. */
+  unsavedChunks: number;
+}
+
+interface PendingChunk {
+  track: string;
+  name: string;
+  data: Blob;
 }
 
 export type RecorderState =
@@ -28,7 +39,7 @@ export type RecorderState =
   | 'COMPLETED'
   | 'ERROR';
 
-const CHUNK_TIMESLICE_MS = 5000;
+const CHUNK_TIMESLICE_MS = CHUNK_MS;
 
 interface ActiveTrack {
   track: string;
@@ -54,6 +65,13 @@ export class MediaRecorderAudioRecorder {
   private state: RecorderState = 'IDLE';
   private error: Error | null = null;
   private onStateChange: ((s: RecorderState) => void) | null = null;
+  /** Chunks whose write failed; kept in memory so Retry / Stop can save them. */
+  private pending: PendingChunk[] = [];
+  /** Recorded time bookkeeping: accumulated ms + start of the running stretch. */
+  private accumulatedMs = 0;
+  private runningSince: number | null = null;
+  /** State to return to once a storage error is resolved. */
+  private resumeState: 'RECORDING' | 'PAUSED' = 'RECORDING';
 
   getState(): RecorderState {
     return this.state;
@@ -65,6 +83,16 @@ export class MediaRecorderAudioRecorder {
 
   getMimeType(): string {
     return this.tracks[0]?.mimeType ?? '';
+  }
+
+  /** Recorded time so far, excluding pauses. */
+  getElapsedMs(now = Date.now()): number {
+    return this.accumulatedMs + (this.runningSince !== null ? now - this.runningSince : 0);
+  }
+
+  /** Number of chunks waiting to be written after a storage failure. */
+  getUnsavedCount(): number {
+    return this.pending.length;
   }
 
   onState(fn: (s: RecorderState) => void): void {
@@ -87,7 +115,7 @@ export class MediaRecorderAudioRecorder {
     startedAt: number,
   ): Promise<Recording> {
     if (this.state === 'RECORDING' || this.state === 'STARTING') {
-      return { mimeType: this.getMimeType(), chunkCount: 0, tracks: this.tracks.map((t) => t.track) };
+      return this.snapshot(0);
     }
     this.setState('STARTING');
     this.error = null;
@@ -125,10 +153,10 @@ export class MediaRecorderAudioRecorder {
           if (ev.data && ev.data.size > 0 && this.meetingId) {
             const idx = active.chunkIndex++;
             const name = chunkFileName(idx, active.mimeType);
-            void appendChunk(this.meetingId, name, ev.data, active.track).catch((err) => {
-              this.error = err instanceof Error ? err : new Error(String(err));
-              this.setState('ERROR');
-            });
+            const chunk: PendingChunk = { track: active.track, name, data: ev.data };
+            void appendChunk(this.meetingId, name, ev.data, active.track).catch((err) =>
+              this.onWriteFailed(chunk, err),
+            );
           }
         };
         recorder.onerror = () => {
@@ -139,8 +167,12 @@ export class MediaRecorderAudioRecorder {
       });
       started.forEach((t) => t.recorder.start(CHUNK_TIMESLICE_MS));
       this.tracks = started;
+      this.pending = [];
+      this.accumulatedMs = 0;
+      this.runningSince = Date.now();
+      this.resumeState = 'RECORDING';
       this.setState('RECORDING');
-      return { mimeType: this.getMimeType(), chunkCount: 0, tracks: specs.map((s) => s.track) };
+      return this.snapshot(0);
     } catch (err) {
       // Never leak a live stream/recorder when a later track fails to start.
       await Promise.all(
@@ -162,7 +194,12 @@ export class MediaRecorderAudioRecorder {
         paused = true;
       }
     }
-    if (paused) this.setState('PAUSED');
+    if (paused) {
+      this.stopClock();
+      this.resumeState = 'PAUSED';
+      // A storage error stays visible until it is resolved.
+      if (this.state !== 'ERROR') this.setState('PAUSED');
+    }
   }
 
   async resume(): Promise<void> {
@@ -173,12 +210,69 @@ export class MediaRecorderAudioRecorder {
         resumed = true;
       }
     }
-    if (resumed) this.setState('RECORDING');
+    if (resumed) {
+      this.runningSince = Date.now();
+      this.resumeState = 'RECORDING';
+      if (this.state !== 'ERROR') this.setState('RECORDING');
+    }
+  }
+
+  /**
+   * Retry writing chunks that failed (§9 Retry). Returns true when everything
+   * is on disk again, in which case the recorder leaves the ERROR state.
+   */
+  async retryPending(): Promise<boolean> {
+    const id = this.meetingId;
+    if (!id) return this.pending.length === 0;
+    const still: PendingChunk[] = [];
+    let lastErr: unknown = null;
+    for (const chunk of this.pending) {
+      try {
+        await appendChunk(id, chunk.name, chunk.data, chunk.track);
+      } catch (err) {
+        still.push(chunk);
+        lastErr = err;
+      }
+    }
+    this.pending = still;
+    if (still.length === 0) {
+      this.error = null;
+      if (this.state === 'ERROR') this.setState(this.resumeState);
+      return true;
+    }
+    this.error = lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+    return false;
+  }
+
+  private onWriteFailed(chunk: PendingChunk, err: unknown): void {
+    this.pending.push(chunk);
+    const cause = err instanceof Error ? err.message : String(err);
+    this.error = new Error(`Storage write failed (${cause}).`);
+    if (this.state === 'RECORDING' || this.state === 'PAUSED') this.resumeState = this.state;
+    this.setState('ERROR');
+  }
+
+  private stopClock(): void {
+    if (this.runningSince !== null) {
+      this.accumulatedMs += Date.now() - this.runningSince;
+      this.runningSince = null;
+    }
+  }
+
+  private snapshot(chunkCount: number): Recording {
+    return {
+      mimeType: this.getMimeType(),
+      chunkCount,
+      tracks: this.tracks.map((t) => t.track),
+      durationMs: this.getElapsedMs(),
+      unsavedChunks: this.pending.length,
+    };
   }
 
   async stop(): Promise<Recording> {
     const tracks = this.tracks;
-    if (tracks.length === 0) return { mimeType: '', chunkCount: 0, tracks: [] };
+    if (tracks.length === 0) return { mimeType: '', chunkCount: 0, tracks: [], durationMs: 0, unsavedChunks: 0 };
+    this.stopClock();
     this.setState('STOPPING');
     await Promise.all(
       tracks.map(
@@ -198,11 +292,17 @@ export class MediaRecorderAudioRecorder {
       ),
     );
     await Promise.all(tracks.map((t) => t.source.stop().catch(() => undefined)));
+    // Let the final slice's write settle, then give failed chunks one last try.
+    await new Promise((r) => setTimeout(r, 100));
+    if (this.pending.length) await this.retryPending();
     const result: Recording = {
       mimeType: tracks[0]?.mimeType ?? '',
       chunkCount: tracks.reduce((n, t) => n + t.chunkIndex, 0),
       tracks: tracks.map((t) => t.track),
+      durationMs: this.accumulatedMs,
+      unsavedChunks: this.pending.length,
     };
+    this.pending = [];
     this.tracks = [];
     this.meetingId = null;
     this.setState('COMPLETED');

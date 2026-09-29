@@ -90,6 +90,34 @@ pub fn native_open_storage_dir(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Only http(s) links the app itself produced (e.g. GitLab pages).
+fn valid_external_url(url: &str) -> bool {
+    (url.starts_with("http://") || url.starts_with("https://"))
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
+/// Open a link in the system browser. The Tauri webview swallows
+/// `target="_blank"` clicks (no new-window handling), so external links
+/// must go through here instead of plain anchors.
+#[tauri::command]
+pub fn native_open_url(url: String) -> Result<(), String> {
+    if !valid_external_url(&url) {
+        return Err("Refusing to open a non-HTTP(S) URL".to_string());
+    }
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
+        .arg(&url)
+        .spawn()
+        .map_err(|e| format!("Could not open link: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +146,15 @@ mod tests {
             safe_relative("./a/./b.txt").unwrap(),
             PathBuf::from("a/b.txt")
         );
+    }
+
+    #[test]
+    fn external_url_allows_only_clean_https() {
+        assert!(valid_external_url("https://git.example.com/g/p/-/wikis/x"));
+        assert!(valid_external_url("http://localhost:8080/api"));
+        assert!(!valid_external_url("file:///etc/passwd"));
+        assert!(!valid_external_url("javascript:alert(1)"));
+        assert!(!valid_external_url("https://example.com/a b"));
+        assert!(!valid_external_url(""));
     }
 }
