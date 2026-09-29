@@ -169,6 +169,11 @@ export function CalendarView(): React.JSX.Element {
         </div>
         {loading && <p className="muted">Loading server events…</p>}
         {fetchError && <p className="warn" role="alert">{fetchError}</p>}
+        {!loading && !fetchError && cachedAt === null && (
+          <p className="muted small" role="status" aria-label="Server event count">
+            {serverEvents.length} server event{serverEvents.length === 1 ? '' : 's'} in {MONTHS[month]}.
+          </p>
+        )}
         {cachedAt !== null && (
           <p className="muted small" role="status">
             {fetchError ? 'Offline — showing' : 'Showing'} events saved on this device at{' '}
@@ -239,7 +244,8 @@ export function CalendarView(): React.JSX.Element {
                   <div className="model-main">
                     <span className="model-name">{e.title}</span>
                     <span className="muted small">
-                      {e.startIso.slice(11) || e.startIso}{e.location ? ` · ${e.location}` : ''}
+                      {e.allDay ? 'All day' : `${e.startIso.slice(11)}–${e.endIso.slice(11)}`}
+                      {e.location ? ` · ${e.location}` : ''}
                     </span>
                   </div>
                 </li>

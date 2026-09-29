@@ -8,6 +8,8 @@
  * - EWS (on-prem Exchange): POST a CreateItem SOAP envelope (basic/NTLM).
  */
 
+import { decodeXmlText, parseIcs, type IcsRange } from './ics';
+
 export type CalendarProvider = 'caldav' | 'graph' | 'ews';
 
 export const CALENDAR_PROVIDER_LABELS: Record<CalendarProvider, string> = {
@@ -366,6 +368,8 @@ export interface ServerEvent {
   endIso: string;
   location: string;
   provider: CalendarProvider;
+  /** All-day event (start/end carry the date; time is a placeholder). */
+  allDay?: boolean;
 }
 
 /** `Date` → UTC `20261005T090000Z` for CalDAV time-range filters. */
@@ -384,47 +388,21 @@ export function icsDateToLocalIso(value: string): string {
   return m[7] ? toLocalIso(d) : `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}`;
 }
 
-function unfoldIcs(text: string): string {
-  return text.replace(/\r?\n[ \t]/g, '');
+/**
+ * All VEVENTs of an .ics / calendar-data payload (see `ics.ts`). With a
+ * range, recurring events are expanded into the occurrences inside it.
+ */
+export function parseIcsEvents(ics: string, provider: CalendarProvider, range?: IcsRange): ServerEvent[] {
+  return parseIcs(ics, provider, range);
 }
 
-function icsProp(block: string, name: string): string | null {
-  const m = unfoldIcs(block).match(new RegExp(`^${name}(?:;[^:]*)?:(.*)$`, 'mi'));
-  return m ? m[1].trim() : null;
-}
-
-/** All VEVENT blocks of an .ics / calendar-data payload. */
-export function parseIcsEvents(ics: string, provider: CalendarProvider): ServerEvent[] {
+/** CalDAV multistatus REPORT response → events (one resource per calendar-data). */
+export function parseCaldavReport(xml: string, range?: IcsRange): ServerEvent[] {
   const out: ServerEvent[] = [];
-  for (const block of ics.split(/BEGIN:VEVENT/i).slice(1)) {
-    const body = block.split(/END:VEVENT/i)[0];
-    const uid = icsProp(body, 'UID') ?? `${out.length}`;
-    const start = icsProp(body, 'DTSTART');
-    if (!start) continue;
-    out.push({
-      id: `${provider}:${uid}`,
-      title: icsProp(body, 'SUMMARY')?.replace(/\\([,;\\n])/g, '$1') ?? '(no title)',
-      startIso: icsDateToLocalIso(start),
-      endIso: icsDateToLocalIso(icsProp(body, 'DTEND') ?? start),
-      location: icsProp(body, 'LOCATION')?.replace(/\\([,;\\n])/g, '$1') ?? '',
-      provider,
-    });
-  }
-  return out;
-}
-
-/** CalDAV multistatus REPORT response → events (one per calendar-data). */
-export function parseCaldavReport(xml: string): ServerEvent[] {
-  const out: ServerEvent[] = [];
-  const bodies = xml.match(/<(?:\w+:)?calendar-data[^>]*>([\s\S]*?)<\/(?:\w+:)?calendar-data>/gi) ?? [];
+  const bodies = xml.match(/<(?:[\w-]+:)?calendar-data\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calendar-data>/gi) ?? [];
   for (const b of bodies) {
-    const inner = b.replace(/^<(?:\w+:)?calendar-data[^>]*>/i, '').replace(/<\/(?:\w+:)?calendar-data>$/i, '');
-    // XML-escaped ics: unescape the basics.
-    const ics = inner
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&');
-    out.push(...parseIcsEvents(ics, 'caldav'));
+    const inner = b.replace(/^<(?:[\w-]+:)?calendar-data\b[^>]*>/i, '').replace(/<\/(?:[\w-]+:)?calendar-data>$/i, '');
+    out.push(...parseIcs(decodeXmlText(inner), 'caldav', range));
   }
   return out;
 }
@@ -472,10 +450,10 @@ export function parseEwsFindItem(xml: string): ServerEvent[] {
 }
 
 /** Dispatch raw server output to the right parser. */
-export function parseFetchResponse(provider: CalendarProvider, payload: string): ServerEvent[] {
+export function parseFetchResponse(provider: CalendarProvider, payload: string, range?: IcsRange): ServerEvent[] {
   if (provider === 'graph') return parseGraphEvents(payload);
   if (provider === 'ews') return parseEwsFindItem(payload);
-  return parseCaldavReport(payload);
+  return parseCaldavReport(payload, range);
 }
 
 /** REPORT body: all VEVENTs overlapping [start, end). */
@@ -556,5 +534,5 @@ export async function fetchServerEvents(
   const raw = await invokeDesktop<string>('native_calendar_fetch', {
     request: buildFetchTransport(config, start, end),
   });
-  return parseFetchResponse(config.provider, raw);
+  return parseFetchResponse(config.provider, raw, { start, end });
 }
