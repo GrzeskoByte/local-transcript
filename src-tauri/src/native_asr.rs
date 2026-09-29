@@ -2,7 +2,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -128,7 +128,7 @@ fn enable_gpu_blocking() -> Result<String, String> {
 
     let mut last_err = "GPU acceleration could not be enabled automatically.".to_string();
     for (program, args) in attempts {
-        match Command::new(program).args(&args).output() {
+        match crate::proc::command(program).args(&args).output() {
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 return Ok(if text.is_empty() {
@@ -199,7 +199,7 @@ fn download_sizes() -> &'static Mutex<std::collections::HashMap<String, u64>> {
 
 /// Final Content-Length after redirects (Hugging Face → CDN), via `curl -I`.
 fn remote_size(url: &str) -> Option<u64> {
-    let out = Command::new("curl").args(["-sIL", "--max-time", "20", url]).output().ok()?;
+    let out = crate::proc::command("curl").args(["-sIL", "--max-time", "20", url]).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -244,7 +244,7 @@ pub fn native_asr_download_progress(name: String) -> Result<DownloadProgress, St
 /// 10+ and most Linux distros), falling back to PowerShell on Windows.
 fn download_with_system_tools(url: &str, dest_tmp: &std::path::Path) -> Result<(), String> {
     let dest_str = dest_tmp.to_string_lossy().to_string();
-    let curl_err = match Command::new("curl")
+    let curl_err = match crate::proc::command("curl")
         .args([
             "-fSL",
             "--retry",
@@ -276,7 +276,7 @@ fn download_with_system_tools(url: &str, dest_tmp: &std::path::Path) -> Result<(
 /// PowerShell fallback for stripped Windows images without curl.
 #[cfg(windows)]
 fn powershell_fallback(url: &str, dest_str: &str, curl_err: &str) -> Result<(), String> {
-    let ps = Command::new("powershell")
+    let ps = crate::proc::command("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -352,7 +352,7 @@ fn download_model_blocking(name: &str) -> Result<(), String> {
     let backend = backend.expect("checked above");
     let name = name.to_string();
 
-    let output = Command::new(&backend.path)
+    let output = crate::proc::command(&backend.path)
         .args([
             "setup",
             "--download",
@@ -721,7 +721,7 @@ fn run_child(
     program: &str,
     args: &[String],
 ) -> Result<ChildOutput, String> {
-    let mut command = Command::new(program);
+    let mut command = crate::proc::command(program);
     command
         .args(args)
         .stdin(Stdio::null())

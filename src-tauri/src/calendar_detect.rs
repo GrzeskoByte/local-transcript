@@ -10,7 +10,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 
@@ -213,7 +213,7 @@ fn probe(req: &ProbeRequest) -> Result<ProbeResponse, String> {
     if !matches!(req.method.as_str(), "PROPFIND" | "GET" | "POST") {
         return Err("Probe method must be PROPFIND, GET or POST.".to_string());
     }
-    let mut cmd = Command::new("curl");
+    let mut cmd = crate::proc::command("curl");
     cmd.args(["-sS", "-i", "-X", &req.method])
         .args(["--connect-timeout", "8", "--max-time", "20"]);
     if !req.content_type.is_empty() {

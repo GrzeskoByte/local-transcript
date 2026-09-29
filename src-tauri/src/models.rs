@@ -9,7 +9,6 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -152,7 +151,7 @@ fn backend_name_for(path: &Path) -> String {
 }
 
 fn probe_version(bin: &Path) -> Option<String> {
-    let out = Command::new(bin).arg("--version").output().ok()?;
+    let out = crate::proc::command(bin).arg("--version").output().ok()?;
     let text = if out.stdout.is_empty() {
         String::from_utf8_lossy(&out.stderr).to_string()
     } else {
@@ -345,7 +344,7 @@ struct EngineCap {
 /// A model can be listed/downloadable in the catalog yet unusable because its
 /// engine feature was not enabled (e.g. `Parakeet feature not enabled`).
 fn voxtype_engine_caps(bin: &str) -> Option<std::collections::HashMap<String, bool>> {
-    let out = Command::new(bin)
+    let out = crate::proc::command(bin)
         .args(["info", "engines", "--json"])
         .output()
         .ok()?;
@@ -359,7 +358,7 @@ fn voxtype_engine_caps(bin: &str) -> Option<std::collections::HashMap<String, bo
 
 /// `voxtype info models --json` -> (engine names, models tagged with engine).
 fn voxtype_catalog(bin: &str) -> Option<(Vec<String>, Vec<(String, CatalogModel)>)> {
-    let out = Command::new(bin)
+    let out = crate::proc::command(bin)
         .args(["info", "models", "--json"])
         .output()
         .ok()?;
@@ -381,7 +380,7 @@ fn voxtype_catalog(bin: &str) -> Option<(Vec<String>, Vec<(String, CatalogModel)
 }
 
 fn acceleration(bin: &str) -> Option<String> {
-    let out = Command::new(bin).args(["info", "accel"]).output().ok()?;
+    let out = crate::proc::command(bin).args(["info", "accel"]).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     for line in text.lines() {
         if line.contains("State:") {
@@ -452,7 +451,7 @@ pub fn read_gpu(backend: &Backend) -> GpuInfo {
     if backend.name != "voxtype" {
         return GpuInfo::default();
     }
-    match Command::new(&backend.path)
+    match crate::proc::command(&backend.path)
         .args(["setup", "gpu", "--status"])
         .output()
     {
