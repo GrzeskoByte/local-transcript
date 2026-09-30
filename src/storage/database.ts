@@ -1,11 +1,21 @@
+import { loadNativeSettings, setNativeSetting } from '../platform/native-settings';
+
 const DB_NAME = 'local-transcribe';
 const DB_VERSION = 1;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
-function openDatabase(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
+/** IndexedDB could not be opened at all (see `storageErrorHint`). */
+export class DatabaseOpenError extends Error {
+  constructor(readonly cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause ?? 'unknown error');
+    super(`The app database could not be opened (${detail}).`);
+    this.name = 'DatabaseOpenError';
+  }
+}
+
+function openOnce(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -20,10 +30,46 @@ function openDatabase(): Promise<IDBDatabase> {
         db.createObjectStore('kv', { keyPath: 'key' });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Another instance upgrading, or WebKit dropping the connection (its
+      // storage process restarted): reopen on next use instead of failing
+      // every later transaction with InvalidStateError.
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      db.onclose = () => {
+        dbPromise = null;
+      };
+      resolve(db);
+    };
     req.onerror = () => reject(req.error ?? new Error('IndexedDB open failed'));
+    req.onblocked = () => reject(new Error('IndexedDB is in use by another window of the app'));
+  });
+}
+
+function openDatabase(): Promise<IDBDatabase> {
+  if (dbPromise) return dbPromise;
+  // One retry: right after an update/restart the previous instance may still
+  // hold the database for a moment.
+  const attempt = openOnce().catch(
+    () => new Promise<IDBDatabase>((r) => setTimeout(r, 400)).then(() => openOnce()),
+  );
+  dbPromise = attempt.catch((err) => {
+    // Never cache a failure: the next call tries again.
+    dbPromise = null;
+    throw new DatabaseOpenError(err);
   });
   return dbPromise;
+}
+
+/**
+ * Settings go to the desktop settings file (survives updates and an
+ * unreadable webview profile); caches and all other data stay in IndexedDB.
+ */
+function isSettingKey(key: string): boolean {
+  return !key.startsWith('calendar-cache:');
 }
 
 function tx<T>(
@@ -88,13 +134,33 @@ export const db = {
         }),
     );
   },
-  kvGet<T>(key: string): Promise<T | undefined> {
-    return db.get<{ key: string; value: T }>('kv', key).then((row) => row?.value);
+  async kvGet<T>(key: string): Promise<T | undefined> {
+    const settings = isSettingKey(key) ? await loadNativeSettings() : null;
+    if (settings) {
+      if (key in settings) return (settings[key] ?? undefined) as T | undefined;
+      // First run with the settings file: migrate the IndexedDB value once.
+      const legacy = await idbKvGet<T>(key).catch(() => undefined);
+      if (legacy !== undefined) await setNativeSetting(key, legacy).catch(() => undefined);
+      return legacy;
+    }
+    return idbKvGet<T>(key);
   },
-  kvSet<T>(key: string, value: T): Promise<void> {
+  async kvSet<T>(key: string, value: T): Promise<void> {
+    const settings = isSettingKey(key) ? await loadNativeSettings() : null;
+    if (settings) return setNativeSetting(key, value);
     return db.put('kv', { key, value });
   },
-  kvDelete(key: string): Promise<void> {
+  async kvDelete(key: string): Promise<void> {
+    const settings = isSettingKey(key) ? await loadNativeSettings() : null;
+    if (settings) {
+      await setNativeSetting(key, undefined);
+      await db.delete('kv', key).catch(() => undefined);
+      return;
+    }
     return db.delete('kv', key);
   },
 };
+
+function idbKvGet<T>(key: string): Promise<T | undefined> {
+  return db.get<{ key: string; value: T }>('kv', key).then((row) => row?.value);
+}

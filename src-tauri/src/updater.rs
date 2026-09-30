@@ -106,7 +106,7 @@ pub async fn native_update_check(
 }
 
 /// Download, verify and install the update found by the last check, then
-/// restart. Returns only on failure (a successful install restarts the app).
+/// relaunch (the old instance exits once the new one is spawned).
 #[tauri::command]
 pub async fn native_update_install(
     app: AppHandle,
@@ -144,7 +144,8 @@ pub async fn native_update_install(
         return Err(msg);
     }
     set_progress(&app, |p| p.stage = "restarting".into());
-    app.restart();
+    crate::relaunch::relaunch(&app);
+    Ok(())
 }
 
 #[tauri::command]

@@ -6,12 +6,15 @@ import { getSegments } from '../../storage/transcripts.ts';
 import { describeNativeRuntime } from '../../asr/model-manager.ts';
 import { MicIcon, PlusIcon, SearchIcon, WaveIcon } from '../components/icons.tsx';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
+import { isDesktopApp } from '../../platform/desktop.ts';
 
 export function Dashboard(): React.JSX.Element {
   const {
     meetings, go, unfinished, recoverUnfinished, discardUnfinished, modelMeta, nativeStatus,
-    installedModels, downloadModel, modelDownload, firstRunModel,
+    installedModels, downloadModel, modelDownload, firstRunModel, databaseError, resetDatabase,
   } = useApp();
+  const [resetState, setResetState] = useState<'idle' | 'confirm' | 'working'>('idle');
+  const [resetError, setResetError] = useState<string | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<{ meetingId: string; title: string; snippet: string }[]>([]);
@@ -57,6 +60,55 @@ export function Dashboard(): React.JSX.Element {
           <PlusIcon /> New Meeting
         </button>
       </div>
+
+      {databaseError && (
+        <section className="banner" role="alert" aria-label="Database problem">
+          <strong>Your meetings list could not be loaded.</strong>
+          <p className="muted mt-2">
+            {databaseError} This usually means the app data was written by a different build of
+            the app (for example a newer system WebKit than the one inside the AppImage). Your
+            settings are kept separately and are safe, and finished meetings are also saved in
+            your Local Transcribe documents folder.
+          </p>
+          {isDesktopApp() && (
+            <div className="btn-row">
+              {resetState === 'confirm' ? (
+                <>
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => {
+                      setResetState('working');
+                      setResetError(null);
+                      resetDatabase().catch((err: unknown) => {
+                        setResetError(err instanceof Error ? err.message : String(err));
+                        setResetState('idle');
+                      });
+                    }}
+                  >
+                    Move old database aside &amp; restart
+                  </button>
+                  <button className="btn" onClick={() => setResetState('idle')}>Cancel</button>
+                </>
+              ) : (
+                <button
+                  className="btn"
+                  disabled={resetState === 'working'}
+                  onClick={() => setResetState('confirm')}
+                >
+                  {resetState === 'working' ? 'Restarting…' : 'Start with a fresh database'}
+                </button>
+              )}
+            </div>
+          )}
+          {resetState === 'confirm' && (
+            <p className="muted mt-2">
+              The unreadable database is moved to a backup folder (not deleted) and the app restarts
+              with an empty meetings list.
+            </p>
+          )}
+          {resetError && <p className="error mt-2">{resetError}</p>}
+        </section>
+      )}
 
       {unfinished.length > 0 && (
         <section className="banner" aria-label="Unfinished recording">

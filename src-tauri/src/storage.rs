@@ -158,3 +158,65 @@ mod tests {
         assert!(!valid_external_url(""));
     }
 }
+
+/// WebKitGTK's IndexedDB folder name for an origin: `tauri://localhost` →
+/// `tauri_localhost_0`, `http://localhost:5173` → `http_localhost_5173`.
+fn webkit_origin_dir(origin: &str) -> Option<String> {
+    let (scheme, rest) = origin.split_once("://")?;
+    let (host, port) = match rest.trim_end_matches('/').rsplit_once(':') {
+        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() => (h, p),
+        _ => (rest.trim_end_matches('/'), "0"),
+    };
+    let name = format!("{scheme}_{host}_{port}");
+    let ok = !scheme.is_empty()
+        && !host.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && !name.contains("..");
+    ok.then_some(name)
+}
+
+/// Move this origin's IndexedDB (unreadable, e.g. written by a newer WebKit
+/// than the one bundled in the AppImage) into `<data>/idb-backup-<time>/`,
+/// then relaunch so WebKit starts a fresh database. Nothing is deleted: the
+/// backup can be opened again by the WebKit build that wrote it.
+#[tauri::command]
+pub fn native_reset_webview_database(app: AppHandle, origin: String) -> Result<String, String> {
+    if !cfg!(target_os = "linux") {
+        return Err("Resetting the app database is only supported on Linux.".into());
+    }
+    let name = webkit_origin_dir(&origin).ok_or_else(|| format!("Unexpected origin: {origin}"))?;
+    let data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Could not resolve the app data folder: {e}"))?;
+    let source = data.join("databases").join("indexeddb").join("v1").join(&name);
+    if !source.exists() {
+        return Err(format!("No app database found at {}", source.display()));
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup_dir = data.join(format!("idb-backup-{stamp}"));
+    std::fs::create_dir_all(&backup_dir)
+        .map_err(|e| format!("Could not create {}: {e}", backup_dir.display()))?;
+    let target = backup_dir.join(&name);
+    std::fs::rename(&source, &target)
+        .map_err(|e| format!("Could not move {} aside: {e}", source.display()))?;
+    crate::relaunch::relaunch(&app);
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::webkit_origin_dir;
+
+    #[test]
+    fn maps_origins_to_webkit_folder_names() {
+        assert_eq!(webkit_origin_dir("tauri://localhost").as_deref(), Some("tauri_localhost_0"));
+        assert_eq!(webkit_origin_dir("http://localhost:5173").as_deref(), Some("http_localhost_5173"));
+        assert_eq!(webkit_origin_dir("http://../x").as_deref(), None);
+        assert_eq!(webkit_origin_dir("tauri://a/b").as_deref(), None);
+        assert_eq!(webkit_origin_dir("nonsense").as_deref(), None);
+    }
+}
