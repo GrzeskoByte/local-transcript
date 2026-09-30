@@ -13,10 +13,29 @@ pub use native_asr::AppState;
 
 use tauri::webview::{PermissionKind, PermissionResponse};
 
+/// Inside the AppImage, WebKit uses the bundled GStreamer plugins. Give them
+/// their own registry cache so the bundled GStreamer does not rewrite (and
+/// fight over) the host's `~/.cache/gstreamer-1.0/registry.*.bin`. Must run
+/// before GTK/WebKit start: their processes inherit the variable.
+fn use_own_gstreamer_registry() {
+    if !cfg!(target_os = "linux") || proc::bundle_root().is_none() || std::env::var_os("GST_REGISTRY_1_0").is_some() {
+        return;
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")));
+    if let Some(dir) = cache.map(|c| c.join("io.localtranscribe.app")) {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            std::env::set_var("GST_REGISTRY_1_0", dir.join("gstreamer-registry.bin"));
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // After an update/reset relaunch: let the old instance release the profile.
     relaunch::wait_for_previous_instance();
+    use_own_gstreamer_registry();
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(settings::SettingsLock::default())

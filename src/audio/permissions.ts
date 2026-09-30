@@ -98,6 +98,22 @@ export function mediaAccessError(err: unknown, input: MediaInput): MediaAccessFa
             message: 'No microphone was found.',
             hint: 'Connect a microphone and make sure it is enabled in your system sound settings, then press Try again.',
           };
+    case 'OverconstrainedError':
+      // WebKitGTK reports "Invalid constraint" when it sees no capture
+      // device at all — e.g. no audio plugins (GStreamer) are available to
+      // the app — before any permission prompt.
+      return {
+        code: 'no-device',
+        retryable: true,
+        message:
+          input === 'display'
+            ? 'No screen-sharing source is available to the app.'
+            : 'The app cannot see any microphone.',
+        hint:
+          input === 'display'
+            ? 'Screen sharing needs PipeWire and the desktop portal. Make sure both are running, then press Try again.'
+            : 'Check that a microphone is connected and enabled in your system sound settings, then press Try again. If it still fails, reinstall or update the app — its audio components may be missing.',
+      };
     case 'NotReadableError':
     case 'TrackStartError':
       return {

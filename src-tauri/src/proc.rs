@@ -74,12 +74,29 @@ pub fn appimage_env_changes(vars: &[(String, String)], appdir: &str) -> Vec<EnvC
     out
 }
 
+/// Root of the AppImage bundle we run from, if any: `$APPDIR`, or — when a
+/// launcher runs the bundle without setting it (extracted AppImages, some
+/// integrators, no `$APPIMAGE` either) — `<root>` of `<root>/usr/bin/<exe>`
+/// next to an `AppRun`.
+pub fn bundle_root() -> Option<String> {
+    if let Some(dir) = std::env::var_os("APPDIR").filter(|d| !d.is_empty()) {
+        return Some(dir.to_string_lossy().into_owned());
+    }
+    let exe = std::env::current_exe().ok()?;
+    let bin = exe.parent()?;
+    if !bin.ends_with("usr/bin") {
+        return None;
+    }
+    let root = bin.parent()?.parent()?;
+    root.join("AppRun").exists().then(|| root.to_string_lossy().into_owned())
+}
+
 /// `Command::new(program)` with the AppImage's bundled-library paths removed.
 pub fn command(program: impl AsRef<OsStr>) -> Command {
     let mut cmd = Command::new(program);
-    if let Some(appdir) = std::env::var_os("APPDIR").filter(|_| std::env::var_os("APPIMAGE").is_some()) {
+    if let Some(appdir) = bundle_root() {
         let vars: Vec<(String, String)> = std::env::vars().collect();
-        for change in appimage_env_changes(&vars, &appdir.to_string_lossy()) {
+        for change in appimage_env_changes(&vars, &appdir) {
             match change {
                 EnvChange::Set(k, v) => {
                     cmd.env(k, v);
@@ -142,6 +159,9 @@ mod tests {
     #[test]
     fn command_outside_appimage_is_plain() {
         // Not running as an AppImage in tests: no env overrides are applied.
+        if std::env::var_os("APPDIR").is_some() {
+            return;
+        }
         let cmd = command("true");
         assert_eq!(cmd.get_envs().count(), 0);
     }
