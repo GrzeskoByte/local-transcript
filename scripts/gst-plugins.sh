@@ -33,6 +33,8 @@ required=(
   playback            # playbin/decodebin/uridecodebin (<audio>, decodeAudioData)
   typefindfunctions
   encoding transcode  # encodebin + (uri)transcodebin (MediaRecorder; transcode is in -bad)
+  isomp4 voaacenc     # WebKit on GStreamer < 1.24.9 records only MP4, and enables it only when an
+                      # AAC encoder exists; the app records Opus-in-MP4 (see src/audio/formats.ts)
   opus ogg            # Opus in WebM/Ogg (recording format + playback)
   matroska            # webmmux / matroskademux
   pulseaudio          # pulsesrc/pulsesink — PulseAudio and PipeWire-Pulse
@@ -43,7 +45,7 @@ required=(
 # Useful: imports, video-bearing screen capture, echo cancellation.
 optional=(
   pipewire            # pipewiresrc (screen capture via the portal)
-  gio rawparse vorbis wavparse wavenc audioparsers isomp4 mpg123 flac id3demux apetag
+  gio rawparse vorbis wavparse wavenc audioparsers mpg123 flac id3demux apetag
   videoconvert videoscale videoconvertscale videorate vpx
   webrtcdsp           # echoCancellation/noiseSuppression constraints
   audiotestsrc

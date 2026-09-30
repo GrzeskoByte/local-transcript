@@ -132,6 +132,16 @@ describe('builders', () => {
     expect(ews.useNtlm).toBe(true);
     expect(ews.headers[0]).toMatch(/CreateItem/);
   });
+  it('uses NTLM only for EWS (CalDAV/Graph keep Basic/Bearer)', () => {
+    const base = { ...DEFAULT_CALENDAR_CONFIG, serverUrl: 'https://cal.example/dav/', username: 'u', password: 'p', useNtlm: true };
+    expect(buildTestTransport({ ...base, provider: 'caldav' }).useNtlm).toBe(false);
+    expect(buildTestTransport({ ...base, provider: 'graph', token: 't' }).useNtlm).toBe(false);
+    expect(buildTestTransport({ ...base, provider: 'ews' }).useNtlm).toBe(true);
+    const start = new Date(2026, 0, 1);
+    const end = new Date(2026, 1, 1);
+    expect(buildFetchTransport({ ...base, provider: 'caldav' }, start, end).useNtlm).toBe(false);
+  });
+
   it('buildTestTransport picks probe endpoints', () => {
     expect(
       buildTestTransport({ ...DEFAULT_CALENDAR_CONFIG, provider: 'graph', token: 't' }).endpoint,

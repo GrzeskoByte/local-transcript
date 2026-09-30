@@ -255,12 +255,17 @@ export interface CalendarTransport {
   headers: string[];
 }
 
+/** NTLM applies to on-prem Exchange (EWS) only; CalDAV/Graph use Basic/Bearer. */
+function ntlmFor(config: CalendarConfig): boolean {
+  return config.provider === 'ews' && config.useNtlm;
+}
+
 function authOf(config: CalendarConfig): Pick<CalendarTransport, 'username' | 'password' | 'token' | 'useNtlm'> {
   return {
     username: config.username,
     password: config.password,
     token: config.token,
-    useNtlm: config.useNtlm,
+    useNtlm: ntlmFor(config),
   };
 }
 
@@ -490,12 +495,7 @@ export function buildFetchTransport(
   start: Date,
   end: Date,
 ): CalendarTransport {
-  const auth = {
-    username: config.username,
-    password: config.password,
-    token: config.token,
-    useNtlm: config.useNtlm,
-  };
+  const auth = authOf(config);
   if (config.provider === 'graph') {
     const raw = effectiveServerUrl(config);
     const base = (raw || DEFAULT_GRAPH_BASE).replace(/\/+$/, '');
