@@ -13,6 +13,7 @@ import {
   NATIVE_DEFAULT_MODEL,
   getModelMeta,
   setModelMeta,
+  reconcileModelMeta,
   getTranscriptionLanguage,
   setTranscriptionLanguage,
 } from '../asr/model-manager';
@@ -835,6 +836,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     () => modelCatalog.filter((m) => m.installed),
     [modelCatalog],
   );
+
+  // Keep the selected model in step with what is on disk (sidebar chip,
+  // Meeting Detail picker). Only once the native probe has answered.
+  useEffect(() => {
+    if (!nativeStatus) return;
+    const next = reconcileModelMeta(modelMeta, installedModels);
+    if (!next) return;
+    setModelMetaState(next);
+    void setModelMeta(next).catch(() => undefined);
+  }, [nativeStatus, installedModels, modelMeta]);
 
   const setupAndTranscribe = useCallback(
     async (id: string) => {

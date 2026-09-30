@@ -88,7 +88,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-vis
 .model-chip {
   display: flex; align-items: center; gap: 8px; font-size: 0.8rem;
   background: rgb(255 255 255 / 0.06); border-radius: 10px; padding: 9px 12px; color: #cbd5e1;
+  border: 0; font-family: inherit; cursor: pointer; text-align: left; width: 100%; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.model-chip:hover { background: rgb(255 255 255 / 0.1); }
 .model-dot { width: 8px; height: 8px; border-radius: 50%; background: #64748b; flex: none; }
 .model-dot.ready { background: #34d399; }
 .model-dot.working { background: #fbbf24; animation: pulse 1.2s infinite; }
