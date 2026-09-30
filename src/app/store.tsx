@@ -6,7 +6,7 @@ import { SystemAudioSource, systemAudioStatus } from '../audio/system-audio';
 import type { SystemAudioStatus } from '../audio/system-audio';
 import { MicrophoneAudioSource } from '../audio/microphone';
 import { MediaRecorderAudioRecorder } from '../audio/recorder';
-import type { TrackSpec } from '../audio/recorder';
+import type { RecorderErrorKind, TrackSpec } from '../audio/recorder';
 import { TranscriptionService } from '../asr/transcription-service';
 import {
   DEFAULT_NATIVE_LANGUAGE,
@@ -80,6 +80,8 @@ interface AppState {
   // recording session
   recordingState: RecordingState;
   recordingError: string | null;
+  /** 'source' = a capture source was lost (Retry cannot help); 'storage' = writes failed. */
+  recordingErrorKind: RecorderErrorKind | null;
   activeMeeting: Meeting | null;
   elapsedMs: number;
   storageWarning: string | null;
@@ -188,6 +190,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [recordingState, setRecordingState] = useState<RecordingState>('IDLE');
   const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [recordingErrorKind, setRecordingErrorKind] = useState<RecorderErrorKind | null>(null);
   const [activeMeeting, setActiveMeeting] = useState<Meeting | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
@@ -412,8 +415,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       recorder.onState((s) => {
         setRecordingState(s);
         // Surface storage failures instead of implying audio is safe (§19).
-        if (s === 'ERROR') setRecordingError(recorder.getError()?.message ?? 'Recording error');
-        else if (s === 'RECORDING' || s === 'PAUSED') setRecordingError(null);
+        if (s === 'ERROR') {
+          setRecordingError(recorder.getError()?.message ?? 'Recording error');
+          setRecordingErrorKind(recorder.getErrorKind());
+        } else if (s === 'RECORDING' || s === 'PAUSED') {
+          setRecordingError(null);
+          setRecordingErrorKind(null);
+        }
       });
       activeIdRef.current = id;
       await saveMeeting(meeting);
@@ -908,6 +916,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       updateInfo,
       checkUpdates,
       recordingError,
+      recordingErrorKind,
       activeMeeting,
       elapsedMs,
       storageWarning,
@@ -966,7 +975,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       systemAudio,
     }),
     [
-      route, go, meetings, refresh, recordingState, recordingError, activeMeeting,
+      route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
       elapsedMs, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
       stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,

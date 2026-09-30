@@ -10,6 +10,7 @@ export default defineConfig({
   },
   projects: [
     {
+      // Chromium ≈ the Windows shell (WebView2).
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
@@ -22,6 +23,14 @@ export default defineConfig({
           ],
         },
       },
+    },
+    // WebKit ≈ the macOS (WKWebView) and Linux (WebKitGTK) shells. Playwright's
+    // WebKit captures from mock devices; run the recording specs with
+    // `--project=webkit` (CI does, on Linux and macOS).
+    {
+      name: 'webkit',
+      testMatch: /recording-reliability\.spec\.ts|data-integrity\.spec\.ts/,
+      use: { ...devices['Desktop Safari'] },
     },
   ],
 });

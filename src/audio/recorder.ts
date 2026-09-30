@@ -1,5 +1,5 @@
 import { chunkFileName, pickSupportedMimeType } from './formats';
-import { appendChunk, writeMeta } from '../storage/recordings';
+import { appendChunk, assertDurableStorage, writeMeta } from '../storage/recordings';
 import { CHUNK_MS } from '../domain/meeting';
 
 export interface AudioSource {
@@ -41,12 +41,29 @@ export type RecorderState =
 
 const CHUNK_TIMESLICE_MS = CHUNK_MS;
 
+/**
+ * Why the recorder is in ERROR:
+ *  - 'storage': chunks could not be written (held in memory; Retry can fix it)
+ *  - 'source': a capture source ended (mic unplugged, headset dropped, screen
+ *    share stopped) or its MediaRecorder failed. Nothing more is captured from
+ *    that source; what was recorded before is saved. Retry cannot fix it.
+ */
+export type RecorderErrorKind = 'storage' | 'source';
+
 interface ActiveTrack {
   track: string;
   source: AudioSource;
   recorder: MediaRecorder;
   mimeType: string;
   chunkIndex: number;
+  /** False once the source ended or the MediaRecorder failed. */
+  alive: boolean;
+}
+
+function trackLabel(track: string): string {
+  if (track === 'microphone') return 'The microphone';
+  if (track === 'device') return 'Device audio';
+  return 'The audio source';
 }
 
 /**
@@ -64,6 +81,10 @@ export class MediaRecorderAudioRecorder {
   private meetingId: string | null = null;
   private state: RecorderState = 'IDLE';
   private error: Error | null = null;
+  private errorKind: RecorderErrorKind | null = null;
+  /** Chunk writes that have not settled yet; stop() waits for all of them. */
+  private inflight = new Set<Promise<void>>();
+  private detachLifecycle: (() => void) | null = null;
   private onStateChange: ((s: RecorderState) => void) | null = null;
   /** Chunks whose write failed; kept in memory so Retry / Stop can save them. */
   private pending: PendingChunk[] = [];
@@ -79,6 +100,10 @@ export class MediaRecorderAudioRecorder {
 
   getError(): Error | null {
     return this.error;
+  }
+
+  getErrorKind(): RecorderErrorKind | null {
+    return this.errorKind;
   }
 
   getMimeType(): string {
@@ -119,8 +144,11 @@ export class MediaRecorderAudioRecorder {
     }
     this.setState('STARTING');
     this.error = null;
+    this.errorKind = null;
     const started: ActiveTrack[] = [];
     try {
+      // Before any permission prompt: never record into memory only.
+      assertDurableStorage();
       // Start every source up front. Requesting both streams together keeps the
       // user-gesture token valid for getDisplayMedia and surfaces a missing
       // device/screen track before any recorder is created.
@@ -148,21 +176,40 @@ export class MediaRecorderAudioRecorder {
           // Re-read actual mimeType (browser may ignore the hint).
           mimeType: recorder.mimeType || baseMime,
           chunkIndex: 0,
+          alive: true,
         };
         recorder.ondataavailable = (ev: BlobEvent) => {
           if (ev.data && ev.data.size > 0 && this.meetingId) {
             const idx = active.chunkIndex++;
             const name = chunkFileName(idx, active.mimeType);
             const chunk: PendingChunk = { track: active.track, name, data: ev.data };
-            void appendChunk(this.meetingId, name, ev.data, active.track).catch((err) =>
-              this.onWriteFailed(chunk, err),
-            );
+            const write = appendChunk(this.meetingId, name, ev.data, active.track)
+              .catch((err) => this.onWriteFailed(chunk, err))
+              .finally(() => this.inflight.delete(write));
+            this.inflight.add(write);
           }
         };
-        recorder.onerror = () => {
-          this.error = new Error('Recording error');
-          this.setState('ERROR');
+        recorder.onerror = (ev: Event) => {
+          const detail = (ev as Event & { error?: { message?: string } }).error?.message;
+          this.onSourceLost(active, `${trackLabel(active.track)} stopped recording${detail ? ` (${detail})` : ''}.`);
         };
+        // Unplugged mic, dropped Bluetooth headset, screen share stopped from
+        // the OS/browser bar: the track ends and MediaRecorder stops on its own.
+        stream.getAudioTracks().forEach((t) =>
+          t.addEventListener('ended', () =>
+            this.onSourceLost(active, `${trackLabel(active.track)} was disconnected.`),
+          ),
+        );
+        recorder.addEventListener('stop', () => {
+          if (this.state !== 'STOPPING' && this.state !== 'COMPLETED' && this.state !== 'IDLE') {
+            // The recorder's stop can arrive before the track's `ended`.
+            const ended = stream.getAudioTracks().some((t) => t.readyState === 'ended');
+            this.onSourceLost(
+              active,
+              `${trackLabel(active.track)} ${ended ? 'was disconnected' : 'stopped unexpectedly'}.`,
+            );
+          }
+        });
         started.push(active);
       });
       started.forEach((t) => t.recorder.start(CHUNK_TIMESLICE_MS));
@@ -171,6 +218,7 @@ export class MediaRecorderAudioRecorder {
       this.accumulatedMs = 0;
       this.runningSince = Date.now();
       this.resumeState = 'RECORDING';
+      this.attachLifecycle();
       this.setState('RECORDING');
       return this.snapshot(0);
     } catch (err) {
@@ -236,7 +284,10 @@ export class MediaRecorderAudioRecorder {
     }
     this.pending = still;
     if (still.length === 0) {
+      // A lost source cannot be fixed by retrying: keep that error visible.
+      if (this.errorKind === 'source') return true;
       this.error = null;
+      this.errorKind = null;
       if (this.state === 'ERROR') this.setState(this.resumeState);
       return true;
     }
@@ -246,10 +297,63 @@ export class MediaRecorderAudioRecorder {
 
   private onWriteFailed(chunk: PendingChunk, err: unknown): void {
     this.pending.push(chunk);
+    // During stop the final retry decides; a source error stays the headline.
+    if (this.state === 'STOPPING' || this.errorKind === 'source') return;
     const cause = err instanceof Error ? err.message : String(err);
     this.error = new Error(`Storage write failed (${cause}).`);
+    this.errorKind = 'storage';
     if (this.state === 'RECORDING' || this.state === 'PAUSED') this.resumeState = this.state;
     this.setState('ERROR');
+  }
+
+  private onSourceLost(active: ActiveTrack, message: string): void {
+    if (!active.alive) return;
+    active.alive = false;
+    if (this.state === 'STOPPING' || this.state === 'COMPLETED' || this.state === 'IDLE') return;
+    // The clock only runs while at least one source still records.
+    if (!this.tracks.some((t) => t.alive)) this.stopClock();
+    const others = this.tracks.some((t) => t.alive) ? ' The other source is still recording.' : '';
+    this.error = new Error(`${message}${others}`);
+    this.errorKind = 'source';
+    this.setState('ERROR');
+  }
+
+  /** Ask every live recorder for its buffered audio (≤ one chunk) right now. */
+  private flush(): void {
+    for (const t of this.tracks) {
+      try {
+        if (t.recorder.state === 'recording') t.recorder.requestData();
+      } catch {
+        // ignore: best effort
+      }
+    }
+  }
+
+  /**
+   * Closing the window or hiding the app must not lose the current slice:
+   * flush on pagehide / when the document becomes hidden.
+   */
+  private attachLifecycle(): void {
+    this.detachLifecycle?.();
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const onPageHide = () => this.flush();
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') this.flush();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('visibilitychange', onVisibility);
+    this.detachLifecycle = () => {
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('visibilitychange', onVisibility);
+      this.detachLifecycle = null;
+    };
+  }
+
+  /** Wait until every chunk write (including ones queued meanwhile) settled. */
+  private async drainWrites(): Promise<void> {
+    while (this.inflight.size > 0) {
+      await Promise.allSettled([...this.inflight]);
+    }
   }
 
   private stopClock(): void {
@@ -292,8 +396,10 @@ export class MediaRecorderAudioRecorder {
       ),
     );
     await Promise.all(tracks.map((t) => t.source.stop().catch(() => undefined)));
-    // Let the final slice's write settle, then give failed chunks one last try.
-    await new Promise((r) => setTimeout(r, 100));
+    this.detachLifecycle?.();
+    // Every write must settle before the recording is reported: a slow disk
+    // (e.g. antivirus scanning each file) must not turn into silent loss.
+    await this.drainWrites();
     if (this.pending.length) await this.retryPending();
     const result: Recording = {
       mimeType: tracks[0]?.mimeType ?? '',
@@ -305,6 +411,8 @@ export class MediaRecorderAudioRecorder {
     this.pending = [];
     this.tracks = [];
     this.meetingId = null;
+    this.error = null;
+    this.errorKind = null;
     this.setState('COMPLETED');
     return result;
   }
@@ -318,6 +426,7 @@ export class MediaRecorderAudioRecorder {
       }
     }
     await Promise.all(this.tracks.map((t) => t.source.stop().catch(() => undefined)));
+    this.detachLifecycle?.();
     this.tracks = [];
     this.meetingId = null;
     this.setState('IDLE');
