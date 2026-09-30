@@ -103,17 +103,21 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
         </section>
       )}
 
+      {/* preload="none": WebKitGTK builds a GStreamer pipeline per preloaded
+          player and, on the AppImage's GStreamer 1.20, tearing a prerolled
+          WAV/FLAC pipeline down later can deadlock the page. Only build one
+          when the user presses play. */}
       <section className="card" aria-label="Recording playback">
         {detailTracks.length === 0 ? (
           <p className="muted">Recording audio unavailable.</p>
         ) : detailTracks.length === 1 ? (
-          <audio className="player" controls src={detailTracks[0]!.url} />
+          <audio className="player" controls preload="none" src={detailTracks[0]!.url} />
         ) : (
           <div className="player-stack">
             {detailTracks.map((t) => (
               <label key={t.track || 'recording'} className="track-player">
                 <span className="track-label">{t.label}</span>
-                <audio className="player" controls src={t.url} />
+                <audio className="player" controls preload="none" src={t.url} />
               </label>
             ))}
           </div>
