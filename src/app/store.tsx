@@ -52,6 +52,7 @@ import { getCalendarConfig, setActiveCalendarProvider, setCalendarConfig } from 
 import { createLlmClient, DEFAULT_LLM_CONFIG } from '../integrations/llm';
 import type { LlmConfig, MeetingSummary } from '../integrations/llm';
 import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
+import { normalizeAgendaItems, type AgendaItem } from '../domain/agenda';
 
 export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'app';
 const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'app'];
@@ -82,7 +83,11 @@ interface AppState {
   activeMeeting: Meeting | null;
   elapsedMs: number;
   storageWarning: string | null;
-  startRecording: (title: string, mode: RecordingMode) => Promise<void>;
+  startRecording: (title: string, mode: RecordingMode, agenda?: AgendaItem[]) => Promise<void>;
+  /** Replace a meeting's agenda (empty list removes it). */
+  saveAgenda: (meetingId: string, items: AgendaItem[]) => Promise<Meeting | undefined>;
+  /** Upload a meeting's agenda to GitLab (agenda.md / wiki page / issue). */
+  uploadAgendaToGitlab: (meetingId: string) => Promise<GitlabUploadResult>;
   pauseRecording: () => Promise<void>;
   resumeRecording: () => Promise<void>;
   /** Retry writing audio chunks after a storage failure (§9 Retry). */
@@ -363,7 +368,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, []);
 
   const startRecording = useCallback(
-    async (title: string, mode: RecordingMode) => {
+    async (title: string, mode: RecordingMode, agenda: AgendaItem[] = []) => {
       setRecordingError(null);
       // Storage estimate check (§19).
       const est = await estimateStorage().catch(() => ({}));
@@ -386,6 +391,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         transcriptionStatus: 'not_started',
         unfinished: true,
       };
+      const agendaItems = normalizeAgendaItems(agenda);
+      if (agendaItems.length > 0) meeting.agenda = { items: agendaItems, updatedAt: now };
       // Two-way: capture the microphone and the device/system audio as separate
       // tracks at the same time (the Zoom case). Single-source modes stay flat.
       // Linux desktop records system sound via the sound server; elsewhere
@@ -521,6 +528,38 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const result = await createGitlabClient(gitlabConfig).uploadSummary(meeting);
       const updated = await updateMeeting(meetingId, {
         gitlabSummary: { url: result.url, target: result.target, uploadedAt: Date.now() },
+      });
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      return result;
+    },
+    [gitlabConfig],
+  );
+
+  const saveAgenda = useCallback(
+    async (meetingId: string, items: AgendaItem[]): Promise<Meeting | undefined> => {
+      const clean = normalizeAgendaItems(items);
+      const updated = await updateMeeting(meetingId, (cur) => {
+        const { agenda: _old, ...rest } = cur;
+        return clean.length > 0 ? { ...rest, agenda: { items: clean, updatedAt: Date.now() } } : rest;
+      });
+      if (!updated) return undefined;
+      setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      // The live recording keeps its own copy (stopRecording saves from it).
+      setActiveMeeting((a) => (a && a.id === meetingId ? { ...a, agenda: updated.agenda } : a));
+      if (!updated.unfinished) void mirrorToDisk(updated);
+      await refresh();
+      return updated;
+    },
+    [mirrorToDisk, refresh],
+  );
+
+  const uploadAgendaToGitlab = useCallback(
+    async (meetingId: string): Promise<GitlabUploadResult> => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error('Meeting not found');
+      const result = await createGitlabClient(gitlabConfig).uploadAgenda(meeting);
+      const updated = await updateMeeting(meetingId, {
+        gitlabAgenda: { url: result.url, target: result.target, uploadedAt: Date.now() },
       });
       if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
       return result;
@@ -907,6 +946,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       saveGitlabConfig,
       uploadToGitlab,
       uploadSummaryToGitlab,
+      saveAgenda,
+      uploadAgendaToGitlab,
       calendarConfig,
       saveCalendarConfig,
       switchCalendarProvider,
@@ -930,7 +971,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
-      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab,
+      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, saveAgenda, uploadAgendaToGitlab,
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
       updateInfo, checkUpdates,
       llmConfig, saveLlmConfig, summarizeMeeting,

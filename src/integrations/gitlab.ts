@@ -10,6 +10,7 @@
 
 import { bytesToBase64 } from '../asr/wav';
 import { segmentsToMarkdown } from '../domain/transcript';
+import { agendaDocument } from '../domain/agenda';
 import type { Meeting } from '../domain/meeting';
 import type { TranscriptSegment } from '../domain/transcript';
 
@@ -123,6 +124,13 @@ export function summaryMarkdown(meeting: Meeting): string {
   ].join('\n');
 }
 
+/** Markdown body for the agenda upload. Throws when there is no agenda yet. */
+export function agendaMarkdown(meeting: Meeting): string {
+  const items = meeting.agenda?.items ?? [];
+  if (items.length === 0) throw new Error('Add agenda items before uploading the agenda');
+  return agendaDocument(meeting.title, meeting.startedAt, items);
+}
+
 export function meetingPageTitle(meeting: Meeting): string {
   const date = new Date(meeting.startedAt).toISOString().slice(0, 10);
   return `Meeting: ${meeting.title || 'Untitled'} (${date})`;
@@ -136,7 +144,7 @@ export function meetingMarkdown(meeting: Meeting, segments: TranscriptSegment[])
     )}s`,
     '',
   ].join('\n');
-  return `${header}${segmentsToMarkdown(meeting.title, meeting.startedAt, segments)}`;
+  return `${header}${segmentsToMarkdown(meeting.title, meeting.startedAt, segments, meeting.agenda?.items ?? [])}`;
 }
 
 export class GitlabClient {
@@ -198,11 +206,29 @@ export class GitlabClient {
     const title = meetingPageTitle(meeting);
     switch (this.config.target) {
       case 'file':
-        return this.uploadFile(meeting, content, 'summary.md', `Add summary: ${title}`);
+        return this.uploadFile(meeting, content, 'summary.md', 'Add summary:');
       case 'wiki':
         return this.uploadWiki(`${title} — Summary`, content);
       case 'issue':
         throw new Error('Summary upload needs the Wiki page or Repository file target');
+    }
+  }
+
+  /**
+   * Upload the agenda on its own: `agenda.md` in the meeting's folder
+   * (`file`), a companion wiki page, or a new issue (agendas are often
+   * shared ahead of the meeting, so an issue works as a discussion place).
+   */
+  async uploadAgenda(meeting: Meeting): Promise<GitlabUploadResult> {
+    const content = agendaMarkdown(meeting);
+    const title = meetingPageTitle(meeting);
+    switch (this.config.target) {
+      case 'file':
+        return this.uploadFile(meeting, content, 'agenda.md', 'Add agenda:');
+      case 'wiki':
+        return this.uploadWiki(`${title} — Agenda`, content);
+      case 'issue':
+        return this.uploadIssue(`Agenda: ${meeting.title || 'Untitled'} (${new Date(meeting.startedAt).toISOString().slice(0, 10)})`, content);
     }
   }
 

@@ -11,6 +11,7 @@ import {
   parseProjectUrl,
   slugify,
   summaryMarkdown,
+  agendaMarkdown,
 } from './gitlab';
 import type { GitlabConfig } from './gitlab';
 import type { Meeting } from '../domain/meeting';
@@ -271,5 +272,44 @@ describe('per-meeting folders and summary upload', () => {
       url: 'https://git.example.com/g/p/-/blob/main/meetings/weekly-planning-q3-000000/summary.md',
       target: 'file',
     });
+  });
+
+  const withAgenda: Meeting = {
+    ...meeting,
+    agenda: { items: [{ id: 'a', title: 'Roadmap', minutes: 15, owner: 'anna' }], updatedAt: 1 },
+  };
+
+  it('refuses agenda upload without items', async () => {
+    await expect(createGitlabClient(base).uploadAgenda(meeting)).rejects.toThrow(/agenda/i);
+    expect(() => agendaMarkdown(meeting)).toThrow();
+  });
+
+  it('writes agenda.md into the meeting folder with a single-title commit', async () => {
+    let seenUrl = '';
+    let body: { commit_message?: string } = {};
+    vi.stubGlobal('fetch', async (u: string, init: RequestInit) => {
+      seenUrl = u;
+      body = JSON.parse(String(init.body)) as typeof body;
+      return json({ file_path: 'meetings/weekly-planning-q3-000000/agenda.md' }, 201);
+    });
+    await createGitlabClient(base).uploadAgenda(withAgenda);
+    expect(seenUrl).toContain('%2Fagenda.md');
+    expect(body.commit_message).toMatch(/^Add agenda: Meeting: Weekly \/ planning: Q3 \(\d{4}-\d{2}-\d{2}\)$/);
+  });
+
+  it('opens an agenda issue for the issue target', async () => {
+    let body: { title?: string; description?: string } = {};
+    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body)) as typeof body;
+      return json({ web_url: 'https://git.example.com/g/p/-/issues/7', iid: 7 }, 201);
+    });
+    const r = await createGitlabClient({ ...base, target: 'issue' }).uploadAgenda(withAgenda);
+    expect(r.url).toContain('/issues/7');
+    expect(body.title).toMatch(/^Agenda: Weekly/);
+    expect(body.description).toContain('1. **Roadmap** (@anna, 15 min)');
+  });
+
+  it('includes the agenda in the transcript upload', () => {
+    expect(meetingMarkdown(withAgenda, [])).toContain('## Agenda');
   });
 });

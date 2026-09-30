@@ -2,6 +2,8 @@ import { useRef, useState } from 'react';
 import { useApp } from '../store.tsx';
 import type { RecordingMode } from '../../domain/meeting.ts';
 import { MicIcon, MonitorIcon, DualIcon } from '../components/icons.tsx';
+import { AgendaEditor } from '../components/Agenda.tsx';
+import { newAgendaItem, type AgendaItem } from '../../domain/agenda.ts';
 import {
   MediaAccessError,
   isSecureMediaContext,
@@ -15,6 +17,7 @@ export function NewMeeting(): React.JSX.Element {
   const directSystemAudio = systemAudio?.available === true;
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState<RecordingMode>('speaker');
+  const [agenda, setAgenda] = useState<AgendaItem[] | null>(null);
   const [error, setError] = useState<MediaAccessFailure | string | null>(null);
   const [busy, setBusy] = useState(false);
   const [permBusy, setPermBusy] = useState(false);
@@ -26,7 +29,7 @@ export function NewMeeting(): React.JSX.Element {
   const start = (): void => {
     setBusy(true);
     setError(null);
-    startRecording(title, mode)
+    startRecording(title, mode, agenda ?? [])
       .catch((e: unknown) =>
         setError(
           e instanceof MediaAccessError
@@ -150,6 +153,20 @@ export function NewMeeting(): React.JSX.Element {
           placeholder="e.g. Weekly planning"
           maxLength={120}
         />
+
+        <span className="field-label">3 · Agenda (optional)</span>
+        {agenda === null ? (
+          <button type="button" className="btn" onClick={() => setAgenda([newAgendaItem()])}>
+            + Add agenda
+          </button>
+        ) : (
+          <>
+            <AgendaEditor items={agenda} onChange={setAgenda} />
+            <button type="button" className="link-btn" style={{ marginTop: 8 }} onClick={() => setAgenda(null)}>
+              Remove agenda
+            </button>
+          </>
+        )}
 
         {!secure && (
           <p className="warn" style={{ marginBottom: 0 }} role="alert">

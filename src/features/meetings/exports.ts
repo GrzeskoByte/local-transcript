@@ -6,6 +6,7 @@ import { deleteRecording, readRecordingBlob } from '../../storage/recordings';
 import { deleteMeetingRecord } from '../../storage/meetings';
 import { deleteSegments } from '../../storage/transcripts';
 import { segmentsToJSON, segmentsToMarkdown, segmentsToText } from '../../domain/transcript';
+import { agendaDocument } from '../../domain/agenda';
 
 function downloadTextFile(filename: string, text: string, mime: string): void {
   const blob = new Blob([text], { type: mime });
@@ -22,10 +23,20 @@ export async function exportTranscript(meetingId: string, format: 'txt' | 'md' |
   if (!meeting) throw new Error('Meeting not found');
   const segments = await getSegments(meetingId);
   const base = (meeting.title || 'meeting').replace(/[^\w\-]+/g, '-');
-  if (format === 'txt') downloadTextFile(`${base}.txt`, segmentsToText(segments), 'text/plain');
+  // The agenda (if any) is part of every transcript export.
+  const agenda = meeting.agenda?.items ?? [];
+  if (format === 'txt') downloadTextFile(`${base}.txt`, segmentsToText(segments, agenda), 'text/plain');
   else if (format === 'md')
-    downloadTextFile(`${base}.md`, segmentsToMarkdown(meeting.title, meeting.startedAt, segments), 'text/markdown');
-  else downloadTextFile(`${base}.json`, segmentsToJSON(meetingId, meeting.title, segments), 'application/json');
+    downloadTextFile(`${base}.md`, segmentsToMarkdown(meeting.title, meeting.startedAt, segments, agenda), 'text/markdown');
+  else downloadTextFile(`${base}.json`, segmentsToJSON(meetingId, meeting.title, segments, agenda), 'application/json');
+}
+
+/** Agenda on its own, as Markdown. */
+export function exportAgenda(meeting: Meeting): void {
+  const items = meeting.agenda?.items ?? [];
+  if (items.length === 0) throw new Error('This meeting has no agenda yet');
+  const base = (meeting.title || 'meeting').replace(/[^\w\-]+/g, '-');
+  downloadTextFile(`${base}-agenda.md`, agendaDocument(meeting.title, meeting.startedAt, items), 'text/markdown');
 }
 
 export async function exportAudio(meeting: Meeting): Promise<void> {

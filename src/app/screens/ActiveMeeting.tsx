@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useApp, formatDuration } from '../store.tsx';
 import { modeLabel } from '../../domain/meeting';
 import { CheckIcon } from '../components/icons.tsx';
+import { AgendaList } from '../components/Agenda.tsx';
 
 export function ActiveMeeting(): React.JSX.Element {
   const {
@@ -75,6 +76,12 @@ export function ActiveMeeting(): React.JSX.Element {
           </div>
         )}
       </section>
+      {activeMeeting.agenda?.items.length ? (
+        <section className="card" aria-label="Meeting agenda">
+          <strong>Agenda</strong>
+          <AgendaList items={activeMeeting.agenda.items} />
+        </section>
+      ) : null}
       <p className="muted" style={{ textAlign: 'center' }}>
         You can leave this screen — recording continues. Transcribe after stopping.
       </p>

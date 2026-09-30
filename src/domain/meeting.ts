@@ -1,3 +1,5 @@
+import type { MeetingAgenda } from './agenda';
+
 export type RecordingMode = 'speaker' | 'device' | 'dual' | 'file';
 
 /** Track identifiers written under `meetings/{id}/{track}/`. '' = single-track (legacy flat layout). */
@@ -68,6 +70,10 @@ export interface Meeting {
   gitlab?: { url: string; target: string; uploadedAt: number };
   /** Last GitLab summary upload of this meeting, if any. */
   gitlabSummary?: { url: string; target: string; uploadedAt: number };
+  /** Planned topics (written before or after recording). */
+  agenda?: MeetingAgenda;
+  /** Last GitLab agenda upload of this meeting, if any. */
+  gitlabAgenda?: { url: string; target: string; uploadedAt: number };
   /** LLM-generated summary + key points, if any. */
   summary?: { text: string; keyPoints: string[]; model: string; createdAt: number };
   /** Last calendar event created from this meeting, if any. */
