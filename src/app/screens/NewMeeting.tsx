@@ -10,11 +10,13 @@ import {
   primeMicrophonePermission,
   type MediaAccessFailure,
 } from '../../audio/permissions.ts';
+import { macDeviceAudioLimit } from '../../audio/device-audio.ts';
 
 export function NewMeeting(): React.JSX.Element {
   const { startRecording, importMeeting, storageWarning, go, systemAudio } = useApp();
   // Linux desktop: device audio comes straight from the sound server.
   const directSystemAudio = systemAudio?.available === true;
+  const macLimit = directSystemAudio ? null : macDeviceAudioLimit();
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState<RecordingMode>('speaker');
   const [agenda, setAgenda] = useState<AgendaItem[] | null>(null);
@@ -117,6 +119,12 @@ export function NewMeeting(): React.JSX.Element {
             <small>Two-way: your microphone and the call/system audio at once. Best for online meetings.</small>
           </button>
         </div>
+
+        {macLimit && (mode === 'device' || mode === 'dual') && (
+          <p className="warn" style={{ marginTop: 10, marginBottom: 0 }}>
+            {macLimit}
+          </p>
+        )}
 
         {mode === 'dual' && (
           <p className="muted" style={{ marginTop: 10 }}>
