@@ -50,8 +50,13 @@ async function decodedSeconds(page: Page, id: string): Promise<number> {
   }, id);
 }
 
-async function startSpeakerRecording(page: Page, title: string): Promise<void> {
+/**
+ * `prepare` runs in the page after navigation and before Start — not as an
+ * init script, which a persistent context's first page (WebKit) may miss.
+ */
+async function startSpeakerRecording(page: Page, title: string, prepare?: () => void): Promise<void> {
   await page.goto('/#/new');
+  if (prepare) await page.evaluate(prepare);
   await page.locator('#meeting-title').fill(title);
   await page.getByRole('button', { name: '● Start Recording' }).click();
   await expect(page.getByRole('region', { name: 'Recording in progress' })).toBeVisible();
@@ -62,10 +67,10 @@ test('records through the worker writer when createWritable is missing (older ma
 }) => {
   test.setTimeout(60_000);
   page.on('dialog', (d) => void d.accept());
-  await page.addInitScript(() => {
+  await startSpeakerRecording(page, 'Worker writer', () => {
     delete (FileSystemFileHandle.prototype as { createWritable?: unknown }).createWritable;
   });
-  await startSpeakerRecording(page, 'Worker writer');
+  expect(await page.evaluate(() => 'createWritable' in FileSystemFileHandle.prototype)).toBe(false);
   await page.waitForTimeout(6_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
@@ -81,7 +86,7 @@ test('records through the worker writer when createWritable is missing (older ma
 test('an unplugged microphone stops cleanly and keeps what was recorded', async ({ page }) => {
   test.setTimeout(60_000);
   page.on('dialog', (d) => void d.accept());
-  await page.addInitScript(() => {
+  await startSpeakerRecording(page, 'Unplugged mic', () => {
     const w = window as unknown as { __streams: MediaStream[] };
     w.__streams = [];
     const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
@@ -91,8 +96,10 @@ test('an unplugged microphone stops cleanly and keeps what was recorded', async 
       return stream;
     };
   });
-  await startSpeakerRecording(page, 'Unplugged mic');
   await page.waitForTimeout(6_500);
+  expect(
+    await page.evaluate(() => (window as unknown as { __streams: MediaStream[] }).__streams.length),
+  ).toBeGreaterThan(0);
 
   // What the OS does on unplug: the track ends (script stop() fires no event).
   await page.evaluate(() => {

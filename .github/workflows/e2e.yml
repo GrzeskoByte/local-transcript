@@ -2,9 +2,10 @@ name: E2E
 
 # Recording must work on every platform the desktop app ships to. The shells
 # embed different engines, so the browser suite runs on each OS with the
-# closest engine: Chromium ≈ WebView2 (Windows), WebKit ≈ WKWebView (macOS)
-# and WebKitGTK (Linux). The webkit project runs the recording specs only
-# (see playwright.config.ts).
+# closest engine: Chromium ≈ WebView2 (Windows), WebKit ≈ WKWebView (macOS).
+# The webkit project runs the recording specs only (see playwright.config.ts).
+# No Linux WebKit job: Playwright's Linux WebKit build ships without
+# MediaRecorder, so the AppImage (WebKitGTK) is validated on the real bundle.
 on:
   push:
     branches: ['**']
@@ -24,7 +25,6 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest, project: chromium }
-          - { os: ubuntu-latest, project: webkit }
           - { os: macos-latest, project: chromium }
           - { os: macos-latest, project: webkit }
           - { os: windows-latest, project: chromium }

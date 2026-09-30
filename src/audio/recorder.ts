@@ -149,6 +149,12 @@ export class MediaRecorderAudioRecorder {
     try {
       // Before any permission prompt: never record into memory only.
       assertDurableStorage();
+      if (typeof MediaRecorder === 'undefined') {
+        throw new Error(
+          'This system’s web engine cannot record audio (MediaRecorder is unavailable). ' +
+            'Update your operating system or its web engine, then try again.',
+        );
+      }
       // Start every source up front. Requesting both streams together keeps the
       // user-gesture token valid for getDisplayMedia and surfaces a missing
       // device/screen track before any recorder is created.
