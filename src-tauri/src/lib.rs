@@ -2,6 +2,8 @@ mod models;
 mod native_asr;
 mod opencode;
 mod proc;
+mod relaunch;
+mod settings;
 mod storage;
 mod calendar;
 mod calendar_detect;
@@ -13,8 +15,11 @@ use tauri::webview::{PermissionKind, PermissionResponse};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // After an update/reset relaunch: let the old instance release the profile.
+    relaunch::wait_for_previous_instance();
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(settings::SettingsLock::default())
         .manage(updater::UpdateState::default())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // WebKitGTK denies any media request the embedder does not handle, so
@@ -42,6 +47,9 @@ pub fn run() {
             storage::native_save_file,
             storage::native_open_storage_dir,
             storage::native_open_url,
+            storage::native_reset_webview_database,
+            settings::native_settings_load,
+            settings::native_settings_set,
             calendar::native_calendar_create,
             calendar::native_calendar_fetch,
             calendar::native_calendar_test,

@@ -6,6 +6,7 @@
  * Checking contacts GitHub only; nothing installs without a click.
  */
 import { invokeDesktop } from './desktop';
+import { getPref, setPref } from './prefs';
 import type { RecordingState } from '../domain/meeting';
 
 export interface UpdateInfo {
@@ -42,35 +43,19 @@ export function getUpdateProgress(): Promise<UpdateProgress> {
 export const AUTO_CHECK_KEY = 'update-auto-check';
 export const LAST_CHECK_KEY = 'update-last-check';
 export function getAutoCheck(): boolean {
-  try {
-    return localStorage.getItem(AUTO_CHECK_KEY) !== 'false';
-  } catch {
-    return true;
-  }
+  return getPref(AUTO_CHECK_KEY) !== 'false';
 }
 
 export function setAutoCheck(value: boolean): void {
-  try {
-    localStorage.setItem(AUTO_CHECK_KEY, String(value));
-  } catch {
-    /* pref is best-effort */
-  }
+  setPref(AUTO_CHECK_KEY, String(value));
 }
 
 export function getLastCheck(): number {
-  try {
-    return Number(localStorage.getItem(LAST_CHECK_KEY)) || 0;
-  } catch {
-    return 0;
-  }
+  return Number(getPref(LAST_CHECK_KEY)) || 0;
 }
 
 export function setLastCheck(at: number): void {
-  try {
-    localStorage.setItem(LAST_CHECK_KEY, String(at));
-  } catch {
-    /* best-effort */
-  }
+  setPref(LAST_CHECK_KEY, String(at));
 }
 
 /** Why installing now would be unsafe (it restarts the app), or null. */

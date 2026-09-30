@@ -20,11 +20,13 @@ import type { CatalogModel } from '../asr/model-tiers';
 import { findUnfinishedMeetings, getMeeting, listMeetings, saveMeeting, updateMeeting } from '../storage/meetings';
 import { deleteMeetingEverywhere } from '../features/meetings/exports';
 import { getSegments } from '../storage/transcripts';
+import { DatabaseOpenError } from '../storage/database';
 import type { TranscriptSegment } from '../domain/transcript';
 import type { TranscriptionStage } from '../asr/engine';
 import { deleteRecording, estimateStorage, isStorageLow, listChunkNames, listTracks, readRecordingBlob } from '../storage/recordings';
 import { trackSpeakerLabel } from '../domain/meeting';
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
+import { getPref, setPref } from '../platform/prefs';
 import {
   checkForUpdate,
   getAutoCheck,
@@ -151,6 +153,13 @@ interface AppState {
   unfinished: Meeting[];
   recoverUnfinished: (id: string) => Promise<void>;
   discardUnfinished: (id: string) => Promise<void>;
+  /** The app database could not be opened (null when fine). */
+  databaseError: string | null;
+  /**
+   * Desktop (Linux): move the unreadable database into a backup folder and
+   * relaunch with a fresh one. Settings and the local-files mirror are kept.
+   */
+  resetDatabase: () => Promise<void>;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -199,18 +208,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [language, setLanguageState] = useState<string>(DEFAULT_NATIVE_LANGUAGE);
   const [nativeStatus, setNativeStatusState] = useState<NativeAsrStatus | null>(null);
   // Desktop-only: mirror finished meetings to a user-visible folder.
-  const [saveToDisk, setSaveToDiskState] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('desktop-save-to-disk') !== 'false';
-    } catch {
-      return true;
-    }
-  });
+  const [saveToDisk, setSaveToDiskState] = useState<boolean>(
+    () => getPref('desktop-save-to-disk') !== 'false',
+  );
   const [storageDir, setStorageDir] = useState<string | null>(null);
   const [gitlabConfig, setGitlabConfigState] = useState<GitlabConfig>(DEFAULT_GITLAB_CONFIG);
   const [llmConfig, setLlmConfigState] = useState<LlmConfig>(DEFAULT_LLM_CONFIG);
   const [calendarConfig, setCalendarConfigState] = useState<CalendarConfig>(DEFAULT_CALENDAR_CONFIG);
   const [unfinished, setUnfinished] = useState<Meeting[]>([]);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [modelDownload, setModelDownload] = useState<{ name: string; received: number; total: number } | null>(null);
   const recorderRef = useRef<MediaRecorderAudioRecorder | null>(null);
   const timerRef = useRef<number | null>(null);
@@ -218,7 +224,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const activeIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setMeetings(await listMeetings());
+    try {
+      setMeetings(await listMeetings());
+      setDatabaseError(null);
+    } catch (err) {
+      if (err instanceof DatabaseOpenError) {
+        setDatabaseError(err.message);
+        return;
+      }
+      throw err;
+    }
     const found = (await findUnfinishedMeetings()).filter((m) => m.id !== activeIdRef.current);
     // Estimate each interrupted recording's length from its stored chunks,
     // not from "now - startedAt" (which grows for as long as the app was closed).
@@ -433,11 +448,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   // Best-effort mirror of a finished meeting to the desktop folder.
   const mirrorToDisk = useCallback(async (meeting: Meeting | null) => {
     if (!meeting || !isDesktopApp()) return;
-    try {
-      if (localStorage.getItem('desktop-save-to-disk') === 'false') return;
-    } catch {
-      // No localStorage available: mirror anyway.
-    }
+    if (getPref('desktop-save-to-disk') === 'false') return;
     try {
       await mirrorMeetingToDisk(meeting);
     } catch {
@@ -447,11 +458,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const setSaveToDisk = useCallback((value: boolean) => {
     setSaveToDiskState(value);
-    try {
-      localStorage.setItem('desktop-save-to-disk', value ? 'true' : 'false');
-    } catch {
-      // Preference stays in memory only.
-    }
+    setPref('desktop-save-to-disk', value ? 'true' : 'false');
   }, []);
 
   const openStorageDir = useCallback(async () => {
@@ -689,14 +696,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   );
 
   const downloadModel = useCallback(async (id?: string) => {
-    const targetId = id ?? (await getModelMeta()).modelId;
+    const targetId = id ?? (await getModelMeta().catch(() => null))?.modelId ?? NATIVE_DEFAULT_MODEL;
+    // Persisting the model state is best-effort: a storage problem must never
+    // block the download itself.
+    const persist = (m: ModelMeta) => setModelMeta(m).catch(() => undefined);
     let meta: ModelMeta = {
       modelId: targetId,
       state: 'downloading',
       progress: 0,
       updatedAt: Date.now(),
     };
-    await setModelMeta(meta);
+    await persist(meta);
     setModelMetaState(meta);
 
     // Let the native backend fetch the model (voxtype/whisper.cpp), polling
@@ -713,7 +723,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     try {
       await nativeDownloadModel(meta.modelId);
       meta = { ...meta, state: 'ready', progress: 1 };
-      await setModelMeta(meta);
+      await persist(meta);
       setModelMetaState(meta);
       await refreshNativeStatus();
     } catch (err) {
@@ -722,7 +732,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         state: 'failed',
         error: err instanceof Error ? err.message : String(err),
       };
-      await setModelMeta(meta);
+      await persist(meta);
       setModelMetaState(meta);
       throw err;
     } finally {
@@ -756,6 +766,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     },
     [refresh],
   );
+
+  const resetDatabase = useCallback(async () => {
+    await invokeDesktop<string>('native_reset_webview_database', { origin: window.location.origin });
+  }, []);
 
   const discardUnfinished = useCallback(
     async (id: string) => {
@@ -877,6 +891,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       unfinished,
       recoverUnfinished,
       discardUnfinished,
+      databaseError,
+      resetDatabase,
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, activeMeeting,
@@ -889,7 +905,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
       updateInfo, checkUpdates,
       llmConfig, saveLlmConfig, summarizeMeeting,
-      unfinished, recoverUnfinished, discardUnfinished,
+      unfinished, recoverUnfinished, discardUnfinished, databaseError, resetDatabase,
     ],
   );
 
