@@ -69,7 +69,8 @@ fn curl_send(req: &CalendarCreateRequest) -> Result<String, String> {
         cmd.arg("-H").arg(format!("Authorization: Bearer {token}"));
     } else if let Some(user) = req.username.as_ref().filter(|u| !u.is_empty()) {
         let pass = req.password.clone().unwrap_or_default();
-        if req.use_ntlm {
+        // NTLM is for on-prem Exchange only (and some curl builds lack it).
+        if req.use_ntlm && req.provider == "ews" {
             cmd.arg("--ntlm");
         }
         cmd.arg("-u").arg(format!("{user}:{pass}"));

@@ -1,3 +1,4 @@
+import { fileExtensionForMimeType } from '../../audio/formats';
 import type { Meeting } from '../../domain/meeting';
 import { getMeeting } from '../../storage/meetings';
 import { getSegments } from '../../storage/transcripts';
@@ -28,7 +29,7 @@ export async function exportTranscript(meetingId: string, format: 'txt' | 'md' |
 }
 
 export async function exportAudio(meeting: Meeting): Promise<void> {
-  const ext = meeting.mimeType.includes('mp4') ? 'mp4' : meeting.mimeType.includes('ogg') ? 'ogg' : 'webm';
+  const ext = fileExtensionForMimeType(meeting.mimeType);
   const base = (meeting.title || 'meeting').replace(/[^\w\-]+/g, '-');
   // Two-way recordings export one file per track (mic and device are distinct
   // WebM streams and cannot be concatenated into a single playable file).

@@ -53,6 +53,15 @@ describe('mediaAccessError (secure context)', () => {
     });
   });
 
+  it('explains WebKit seeing no capture device ("Invalid constraint")', () => {
+    inSecureContext(() => {
+      const failure = mediaAccessError(named('OverconstrainedError'), 'microphone');
+      expect(failure.code).toBe('no-device');
+      expect(failure.message).toMatch(/cannot see any microphone/i);
+      expect(failure.hint).not.toMatch(/privacy/i);
+    });
+  });
+
   it('explains a busy audio device', () => {
     inSecureContext(() => {
       const failure = mediaAccessError(named('NotReadableError'), 'microphone');

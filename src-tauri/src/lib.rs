@@ -5,6 +5,7 @@ mod proc;
 mod relaunch;
 mod settings;
 mod storage;
+mod system_audio;
 mod calendar;
 mod calendar_detect;
 mod updater;
@@ -13,10 +14,31 @@ pub use native_asr::AppState;
 
 use tauri::webview::{PermissionKind, PermissionResponse};
 
+/// Inside the AppImage, WebKit uses the bundled GStreamer plugins. Give them
+/// their own registry cache so the bundled GStreamer does not rewrite (and
+/// fight over) the host's `~/.cache/gstreamer-1.0/registry.*.bin`. Must run
+/// before GTK/WebKit start: their processes inherit the variable.
+fn use_own_gstreamer_registry() {
+    if !cfg!(target_os = "linux") || proc::bundle_root().is_none() || std::env::var_os("GST_REGISTRY_1_0").is_some() {
+        return;
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")));
+    if let Some(dir) = cache.map(|c| c.join("io.localtranscribe.app")) {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            std::env::set_var("GST_REGISTRY_1_0", dir.join("gstreamer-registry.bin"));
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // After an update/reset relaunch: let the old instance release the profile.
     relaunch::wait_for_previous_instance();
+    use_own_gstreamer_registry();
+    // A crash mid-recording can leave the virtual system-audio source behind.
+    std::thread::spawn(system_audio::remove_sources);
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(settings::SettingsLock::default())
@@ -58,7 +80,15 @@ pub fn run() {
             updater::native_update_check,
             updater::native_update_install,
             updater::native_update_progress,
+            system_audio::native_system_audio_status,
+            system_audio::native_system_audio_start,
+            system_audio::native_system_audio_stop,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                system_audio::remove_sources();
+            }
+        });
 }

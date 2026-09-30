@@ -2,6 +2,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import type { Meeting, RecordingMode, RecordingState } from '../domain/meeting';
 import { DUAL_TRACKS, estimateDurationFromChunks, formatDuration, newMeetingId } from '../domain/meeting';
 import { DeviceAudioSource } from '../audio/device-audio';
+import { SystemAudioSource, systemAudioStatus } from '../audio/system-audio';
+import type { SystemAudioStatus } from '../audio/system-audio';
 import { MicrophoneAudioSource } from '../audio/microphone';
 import { MediaRecorderAudioRecorder } from '../audio/recorder';
 import type { TrackSpec } from '../audio/recorder';
@@ -153,6 +155,11 @@ interface AppState {
   unfinished: Meeting[];
   recoverUnfinished: (id: string) => Promise<void>;
   discardUnfinished: (id: string) => Promise<void>;
+  /**
+   * Linux desktop: system audio is captured through the sound server (Device
+   * Audio / Two-way record what the computer plays, no screen picker).
+   */
+  systemAudio: SystemAudioStatus | null;
   /** The app database could not be opened (null when fine). */
   databaseError: string | null;
   /**
@@ -217,6 +224,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [calendarConfig, setCalendarConfigState] = useState<CalendarConfig>(DEFAULT_CALENDAR_CONFIG);
   const [unfinished, setUnfinished] = useState<Meeting[]>([]);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [systemAudio, setSystemAudio] = useState<SystemAudioStatus | null>(null);
   const [modelDownload, setModelDownload] = useState<{ name: string; received: number; total: number } | null>(null);
   const recorderRef = useRef<MediaRecorderAudioRecorder | null>(null);
   const timerRef = useRef<number | null>(null);
@@ -273,6 +281,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     window.addEventListener('hashchange', sync);
     return () => window.removeEventListener('hashchange', sync);
   }, [refresh]);
+
+  // Linux desktop: can Device Audio capture system sound directly?
+  useEffect(() => {
+    if (!isDesktopApp()) return;
+    void systemAudioStatus().then(setSystemAudio);
+  }, []);
 
   // Detect the desktop backend on mount.
   useEffect(() => {
@@ -373,14 +387,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       };
       // Two-way: capture the microphone and the device/system audio as separate
       // tracks at the same time (the Zoom case). Single-source modes stay flat.
+      // Linux desktop records system sound via the sound server; elsewhere
+      // the screen-share picker provides device audio.
+      const deviceSource = () => (systemAudio?.available ? new SystemAudioSource() : new DeviceAudioSource());
       const specs: TrackSpec[] =
         mode === 'speaker'
           ? [{ track: '', source: new MicrophoneAudioSource() }]
           : mode === 'device'
-            ? [{ track: '', source: new DeviceAudioSource() }]
+            ? [{ track: '', source: deviceSource() }]
             : [
                 { track: 'microphone', source: new MicrophoneAudioSource() },
-                { track: 'device', source: new DeviceAudioSource() },
+                { track: 'device', source: deviceSource() },
               ];
       const recorder = new MediaRecorderAudioRecorder();
       recorderRef.current = recorder;
@@ -426,7 +443,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
       await refresh();
     },
-    [go, refresh],
+    [go, refresh, systemAudio],
   );
 
   const pauseRecording = useCallback(async () => {
@@ -893,6 +910,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       discardUnfinished,
       databaseError,
       resetDatabase,
+      systemAudio,
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, activeMeeting,
@@ -905,7 +923,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
       updateInfo, checkUpdates,
       llmConfig, saveLlmConfig, summarizeMeeting,
-      unfinished, recoverUnfinished, discardUnfinished, databaseError, resetDatabase,
+      unfinished, recoverUnfinished, discardUnfinished, databaseError, resetDatabase, systemAudio,
     ],
   );
 

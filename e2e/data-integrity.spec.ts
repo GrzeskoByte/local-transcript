@@ -127,6 +127,8 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
         if (a.readyState >= 1) return res(true);
         a.onloadedmetadata = () => res(true);
         a.onerror = () => res(false);
+        // Players use preload="none": ask for the data like pressing play would.
+        a.load();
       }),
   );
   expect(playable).toBe(true);

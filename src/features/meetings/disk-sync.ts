@@ -1,3 +1,4 @@
+import { fileExtensionForMimeType } from '../../audio/formats';
 import type { Meeting } from '../../domain/meeting';
 import { segmentsToJSON, segmentsToMarkdown, segmentsToText } from '../../domain/transcript';
 import { readRecordingBlob } from '../../storage/recordings';
@@ -18,7 +19,7 @@ function folderName(meeting: Meeting): string {
 }
 
 function audioName(track: string, mimeType: string): string {
-  const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+  const ext = fileExtensionForMimeType(mimeType);
   return track ? `${track}.${ext}` : `audio.${ext}`;
 }
 
