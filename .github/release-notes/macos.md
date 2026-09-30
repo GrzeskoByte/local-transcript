@@ -13,9 +13,12 @@ Private, on-device meeting recorder and transcriber. Your audio never leaves you
 
 macOS 12 or later. macOS asks for microphone access the first time you record — click **Allow**.
 
-This early build is not notarized yet. If macOS blocks the first launch, open
-**System Settings → Privacy & Security** and click **Open Anyway**, or run:
-`xattr -dr com.apple.quarantine "/Applications/Local Transcribe.app"`
+This early build is not notarized yet, so macOS blocks the first launch:
+- *"cannot be opened because Apple cannot check it"* → open **System Settings → Privacy & Security**
+  and click **Open Anyway**.
+- *"is damaged and can't be opened"* (the file is fine — macOS says this about unnotarized
+  downloads) → run in Terminal, then open the app again:
+  `xattr -dr com.apple.quarantine "/Applications/Local Transcribe.app"`
 
 Verify: `shasum -a 256 <file>` and compare with `SHA256SUMS.txt`.
 Includes [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT).

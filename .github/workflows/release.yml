@@ -171,7 +171,11 @@ jobs:
                 echo "::warning::APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID not set — signed but not notarized."
               fi
             else
-              echo "::warning::APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY not set — macOS app is unsigned (Gatekeeper will block it)."
+              # Ad-hoc signature: an unsigned bundle is reported as "damaged" on
+              # Apple Silicon (no way past it but xattr); ad-hoc signed, macOS
+              # shows the "unidentified developer" prompt with Open Anyway.
+              export APPLE_SIGNING_IDENTITY="-"
+              echo "::warning::APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY not set — macOS app is ad-hoc signed only (not notarized)."
             fi
           fi
           if [ "${{ matrix.platform }}" = "ubuntu" ]; then
