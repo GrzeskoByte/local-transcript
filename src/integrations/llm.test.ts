@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_LLM_CONFIG,
   LLM_PRESETS,
+  claudeResumeCommand,
   createLlmClient,
   parseSummaryReply,
   summaryUserPrompt,
@@ -107,7 +108,7 @@ describe('LlmClient', () => {
 describe('LLM_PRESETS', () => {
   it('ships usable defaults for every preset', () => {
     for (const [id, p] of Object.entries(LLM_PRESETS)) {
-      if (id === 'custom' || id === 'opencode') continue;
+      if (id === 'custom' || id === 'opencode' || id === 'claude') continue;
       expect(p.baseUrl, id).toMatch(/^https?:\/\//);
     }
   });
@@ -131,5 +132,40 @@ describe('opencode preset', () => {
     const client = createLlmClient({ ...config, preset: 'opencode', baseUrl: '', model: 'opencode/x' });
     await expect(client.summarize('T', 'Hi.')).rejects.toThrow(/desktop app/i);
     await expect(client.testConnection()).rejects.toThrow(/desktop app/i);
+  });
+});
+
+describe('claude preset', () => {
+  const claude: LlmConfig = { ...config, preset: 'claude', baseUrl: '', model: 'opus' };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('requires a model but no base URL, and needs the desktop app', async () => {
+    expect(() => createLlmClient({ ...claude, model: '' })).toThrow(/model/i);
+    const client = createLlmClient(claude);
+    await expect(client.summarize('T', 'Hi.')).rejects.toThrow(/desktop app/i);
+    await expect(client.testConnection()).rejects.toThrow(/desktop app/i);
+  });
+
+  it('summarizes through Claude Code and keeps the session id', async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    vi.stubGlobal('window', {
+      __TAURI_INTERNALS__: {
+        invoke: async (cmd: string, args: unknown) => {
+          calls.push({ cmd, args });
+          return { text: '# Summary\nShipped.\n# Key points\n- Launch Friday', sessionId: 'sess-1' };
+        },
+      },
+    });
+    const result = await createLlmClient(claude).summarize('Standup', '**Alice:** launch Friday');
+    expect(result).toEqual({ summary: 'Shipped.', keyPoints: ['Launch Friday'], sessionId: 'sess-1' });
+    expect(calls[0]?.cmd).toBe('native_claude_summarize');
+    const request = (calls[0]?.args as { request: Record<string, string> }).request;
+    expect(request.model).toBe('opus');
+    expect(request.transcript).toContain('launch Friday');
+    expect(request.title).toContain('Standup');
+  });
+
+  it('builds the resume command', () => {
+    expect(claudeResumeCommand('abc')).toBe('cd ~ && claude --resume abc');
   });
 });

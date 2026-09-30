@@ -10,7 +10,14 @@ import {
 import { CheckIcon, GearIcon } from '../components/icons.tsx';
 import { GITLAB_TARGET_LABELS, createGitlabClient, parseProjectUrl } from '../../integrations/gitlab';
 import type { GitlabTarget } from '../../integrations/gitlab';
-import { LLM_PRESETS, LLM_PRESET_LABELS, createLlmClient, getOpencodeStatus } from '../../integrations/llm';
+import {
+  LLM_PRESETS,
+  LLM_PRESET_LABELS,
+  createLlmClient,
+  getClaudeStatus,
+  getOpencodeStatus,
+  isLocalAgentPreset,
+} from '../../integrations/llm';
 import type { LlmPreset } from '../../integrations/llm';
 import {
   CALENDAR_PROVIDER_LABELS,
@@ -95,8 +102,9 @@ export function Settings(): React.JSX.Element {
   const [llmDraft, setLlmDraft] = useState(llmConfig);
   const [llmBusy, setLlmBusy] = useState(false);
   const [llmMessage, setLlmMessage] = useState<string | null>(null);
-  const [opencodeModels, setOpencodeModels] = useState<string[] | null>(null);
-  const [opencodeModelsError, setOpencodeModelsError] = useState<string | null>(null);
+  // Model list of a local agent CLI preset (OpenCode / Claude Code).
+  const [agentModels, setAgentModels] = useState<string[] | null>(null);
+  const [agentModelsError, setAgentModelsError] = useState<string | null>(null);
 
   const secure = isSecureMediaContext();
 
@@ -108,39 +116,44 @@ export function Settings(): React.JSX.Element {
   }, [secure]);
 
   useEffect(() => {
-    if (llmDraft.preset !== 'opencode') {
-      setOpencodeModels(null);
-      setOpencodeModelsError(null);
+    const preset = llmDraft.preset;
+    if (!isLocalAgentPreset(preset)) {
+      setAgentModels(null);
+      setAgentModelsError(null);
       return;
     }
+    const name = preset === 'claude' ? 'Claude Code' : 'OpenCode';
     if (!isDesktopApp()) {
-      setOpencodeModels([]);
-      setOpencodeModelsError('The OpenCode provider needs the desktop app.');
+      setAgentModels([]);
+      setAgentModelsError(`The ${name} provider needs the desktop app.`);
       return;
     }
-    setOpencodeModels(null);
-    setOpencodeModelsError(null);
-    getOpencodeStatus()
+    setAgentModels(null);
+    setAgentModelsError(null);
+    const status = preset === 'claude' ? getClaudeStatus() : getOpencodeStatus();
+    status
       .then((s) => {
         if (!s.available) {
-          setOpencodeModels([]);
-          setOpencodeModelsError('OpenCode CLI not found. Install it from opencode.ai.');
+          setAgentModels([]);
+          setAgentModelsError(
+            preset === 'claude'
+              ? 'Claude Code CLI not found. Install it from claude.com/claude-code and run `claude` once to log in.'
+              : 'OpenCode CLI not found. Install it from opencode.ai.',
+          );
           return;
         }
-        setOpencodeModels(s.models);
+        setAgentModels(s.models);
         if (s.models.length === 0) {
-          setOpencodeModelsError('No OpenCode models reported. Check `opencode models`.');
+          setAgentModelsError('No OpenCode models reported. Check `opencode models`.');
         }
         const first = s.models[0];
         if (first) {
-          setLlmDraft((d) =>
-            d.preset === 'opencode' && !d.model.trim() ? { ...d, model: first } : d,
-          );
+          setLlmDraft((d) => (d.preset === preset && !d.model.trim() ? { ...d, model: first } : d));
         }
       })
       .catch((e: unknown) => {
-        setOpencodeModels([]);
-        setOpencodeModelsError(e instanceof Error ? e.message : String(e));
+        setAgentModels([]);
+        setAgentModelsError(e instanceof Error ? e.message : String(e));
       });
   }, [llmDraft.preset]);
 
@@ -877,7 +890,8 @@ export function Settings(): React.JSX.Element {
         <div className="muted">
           Optional summarization of transcripts. Local Ollama stays on this device;
           API keys and Open WebUI send transcript text to that service.
-          OpenCode runs headless on this machine with your OpenCode login.
+          OpenCode and Claude Code run headless on this machine with your own login;
+          Claude Code sends the transcript to Anthropic.
         </div>
         <label className="field-label" htmlFor="llm-preset">Provider</label>
         <select
@@ -900,7 +914,7 @@ export function Settings(): React.JSX.Element {
             <option key={p} value={p}>{LLM_PRESET_LABELS[p]}</option>
           ))}
         </select>
-        {llmDraft.preset !== 'opencode' && (
+        {!isLocalAgentPreset(llmDraft.preset) && (
           <>
             <label className="field-label" htmlFor="llm-base">Base URL</label>
             <input
@@ -937,19 +951,26 @@ export function Settings(): React.JSX.Element {
             Pick a model below.
           </div>
         )}
+        {llmDraft.preset === 'claude' && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            Uses the Claude Code CLI on this machine with your Claude login — no URL or key
+            needed. Each summary is saved as a Claude Code session you can continue with{' '}
+            <code>claude --resume</code>.
+          </div>
+        )}
         <label className="field-label" htmlFor="llm-model">Model</label>
-        {llmDraft.preset === 'opencode' && opencodeModels !== null && opencodeModels.length > 0 ? (
+        {isLocalAgentPreset(llmDraft.preset) && agentModels !== null && agentModels.length > 0 ? (
           <select
             id="llm-model"
             className="input"
-            aria-label="OpenCode model"
-            value={opencodeModels.includes(llmDraft.model.trim()) ? llmDraft.model : ''}
+            aria-label="Agent model"
+            value={agentModels.includes(llmDraft.model.trim()) ? llmDraft.model : ''}
             onChange={(e) => setLlmDraft({ ...llmDraft, model: e.target.value })}
           >
-            {!opencodeModels.includes(llmDraft.model.trim()) && (
+            {!agentModels.includes(llmDraft.model.trim()) && (
               <option value="">{llmDraft.model.trim() ? `${llmDraft.model} (saved)` : 'Select a model…'}</option>
             )}
-            {opencodeModels.map((m) => (
+            {agentModels.map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
           </select>
@@ -959,15 +980,15 @@ export function Settings(): React.JSX.Element {
             className="input"
             value={llmDraft.model}
             onChange={(e) => setLlmDraft({ ...llmDraft, model: e.target.value })}
-            placeholder={llmDraft.preset === 'opencode' ? 'Loading OpenCode models…' : 'llama3.1'}
-            disabled={llmDraft.preset === 'opencode' && opencodeModels === null}
+            placeholder={isLocalAgentPreset(llmDraft.preset) ? 'Loading models…' : 'llama3.1'}
+            disabled={isLocalAgentPreset(llmDraft.preset) && agentModels === null}
           />
         )}
-        {llmDraft.preset === 'opencode' && opencodeModels === null && !opencodeModelsError && (
-          <div className="muted small">Loading OpenCode models…</div>
+        {isLocalAgentPreset(llmDraft.preset) && agentModels === null && !agentModelsError && (
+          <div className="muted small">Loading models…</div>
         )}
-        {llmDraft.preset === 'opencode' && opencodeModelsError && (
-          <div className="warn small" role="alert">{opencodeModelsError}</div>
+        {isLocalAgentPreset(llmDraft.preset) && agentModelsError && (
+          <div className="warn small" role="alert">{agentModelsError}</div>
         )}
         {llmMessage && <p className="muted small" style={{ marginBottom: 0 }}>{llmMessage}</p>}
         <div className="btn-row">

@@ -14,6 +14,7 @@ import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { extractEventDraft } from '../../integrations/calendar';
 import type { CalendarEventDraft } from '../../integrations/calendar';
+import { claudeResumeCommand } from '../../integrations/llm';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 
 export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
@@ -340,6 +341,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               </ul>
             </>
           )}
+          {m.summary.sessionId && <ClaudeSessionHint sessionId={m.summary.sessionId} />}
         </section>
       )}
 
@@ -672,5 +674,29 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
         </div>
       </div>
     </>
+  );
+}
+
+/** Summary made by the Claude Code provider: how to continue its session. */
+function ClaudeSessionHint({ sessionId }: { sessionId: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const command = claudeResumeCommand(sessionId);
+  return (
+    <p className="muted small" style={{ marginBottom: 0 }}>
+      Ask follow-up questions in Claude Code:{' '}
+      <code style={{ userSelect: 'all' }}>{command}</code>{' '}
+      <button
+        type="button"
+        className="link-btn"
+        onClick={() => {
+          void navigator.clipboard
+            ?.writeText(command)
+            .then(() => setCopied(true))
+            .catch(() => setCopied(false));
+        }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </p>
   );
 }

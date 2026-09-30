@@ -74,8 +74,8 @@ export interface Meeting {
   agenda?: MeetingAgenda;
   /** Last GitLab agenda upload of this meeting, if any. */
   gitlabAgenda?: { url: string; target: string; uploadedAt: number };
-  /** LLM-generated summary + key points, if any. */
-  summary?: { text: string; keyPoints: string[]; model: string; createdAt: number };
+  /** LLM summary; `sessionId` = Claude Code session that produced it. */
+  summary?: { text: string; keyPoints: string[]; model: string; createdAt: number; sessionId?: string };
   /** Last calendar event created from this meeting, if any. */
   calendarEvent?: { provider: string; createdAt: number };
   /** Every calendar event created from this meeting (newest last). */

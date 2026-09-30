@@ -16,11 +16,23 @@
  * user's own OpenCode CLI (`opencode run`, headless) through the Tauri
  * sidecar (`src-tauri/src/opencode.rs`), so it uses the models and login
  * already configured in OpenCode. Desktop-only.
+ *
+ * The `claude` preset works the same way with the user's Claude Code CLI
+ * (`claude -p`, `src-tauri/src/claude_code.rs`): their Claude login, no API
+ * key. Each summary is saved as a Claude Code session whose id is kept on the
+ * summary, so the user can continue with `claude --resume <id>`.
  */
 
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
 
-export type LlmPreset = 'openai' | 'ollama' | 'openwebui' | 'opencode' | 'custom';
+export type LlmPreset = 'openai' | 'ollama' | 'openwebui' | 'opencode' | 'claude' | 'custom';
+
+/** Presets that run a local agent CLI instead of an HTTP endpoint. */
+export const LOCAL_AGENT_PRESETS: readonly LlmPreset[] = ['opencode', 'claude'];
+
+export function isLocalAgentPreset(preset: LlmPreset): boolean {
+  return LOCAL_AGENT_PRESETS.includes(preset);
+}
 
 export interface LlmConfig {
   preset: LlmPreset;
@@ -38,6 +50,7 @@ export const LLM_PRESETS: Record<LlmPreset, { label: string; baseUrl: string; mo
   ollama: { label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1', model: 'llama3.1' },
   openwebui: { label: 'Open WebUI', baseUrl: 'http://localhost:8080/api/v1', model: '' },
   opencode: { label: 'OpenCode (local agent)', baseUrl: '', model: '' },
+  claude: { label: 'Claude Code (local agent)', baseUrl: '', model: 'opus' },
   custom: { label: 'Custom', baseUrl: '', model: '' },
 };
 
@@ -46,6 +59,7 @@ export const LLM_PRESET_LABELS: Record<LlmPreset, string> = {
   ollama: 'Ollama (local)',
   openwebui: 'Open WebUI',
   opencode: 'OpenCode (local agent)',
+  claude: 'Claude Code (local agent)',
   custom: 'Custom',
 };
 
@@ -62,11 +76,14 @@ export interface MeetingSummary {
   keyPoints: string[];
   model: string;
   createdAt: number;
+  /** Claude Code session that produced it (`claude --resume <id>`). */
+  sessionId?: string;
 }
 
 export interface LlmSummaryResult {
   summary: string;
   keyPoints: string[];
+  sessionId?: string;
 }
 
 const SUMMARY_SYSTEM = [
@@ -134,6 +151,11 @@ export class LlmClient {
       }
       return { models: status.models };
     }
+    if (this.config.preset === 'claude') {
+      const status = await getClaudeStatus();
+      if (!status.available) throw new Error(CLAUDE_NOT_FOUND);
+      return { models: status.models };
+    }
     const data = (await this.post({
       model: this.config.model.trim(),
       messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
@@ -149,6 +171,9 @@ export class LlmClient {
   async summarize(title: string, transcriptMarkdown: string): Promise<LlmSummaryResult> {
     if (this.config.preset === 'opencode') {
       return this.summarizeViaOpencode(title, transcriptMarkdown);
+    }
+    if (this.config.preset === 'claude') {
+      return this.summarizeViaClaude(title, transcriptMarkdown);
     }
     const data = (await this.post({
       model: this.config.model.trim(),
@@ -185,6 +210,49 @@ export class LlmClient {
     if (!text.trim()) throw new Error('OpenCode returned an empty reply');
     return parseSummaryReply(text);
   }
+
+  private async summarizeViaClaude(
+    title: string,
+    transcriptMarkdown: string,
+  ): Promise<LlmSummaryResult> {
+    if (!isDesktopApp()) throw new Error('The Claude Code provider needs the desktop app.');
+    // The transcript is piped on stdin; the argument carries the instruction.
+    const result = await invokeDesktop<{ text: string; sessionId: string | null }>(
+      'native_claude_summarize',
+      {
+        request: {
+          model: this.config.model.trim(),
+          system: SUMMARY_SYSTEM,
+          message: `Summarize the meeting "${title || 'Untitled'}". Its transcript is attached below.`,
+          transcript: summaryUserPrompt(title, transcriptMarkdown),
+          title: `Meeting summary: ${title || 'Untitled'}`,
+        },
+      },
+    );
+    if (!result.text.trim()) throw new Error('Claude Code returned an empty reply');
+    return { ...parseSummaryReply(result.text), sessionId: result.sessionId ?? undefined };
+  }
+}
+
+const CLAUDE_NOT_FOUND =
+  'Claude Code CLI not found. Install it from claude.com/claude-code and run `claude` once to log in.';
+
+export interface ClaudeStatus {
+  available: boolean;
+  binaryPath: string | null;
+  version: string | null;
+  /** `--model` aliases (opus, sonnet, …); full model names also work. */
+  models: string[];
+}
+
+export async function getClaudeStatus(): Promise<ClaudeStatus> {
+  if (!isDesktopApp()) throw new Error('The Claude Code provider needs the desktop app.');
+  return invokeDesktop<ClaudeStatus>('native_claude_status');
+}
+
+/** Terminal command that reopens a summary's Claude Code session. */
+export function claudeResumeCommand(sessionId: string): string {
+  return `cd ~ && claude --resume ${sessionId}`;
 }
 
 export interface OpencodeStatus {
@@ -202,7 +270,7 @@ export async function getOpencodeStatus(): Promise<OpencodeStatus> {
 
 /** Convenience factory that validates the config first. */
 export function createLlmClient(config: LlmConfig): LlmClient {
-  if (config.preset === 'opencode') {
+  if (isLocalAgentPreset(config.preset)) {
     if (!config.model?.trim()) throw new Error('LLM settings incomplete: model');
     return new LlmClient(config);
   }

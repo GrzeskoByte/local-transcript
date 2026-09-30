@@ -8,7 +8,7 @@ import { DEFAULT_LLM_CONFIG, type LlmConfig, type LlmPreset } from './llm';
 
 const LLM_CONFIG_KEY = 'llm-config';
 
-const PRESETS: LlmPreset[] = ['openai', 'ollama', 'openwebui', 'opencode', 'custom'];
+const PRESETS: LlmPreset[] = ['openai', 'ollama', 'openwebui', 'opencode', 'claude', 'custom'];
 
 /** Read the stored config, falling back to defaults field by field. */
 export async function getLlmConfig(): Promise<LlmConfig> {

@@ -58,14 +58,14 @@ fn discover_opencode() -> Option<PathBuf> {
     None
 }
 
-fn first_line(text: &str) -> Option<String> {
+pub(crate) fn first_line(text: &str) -> Option<String> {
     text.lines()
         .map(|l| l.trim())
         .find(|l| !l.is_empty())
         .map(|s| s.to_string())
 }
 
-fn quick_output(bin: &PathBuf, args: &[&str]) -> Option<String> {
+pub(crate) fn quick_output(bin: &PathBuf, args: &[&str]) -> Option<String> {
     // Bounded wait: these are local informational commands, but `service
     // status` can block if the background service is wedged — never hang
     // the Settings "Test connection" button forever.
@@ -174,7 +174,7 @@ impl Drop for TempTranscript {
     }
 }
 
-fn strip_ansi(input: &str) -> String {
+pub(crate) fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {

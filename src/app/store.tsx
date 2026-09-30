@@ -633,6 +633,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         keyPoints: result.keyPoints,
         model: llmConfig.model.trim(),
         createdAt: Date.now(),
+        ...(result.sessionId ? { sessionId: result.sessionId } : {}),
       };
       const updated = await updateMeeting(meetingId, { summary });
       if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
