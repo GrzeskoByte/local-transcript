@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { extensionForMimeType, pickSupportedMimeType } from './formats';
+import { extensionForMimeType, fileExtensionForMimeType, pickSupportedMimeType } from './formats';
 
 function withRecorder(supported: string[]): void {
   (globalThis as unknown as { MediaRecorder: unknown }).MediaRecorder = {
@@ -30,5 +30,17 @@ describe('pickSupportedMimeType', () => {
 
   it('returns empty when MediaRecorder is missing', () => {
     expect(pickSupportedMimeType()).toBe('');
+  });
+});
+
+describe('fileExtensionForMimeType', () => {
+  it('names imported and recorded audio by its real container', () => {
+    expect(fileExtensionForMimeType('audio/vnd.wave')).toBe('wav');
+    expect(fileExtensionForMimeType('audio/wav')).toBe('wav');
+    expect(fileExtensionForMimeType('audio/flac')).toBe('flac');
+    expect(fileExtensionForMimeType('audio/mpeg')).toBe('mp3');
+    expect(fileExtensionForMimeType('audio/x-m4a')).toBe('m4a');
+    expect(fileExtensionForMimeType('audio/mp4;codecs=opus')).toBe('mp4');
+    expect(fileExtensionForMimeType('audio/webm;codecs=opus')).toBe('webm');
   });
 });

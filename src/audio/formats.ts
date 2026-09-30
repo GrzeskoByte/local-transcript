@@ -28,6 +28,20 @@ export function pickSupportedMimeType(): string {
   return '';
 }
 
+/**
+ * Extension for files the user sees (disk mirror, audio export). Unlike
+ * `extensionForMimeType` (OPFS chunk names — must stay stable) it also knows
+ * the containers imported files arrive in.
+ */
+export function fileExtensionForMimeType(mime: string): string {
+  const m = mime.toLowerCase();
+  if (m.includes('wav') || m.includes('wave')) return 'wav';
+  if (m.includes('flac')) return 'flac';
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
+  if (m.includes('x-m4a') || m.includes('aac')) return 'm4a';
+  return extensionForMimeType(mime);
+}
+
 export function extensionForMimeType(mime: string): string {
   if (mime.includes('mp4')) return 'mp4';
   if (mime.includes('ogg')) return 'ogg';
