@@ -89,9 +89,12 @@ test('an unplugged microphone stops cleanly and keeps what was recorded', async 
   await startSpeakerRecording(page, 'Unplugged mic', () => {
     const w = window as unknown as { __streams: MediaStream[] };
     w.__streams = [];
-    const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    navigator.mediaDevices.getUserMedia = async (constraints) => {
-      const stream = await original(constraints);
+    // Patch the prototype: WebKit ignores an own-property override on
+    // navigator.mediaDevices.
+    const proto = MediaDevices.prototype;
+    const original = proto.getUserMedia;
+    proto.getUserMedia = async function (this: MediaDevices, constraints?: MediaStreamConstraints) {
+      const stream = await original.call(this, constraints);
       w.__streams.push(stream);
       return stream;
     };
