@@ -1,0 +1,3 @@
+# LF everywhere: Windows runners check out CRLF otherwise, which breaks shell
+# scripts (scripts/*.sh run under bash there) and module parsing in tests.
+* text=auto eol=lf

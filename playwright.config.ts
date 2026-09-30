@@ -30,7 +30,7 @@ export default defineConfig({
     {
       name: 'webkit',
       testMatch: /recording-reliability\.spec\.ts|data-integrity\.spec\.ts/,
-      use: { ...devices['Desktop Safari'] },
+      use: { ...devices['Desktop Safari'], permissions: ['microphone'] },
     },
   ],
 });
