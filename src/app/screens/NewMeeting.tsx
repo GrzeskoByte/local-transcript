@@ -10,7 +10,9 @@ import {
 } from '../../audio/permissions.ts';
 
 export function NewMeeting(): React.JSX.Element {
-  const { startRecording, importMeeting, storageWarning, go } = useApp();
+  const { startRecording, importMeeting, storageWarning, go, systemAudio } = useApp();
+  // Linux desktop: device audio comes straight from the sound server.
+  const directSystemAudio = systemAudio?.available === true;
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState<RecordingMode>('speaker');
   const [error, setError] = useState<MediaAccessFailure | string | null>(null);
@@ -93,7 +95,11 @@ export function NewMeeting(): React.JSX.Element {
               <MonitorIcon />
             </span>
             <strong>Device Audio</strong>
-            <small>Sound from a shared browser tab or window. Availability varies by OS &amp; browser.</small>
+            <small>
+              {directSystemAudio
+                ? 'Everything your computer plays — call audio, videos. Recorded directly, no screen sharing.'
+                : 'Sound from a shared browser tab or window. Availability varies by OS & browser.'}
+            </small>
           </button>
           <button
             type="button"
@@ -111,9 +117,10 @@ export function NewMeeting(): React.JSX.Element {
 
         {mode === 'dual' && (
           <p className="muted" style={{ marginTop: 10 }}>
-            You will be asked to pick a screen or window to share — choose the meeting window
-            (or the whole screen) and enable “Share audio”. Wear headphones so your microphone
-            doesn’t re-record the other participants.
+            {directSystemAudio
+              ? 'Records your microphone and everything your computer plays (e.g. the call) as two tracks. '
+              : 'You will be asked to pick a screen or window to share — choose the meeting window (or the whole screen) and enable “Share audio”. '}
+            Wear headphones so your microphone doesn’t re-record the other participants.
           </p>
         )}
 
