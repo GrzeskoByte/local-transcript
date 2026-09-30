@@ -53,6 +53,16 @@ jobs:
       - name: Install ${{ matrix.project }}
         run: npx playwright install --with-deps ${{ matrix.project }}
 
+      # WebKitGTK captures/records through GStreamer: without these plugins
+      # starting a recording fails with an UnknownError (the AppImage bundles
+      # the same set, see scripts/gst-plugins.sh).
+      - name: GStreamer plugins for WebKit recording
+        if: matrix.os == 'ubuntu-latest' && matrix.project == 'webkit'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-libav
+
       - name: Build
         run: npm run build
 
