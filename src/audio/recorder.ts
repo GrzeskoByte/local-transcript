@@ -159,6 +159,10 @@ export class MediaRecorderAudioRecorder {
         mimeType: baseMime,
         startedAt,
         tracks: specs.map((s) => s.track),
+      }).catch((err: unknown) => {
+        // Storage that cannot even be opened: say so, not a raw DOMException.
+        const cause = err instanceof Error ? err.message : String(err);
+        throw new Error(`The recording could not be saved to this device's storage (${cause}).`);
       });
       specs.forEach((spec, i) => {
         const stream = streams[i]!;
