@@ -8,10 +8,13 @@ import {
   NATIVE_LANGUAGE_OPTIONS,
 } from '../../asr/model-manager';
 import { searchSegments } from '../../domain/transcript';
-import { exportAudio, exportTranscript } from '../../features/meetings/exports';
+import { exportAgenda, exportAudio, exportTranscript } from '../../features/meetings/exports';
+import { AgendaEditor, AgendaList } from '../components/Agenda.tsx';
+import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { extractEventDraft } from '../../integrations/calendar';
 import type { CalendarEventDraft } from '../../integrations/calendar';
+import { claudeResumeCommand } from '../../integrations/llm';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 
 export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
@@ -20,6 +23,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
     txProgress, txStage, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta,
     selectModel, language, setLanguage, nativeStatus, installedModels,
     uploadToGitlab, uploadSummaryToGitlab, summarizeMeeting, createCalendarEvent,
+    saveAgenda, uploadAgendaToGitlab,
   } = useApp();
   const [error, setError] = useState<string | null>(null);
   const [gitlabBusy, setGitlabBusy] = useState(false);
@@ -29,6 +33,9 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const [calDraft, setCalDraft] = useState<CalendarEventDraft | null>(null);
   const [calBusy, setCalBusy] = useState(false);
   const [calMessage, setCalMessage] = useState<string | null>(null);
+  /** Agenda being edited (null = viewing). */
+  const [agendaDraft, setAgendaDraft] = useState<AgendaItem[] | null>(null);
+  const [agendaBusy, setAgendaBusy] = useState(false);
 
   /** Desktop webview swallows target="_blank": open GitLab links externally. */
   const openGitlabLink = (e: React.MouseEvent, url: string): void => {
@@ -40,18 +47,10 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   };
 
   useEffect(() => {
+    setAgendaDraft(null);
     void loadDetail(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  // Only installed models are offered, so realign the selection if the active
-  // model is no longer installed.
-  useEffect(() => {
-    if (installedModels.length === 0) return;
-    if (!installedModels.some((opt) => opt.id === modelMeta.modelId)) {
-      void selectModel(installedModels[0]!.id);
-    }
-  }, [installedModels, modelMeta.modelId, selectModel]);
 
   if (!detailMeeting) return <p className="muted">Loading…</p>;
   const m = detailMeeting;
@@ -121,6 +120,58 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               </label>
             ))}
           </div>
+        )}
+      </section>
+
+      <section className="card" aria-label="Meeting agenda">
+        <div className="model-title" style={{ marginBottom: 4 }}>
+          <strong>Agenda</strong>
+          {m.agenda && <span className="badge">{m.agenda.items.length} topics</span>}
+        </div>
+        {agendaDraft ? (
+          <>
+            <AgendaEditor items={agendaDraft} onChange={setAgendaDraft} />
+            <div className="btn-row">
+              <button
+                className="btn btn-primary"
+                disabled={agendaBusy}
+                onClick={() => {
+                  setAgendaBusy(true);
+                  setError(null);
+                  saveAgenda(m.id, agendaDraft)
+                    .then(() => setAgendaDraft(null))
+                    .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                    .finally(() => setAgendaBusy(false));
+                }}
+              >
+                {agendaBusy ? 'Saving…' : 'Save agenda'}
+              </button>
+              <button className="btn" disabled={agendaBusy} onClick={() => setAgendaDraft(null)}>
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : m.agenda?.items.length ? (
+          <>
+            <AgendaList items={m.agenda.items} />
+            <div className="btn-row">
+              <button className="btn" onClick={() => setAgendaDraft(m.agenda?.items ?? [])}>
+                Edit agenda
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Plan the topics for this meeting. The agenda is included in transcript exports and can be
+              uploaded to GitLab.
+            </p>
+            <div className="btn-row" style={{ marginTop: 0 }}>
+              <button className="btn" onClick={() => setAgendaDraft([newAgendaItem()])}>
+                Create agenda
+              </button>
+            </div>
+          </>
         )}
       </section>
 
@@ -290,6 +341,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               </ul>
             </>
           )}
+          {m.summary.sessionId && <ClaudeSessionHint sessionId={m.summary.sessionId} />}
         </section>
       )}
 
@@ -500,6 +552,28 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           >
             {gitlabBusy ? 'Uploading…' : 'Upload summary'}
           </button>
+          <button
+            className="btn"
+            disabled={gitlabBusy || !m.agenda?.items.length}
+            title={
+              m.agenda?.items.length
+                ? 'Publish the agenda to GitLab (agenda.md, wiki page or issue)'
+                : 'Create an agenda first'
+            }
+            onClick={() => {
+              setGitlabBusy(true);
+              setGitlabMessage(null);
+              uploadAgendaToGitlab(m.id)
+                .then((r) => setGitlabMessage(`Agenda published to GitLab (${r.target}).`))
+                .catch((e: unknown) => {
+                  setGitlabMessage(null);
+                  setError(e instanceof Error ? e.message : String(e));
+                })
+                .finally(() => setGitlabBusy(false));
+            }}
+          >
+            {gitlabBusy ? 'Uploading…' : 'Upload agenda'}
+          </button>
           {m.gitlab?.url ? (
             <a
               className="btn"
@@ -528,11 +602,27 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               Open summary in GitLab
             </a>
           )}
+          {m.gitlabAgenda?.url && (
+            <a
+              className="btn"
+              href={m.gitlabAgenda.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => openGitlabLink(e, m.gitlabAgenda?.url ?? '')}
+            >
+              Open agenda in GitLab
+            </a>
+          )}
         </div>
         {gitlabMessage && <p className="muted small" style={{ marginBottom: 0 }}>{gitlabMessage}</p>}
         {m.gitlab && (
           <p className="muted small" style={{ marginBottom: 0 }}>
             Last upload: {new Date(m.gitlab.uploadedAt).toLocaleString()} · {m.gitlab.target}
+          </p>
+        )}
+        {m.gitlabAgenda && (
+          <p className="muted small" style={{ marginBottom: 0 }}>
+            Last agenda upload: {new Date(m.gitlabAgenda.uploadedAt).toLocaleString()} · {m.gitlabAgenda.target}
           </p>
         )}
         {m.gitlabSummary && (
@@ -550,6 +640,20 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           <button className="btn" onClick={() => void exportTranscript(m.id, 'json')}>
             JSON
           </button>
+          {m.agenda?.items.length ? (
+            <button
+              className="btn"
+              onClick={() => {
+                try {
+                  exportAgenda(m);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                }
+              }}
+            >
+              Agenda
+            </button>
+          ) : null}
           <button
             className="btn"
             onClick={() => exportAudio(m).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}
@@ -570,5 +674,29 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
         </div>
       </div>
     </>
+  );
+}
+
+/** Summary made by the Claude Code provider: how to continue its session. */
+function ClaudeSessionHint({ sessionId }: { sessionId: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const command = claudeResumeCommand(sessionId);
+  return (
+    <p className="muted small" style={{ marginBottom: 0 }}>
+      Ask follow-up questions in Claude Code:{' '}
+      <code style={{ userSelect: 'all' }}>{command}</code>{' '}
+      <button
+        type="button"
+        className="link-btn"
+        onClick={() => {
+          void navigator.clipboard
+            ?.writeText(command)
+            .then(() => setCopied(true))
+            .catch(() => setCopied(false));
+        }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </p>
   );
 }

@@ -1,0 +1,67 @@
+name: E2E
+
+# Recording must work on every platform the desktop app ships to. The shells
+# embed different engines, so the browser suite runs on each OS with the
+# closest engine: Chromium ≈ WebView2 (Windows), WebKit ≈ WKWebView (macOS).
+# The webkit project runs the recording specs only (see playwright.config.ts).
+# No Linux WebKit job: Playwright's Linux WebKit build ships without
+# MediaRecorder, so the AppImage (WebKitGTK) is validated on the real bundle.
+on:
+  push:
+    branches: ['**']
+    paths: ['src/**', 'e2e/**', 'playwright.config.ts', 'package*.json', 'vite.config.ts', '.github/workflows/e2e.yml']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: ${{ matrix.os }} · ${{ matrix.project }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, project: chromium }
+          - { os: macos-latest, project: chromium }
+          - { os: macos-latest, project: webkit }
+          - { os: windows-latest, project: chromium }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        # bash everywhere: pwsh would only check the last command's exit code.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JS dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck + unit tests
+        run: |
+          npx tsc --noEmit
+          npx vitest run
+
+      - name: Install ${{ matrix.project }}
+        run: npx playwright install --with-deps ${{ matrix.project }}
+
+      - name: Build
+        run: npm run build
+
+      - name: Playwright (${{ matrix.project }})
+        run: npx playwright test --project=${{ matrix.project }} --reporter=line
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-${{ matrix.os }}-${{ matrix.project }}
+          path: test-results/
+          retention-days: 7

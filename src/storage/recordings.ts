@@ -2,7 +2,10 @@
  * OPFS recording storage (§14). Layout:
  *   single-track: meetings/{id}/{chunk}      + meetings/{id}/meta.json
  *   two-way:      meetings/{id}/{track}/{chunk} + meetings/{id}/meta.json
- * Falls back to an in-memory map when OPFS is unavailable (tests, some browsers).
+ * Files are written with `createWritable()` or, where the engine lacks it
+ * (WKWebView before Safari 26), through a worker using sync access handles.
+ * Without OPFS at all, recording is refused in a browser/webview (audio would
+ * only live in memory); the in-memory map below serves Node unit tests.
  */
 export interface RecordingMeta {
   mimeType: string;
@@ -20,6 +23,75 @@ function memKey(id: string, track: string, name: string): string {
 
 function hasOPFS(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
+}
+
+/**
+ * Throws when recordings could not be stored durably. Only Node (unit tests)
+ * may use the in-memory fallback — in a webview it would report audio as
+ * saved that is gone after a restart (§19).
+ */
+export function assertDurableStorage(): void {
+  if (hasOPFS() || typeof window === 'undefined') return;
+  throw new Error(
+    'This system cannot store recordings safely (the app’s private file storage is unavailable). ' +
+      'Update your operating system or its web engine, then try again.',
+  );
+}
+
+function hasCreateWritable(): boolean {
+  return (
+    typeof FileSystemFileHandle !== 'undefined' &&
+    typeof (FileSystemFileHandle.prototype as { createWritable?: unknown }).createWritable === 'function'
+  );
+}
+
+type WriteReply = { id: number; ok: boolean; error?: string };
+let writer: Worker | null = null;
+let nextWriteId = 0;
+const waiting = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
+
+function opfsWorker(): Worker {
+  if (writer) return writer;
+  const w = new Worker(new URL('./opfs-writer.worker.ts', import.meta.url), { type: 'module' });
+  w.onmessage = (event: MessageEvent<WriteReply>) => {
+    const entry = waiting.get(event.data.id);
+    if (!entry) return;
+    waiting.delete(event.data.id);
+    if (event.data.ok) entry.resolve();
+    else entry.reject(new Error(event.data.error ?? 'OPFS write failed'));
+  };
+  w.onerror = (event) => {
+    // A worker that cannot load/run fails every queued write; the next write
+    // starts a fresh one.
+    const error = new Error(`OPFS writer failed: ${event.message || 'worker error'}`);
+    for (const entry of waiting.values()) entry.reject(error);
+    waiting.clear();
+    writer = null;
+    w.terminate();
+  };
+  writer = w;
+  return w;
+}
+
+/** Write (replace) one OPFS file at `path` (below the OPFS root). */
+async function writeOpfsFile(path: string[], data: Blob | string): Promise<void> {
+  const blob = typeof data === 'string' ? new Blob([data], { type: 'application/json' }) : data;
+  if (!hasCreateWritable()) {
+    const id = nextWriteId++;
+    await new Promise<void>((resolve, reject) => {
+      waiting.set(id, { resolve, reject });
+      opfsWorker().postMessage({ id, path, data: blob });
+    });
+    return;
+  }
+  let dir = await navigator.storage.getDirectory();
+  for (const segment of path.slice(0, -1)) {
+    dir = await dir.getDirectoryHandle(segment, { create: true });
+  }
+  const file = await dir.getFileHandle(path[path.length - 1]!, { create: true });
+  const writable = await file.createWritable();
+  await writable.write(blob);
+  await writable.close();
 }
 
 async function meetingDir(id: string, create: boolean): Promise<FileSystemDirectoryHandle | null> {
@@ -42,12 +114,7 @@ async function trackDir(
 
 export async function writeMeta(id: string, meta: RecordingMeta): Promise<void> {
   if (!hasOPFS()) return;
-  const dir = await meetingDir(id, true);
-  if (!dir) return;
-  const file = await dir.getFileHandle('meta.json', { create: true });
-  const writable = await file.createWritable();
-  await writable.write(JSON.stringify(meta));
-  await writable.close();
+  await writeOpfsFile(['meetings', id, 'meta.json'], JSON.stringify(meta));
 }
 
 export async function readMeta(id: string): Promise<RecordingMeta | null> {
@@ -76,12 +143,7 @@ export async function appendChunk(
     return;
   }
   try {
-    const dir = await trackDir(id, track, true);
-    if (!dir) throw new Error('OPFS directory unavailable');
-    const file = await dir.getFileHandle(name, { create: true });
-    const writable = await file.createWritable();
-    await writable.write(data);
-    await writable.close();
+    await writeOpfsFile(track ? ['meetings', id, track, name] : ['meetings', id, name], data);
   } catch (err) {
     throw err instanceof Error ? err : new Error(`Storage write failed: ${String(err)}`);
   }

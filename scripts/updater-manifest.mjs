@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Build the Tauri updater manifest (latest.json) from the repo's PUBLISHED
  * per-platform releases (`v<version>-windows|macos|ubuntu`, drafts ignored).

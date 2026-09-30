@@ -1,6 +1,7 @@
 import { fileExtensionForMimeType } from '../../audio/formats';
 import type { Meeting } from '../../domain/meeting';
 import { segmentsToJSON, segmentsToMarkdown, segmentsToText } from '../../domain/transcript';
+import { agendaDocument, agendaToJSON } from '../../domain/agenda';
 import { readRecordingBlob } from '../../storage/recordings';
 import { getSegments } from '../../storage/transcripts';
 import { saveFileToDisk } from '../../platform/desktop-storage';
@@ -40,21 +41,31 @@ export async function mirrorMeetingToDisk(meeting: Meeting): Promise<string[]> {
     written.push(await saveFileToDisk(`${folder}/${audioName(track, meeting.mimeType)}`, bytes));
   }
 
+  const agenda = meeting.agenda?.items ?? [];
+  if (agenda.length > 0) {
+    written.push(
+      await saveFileToDisk(
+        `${folder}/agenda.md`,
+        encoder.encode(agendaDocument(meeting.title, meeting.startedAt, agenda)),
+      ),
+    );
+  }
+
   const segments = await getSegments(meeting.id);
   written.push(
-    await saveFileToDisk(`${folder}/transcript.txt`, encoder.encode(segmentsToText(segments))),
+    await saveFileToDisk(`${folder}/transcript.txt`, encoder.encode(segmentsToText(segments, agenda))),
   );
   if (segments.length > 0) {
     written.push(
       await saveFileToDisk(
         `${folder}/transcript.md`,
-        encoder.encode(segmentsToMarkdown(meeting.title, meeting.startedAt, segments)),
+        encoder.encode(segmentsToMarkdown(meeting.title, meeting.startedAt, segments, agenda)),
       ),
     );
     written.push(
       await saveFileToDisk(
         `${folder}/transcript.json`,
-        encoder.encode(segmentsToJSON(meeting.id, meeting.title, segments)),
+        encoder.encode(segmentsToJSON(meeting.id, meeting.title, segments, agenda)),
       ),
     );
   }
@@ -74,6 +85,7 @@ export async function mirrorMeetingToDisk(meeting: Meeting): Promise<string[]> {
             mimeType: meeting.mimeType,
             tracks,
             transcriptionStatus: meeting.transcriptionStatus,
+            ...(agenda.length ? { agenda: agendaToJSON(agenda) } : {}),
             savedAt: new Date().toISOString(),
           },
           null,

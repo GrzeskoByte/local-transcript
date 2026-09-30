@@ -149,8 +149,35 @@ jobs:
           # release still builds, just without in-app update support.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS Developer ID signing + notarization (read by the Tauri CLI).
+          # Without them the .app is unsigned and Gatekeeper blocks it.
+          MAC_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MAC_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          MAC_ID: ${{ secrets.APPLE_ID }}
+          MAC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           extra=()
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            # Export only when set: an empty APPLE_CERTIFICATE makes the CLI
+            # try (and fail) to import a certificate.
+            if [ -n "$MAC_CERTIFICATE" ] && [ -n "$MAC_SIGNING_IDENTITY" ]; then
+              export APPLE_CERTIFICATE="$MAC_CERTIFICATE" APPLE_CERTIFICATE_PASSWORD="$MAC_CERTIFICATE_PASSWORD" \
+                APPLE_SIGNING_IDENTITY="$MAC_SIGNING_IDENTITY"
+              if [ -n "$MAC_ID" ] && [ -n "$MAC_PASSWORD" ] && [ -n "$MAC_TEAM_ID" ]; then
+                export APPLE_ID="$MAC_ID" APPLE_PASSWORD="$MAC_PASSWORD" APPLE_TEAM_ID="$MAC_TEAM_ID"
+              else
+                echo "::warning::APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID not set — signed but not notarized."
+              fi
+            else
+              # Ad-hoc signature: an unsigned bundle is reported as "damaged" on
+              # Apple Silicon (no way past it but xattr); ad-hoc signed, macOS
+              # shows the "unidentified developer" prompt with Open Anyway.
+              export APPLE_SIGNING_IDENTITY="-"
+              echo "::warning::APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY not set — macOS app is ad-hoc signed only (not notarized)."
+            fi
+          fi
           if [ "${{ matrix.platform }}" = "ubuntu" ]; then
             extra+=(--config src-tauri/tauri.appimage.conf.json)
           fi

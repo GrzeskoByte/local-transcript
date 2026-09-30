@@ -140,3 +140,43 @@ export async function getModelMeta(): Promise<ModelMeta> {
 export async function setModelMeta(meta: ModelMeta): Promise<void> {
   await db.kvSet(MODEL_META_KEY_DESKTOP, { ...meta, updatedAt: Date.now() });
 }
+
+/**
+ * Align the persisted model selection with what is actually on disk. The meta
+ * can lag behind reality (model installed by voxtype/another build, a stale
+ * `not_installed`/`failed` from an earlier run), which left the sidebar saying
+ * "Model: not installed" while transcription worked. Returns the corrected
+ * meta, or null when nothing needs to change. Never touches a running download.
+ */
+export function reconcileModelMeta(
+  meta: ModelMeta,
+  installed: { id: string; accuracy: number; recommended?: boolean }[],
+): ModelMeta | null {
+  if (meta.state === 'downloading' || meta.state === 'verifying') return null;
+  if (installed.some((m) => m.id === meta.modelId)) {
+    return meta.state === 'ready' ? null : { ...meta, state: 'ready', progress: 1, error: undefined };
+  }
+  if (installed.length === 0) {
+    return meta.state === 'ready' ? { ...meta, state: 'not_installed', progress: 0 } : null;
+  }
+  const best =
+    installed.find((m) => m.recommended) ??
+    installed.slice().sort((a, b) => b.accuracy - a.accuracy)[0]!;
+  return { ...meta, modelId: best.id, state: 'ready', progress: 1, error: undefined };
+}
+
+/** Sidebar chip text: which model is in use and whether it can transcribe. */
+export function modelChipLabel(meta: ModelMeta): string {
+  switch (meta.state) {
+    case 'ready':
+    case 'loaded':
+    case 'installed':
+      return `Model: ${meta.modelId}`;
+    case 'downloading':
+      return `Downloading ${meta.modelId} · ${Math.round(meta.progress * 100)}%`;
+    case 'failed':
+      return 'Model download failed';
+    default:
+      return 'No speech model yet';
+  }
+}

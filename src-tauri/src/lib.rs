@@ -8,6 +8,7 @@ mod storage;
 mod system_audio;
 mod calendar;
 mod calendar_detect;
+mod claude_code;
 mod updater;
 
 pub use native_asr::AppState;
@@ -65,6 +66,8 @@ pub fn run() {
             native_asr::native_asr_cancel,
             opencode::native_opencode_status,
             opencode::native_opencode_summarize,
+            claude_code::native_claude_status,
+            claude_code::native_claude_summarize,
             storage::native_storage_dir,
             storage::native_save_file,
             storage::native_open_storage_dir,

@@ -1,4 +1,5 @@
 import { useApp } from './store.tsx';
+import { modelChipLabel } from '../asr/model-manager';
 import { Dashboard } from './screens/Dashboard.tsx';
 import { NewMeeting } from './screens/NewMeeting.tsx';
 import { ActiveMeeting } from './screens/ActiveMeeting.tsx';
@@ -10,7 +11,7 @@ import { GearIcon, CalendarIcon, ListIcon, LogoMark, MicIcon } from './component
 function Shell(): React.JSX.Element {
   const { route, go, recordingState, modelMeta, updateInfo } = useApp();
   const recording = recordingState === 'RECORDING' || recordingState === 'PAUSED';
-  const modelDot = modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'not_installed' ? '' : 'working';
+  const modelDot = modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'downloading' ? 'working' : '';
 
   const nav = (
     <>
@@ -82,14 +83,15 @@ function Shell(): React.JSX.Element {
               Update available · v{updateInfo.version}
             </button>
           )}
-          <div className="model-chip" title={modelMeta.modelId}>
+          <button
+            type="button"
+            className="model-chip"
+            title={`${modelMeta.modelId} · ${modelMeta.state.replace('_', ' ')} — open model settings`}
+            onClick={() => go({ name: 'settings' })}
+          >
             <span className={`model-dot ${modelDot}`} />
-            {modelMeta.state === 'ready'
-              ? 'Speech model ready'
-              : modelMeta.state === 'downloading'
-                ? `Model ${Math.round(modelMeta.progress * 100)}%`
-                : `Model: ${modelMeta.state.replace('_', ' ')}`}
-          </div>
+            {modelChipLabel(modelMeta)}
+          </button>
           <div className="privacy-note">Recordings &amp; transcripts never leave this device.</div>
         </div>
       </aside>

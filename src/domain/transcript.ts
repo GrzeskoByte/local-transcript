@@ -1,3 +1,5 @@
+import { agendaToJSON, agendaToMarkdown, agendaToText, type AgendaItem } from './agenda';
+
 export interface TranscriptSegment {
   id: string;
   meetingId: string;
@@ -14,8 +16,9 @@ function withSpeaker(s: TranscriptSegment): string {
   return s.speaker ? `${s.speaker}: ${s.text.trim()}` : s.text.trim();
 }
 
-export function segmentsToText(segments: TranscriptSegment[]): string {
-  return segments
+export function segmentsToText(segments: TranscriptSegment[], agenda: AgendaItem[] = []): string {
+  const prefix = agenda.length ? `${agendaToText(agenda)}\nTranscript:\n` : '';
+  return prefix + segments
     .slice()
     .sort((a, b) => a.sequence - b.sequence)
     .map(withSpeaker)
@@ -27,8 +30,10 @@ export function segmentsToMarkdown(
   title: string,
   recordedAt: number,
   segments: TranscriptSegment[],
+  agenda: AgendaItem[] = [],
 ): string {
-  const header = `# ${title}\n\nRecorded: ${new Date(recordedAt).toLocaleString()}\n\n`;
+  const agendaMd = agenda.length ? `${agendaToMarkdown(agenda)}\n## Transcript\n\n` : '';
+  const header = `# ${title}\n\nRecorded: ${new Date(recordedAt).toLocaleString()}\n\n${agendaMd}`;
   const body = segments
     .slice()
     .sort((a, b) => a.sequence - b.sequence)
@@ -46,11 +51,13 @@ export function segmentsToJSON(
   meetingId: string,
   title: string,
   segments: TranscriptSegment[],
+  agenda: AgendaItem[] = [],
 ): string {
   return JSON.stringify(
     {
       meetingId,
       title,
+      ...(agenda.length ? { agenda: agendaToJSON(agenda) } : {}),
       segments: segments
         .slice()
         .sort((a, b) => a.sequence - b.sequence)

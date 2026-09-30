@@ -72,7 +72,7 @@ pub struct Backend {
 // Environment helpers
 // ---------------------------------------------------------------------------
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     // HOME is usually unset on Windows; USERPROFILE is the equivalent there.
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))

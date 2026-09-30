@@ -6,13 +6,14 @@ import { SystemAudioSource, systemAudioStatus } from '../audio/system-audio';
 import type { SystemAudioStatus } from '../audio/system-audio';
 import { MicrophoneAudioSource } from '../audio/microphone';
 import { MediaRecorderAudioRecorder } from '../audio/recorder';
-import type { TrackSpec } from '../audio/recorder';
+import type { RecorderErrorKind, TrackSpec } from '../audio/recorder';
 import { TranscriptionService } from '../asr/transcription-service';
 import {
   DEFAULT_NATIVE_LANGUAGE,
   NATIVE_DEFAULT_MODEL,
   getModelMeta,
   setModelMeta,
+  reconcileModelMeta,
   getTranscriptionLanguage,
   setTranscriptionLanguage,
 } from '../asr/model-manager';
@@ -51,6 +52,7 @@ import { getCalendarConfig, setActiveCalendarProvider, setCalendarConfig } from 
 import { createLlmClient, DEFAULT_LLM_CONFIG } from '../integrations/llm';
 import type { LlmConfig, MeetingSummary } from '../integrations/llm';
 import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
+import { normalizeAgendaItems, type AgendaItem } from '../domain/agenda';
 
 export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'app';
 const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'app'];
@@ -78,10 +80,16 @@ interface AppState {
   // recording session
   recordingState: RecordingState;
   recordingError: string | null;
+  /** 'source' = a capture source was lost (Retry cannot help); 'storage' = writes failed. */
+  recordingErrorKind: RecorderErrorKind | null;
   activeMeeting: Meeting | null;
   elapsedMs: number;
   storageWarning: string | null;
-  startRecording: (title: string, mode: RecordingMode) => Promise<void>;
+  startRecording: (title: string, mode: RecordingMode, agenda?: AgendaItem[]) => Promise<void>;
+  /** Replace a meeting's agenda (empty list removes it). */
+  saveAgenda: (meetingId: string, items: AgendaItem[]) => Promise<Meeting | undefined>;
+  /** Upload a meeting's agenda to GitLab (agenda.md / wiki page / issue). */
+  uploadAgendaToGitlab: (meetingId: string) => Promise<GitlabUploadResult>;
   pauseRecording: () => Promise<void>;
   resumeRecording: () => Promise<void>;
   /** Retry writing audio chunks after a storage failure (§9 Retry). */
@@ -182,6 +190,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [recordingState, setRecordingState] = useState<RecordingState>('IDLE');
   const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [recordingErrorKind, setRecordingErrorKind] = useState<RecorderErrorKind | null>(null);
   const [activeMeeting, setActiveMeeting] = useState<Meeting | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
@@ -362,7 +371,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, []);
 
   const startRecording = useCallback(
-    async (title: string, mode: RecordingMode) => {
+    async (title: string, mode: RecordingMode, agenda: AgendaItem[] = []) => {
       setRecordingError(null);
       // Storage estimate check (§19).
       const est = await estimateStorage().catch(() => ({}));
@@ -385,6 +394,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         transcriptionStatus: 'not_started',
         unfinished: true,
       };
+      const agendaItems = normalizeAgendaItems(agenda);
+      if (agendaItems.length > 0) meeting.agenda = { items: agendaItems, updatedAt: now };
       // Two-way: capture the microphone and the device/system audio as separate
       // tracks at the same time (the Zoom case). Single-source modes stay flat.
       // Linux desktop records system sound via the sound server; elsewhere
@@ -404,8 +415,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       recorder.onState((s) => {
         setRecordingState(s);
         // Surface storage failures instead of implying audio is safe (§19).
-        if (s === 'ERROR') setRecordingError(recorder.getError()?.message ?? 'Recording error');
-        else if (s === 'RECORDING' || s === 'PAUSED') setRecordingError(null);
+        if (s === 'ERROR') {
+          setRecordingError(recorder.getError()?.message ?? 'Recording error');
+          setRecordingErrorKind(recorder.getErrorKind());
+        } else if (s === 'RECORDING' || s === 'PAUSED') {
+          setRecordingError(null);
+          setRecordingErrorKind(null);
+        }
       });
       activeIdRef.current = id;
       await saveMeeting(meeting);
@@ -527,6 +543,38 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [gitlabConfig],
   );
 
+  const saveAgenda = useCallback(
+    async (meetingId: string, items: AgendaItem[]): Promise<Meeting | undefined> => {
+      const clean = normalizeAgendaItems(items);
+      const updated = await updateMeeting(meetingId, (cur) => {
+        const { agenda: _old, ...rest } = cur;
+        return clean.length > 0 ? { ...rest, agenda: { items: clean, updatedAt: Date.now() } } : rest;
+      });
+      if (!updated) return undefined;
+      setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      // The live recording keeps its own copy (stopRecording saves from it).
+      setActiveMeeting((a) => (a && a.id === meetingId ? { ...a, agenda: updated.agenda } : a));
+      if (!updated.unfinished) void mirrorToDisk(updated);
+      await refresh();
+      return updated;
+    },
+    [mirrorToDisk, refresh],
+  );
+
+  const uploadAgendaToGitlab = useCallback(
+    async (meetingId: string): Promise<GitlabUploadResult> => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error('Meeting not found');
+      const result = await createGitlabClient(gitlabConfig).uploadAgenda(meeting);
+      const updated = await updateMeeting(meetingId, {
+        gitlabAgenda: { url: result.url, target: result.target, uploadedAt: Date.now() },
+      });
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      return result;
+    },
+    [gitlabConfig],
+  );
+
   const saveLlmConfig = useCallback(async (config: LlmConfig) => {
     await setLlmConfig(config);
     setLlmConfigState(config);
@@ -593,6 +641,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         keyPoints: result.keyPoints,
         model: llmConfig.model.trim(),
         createdAt: Date.now(),
+        ...(result.sessionId ? { sessionId: result.sessionId } : {}),
       };
       const updated = await updateMeeting(meetingId, { summary });
       if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
@@ -836,6 +885,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [modelCatalog],
   );
 
+  // Keep the selected model in step with what is on disk (sidebar chip,
+  // Meeting Detail picker). Only once the native probe has answered.
+  useEffect(() => {
+    if (!nativeStatus) return;
+    const next = reconcileModelMeta(modelMeta, installedModels);
+    if (!next) return;
+    setModelMetaState(next);
+    void setModelMeta(next).catch(() => undefined);
+  }, [nativeStatus, installedModels, modelMeta]);
+
   const setupAndTranscribe = useCallback(
     async (id: string) => {
       if (installedModels.length > 0) return transcribe(id);
@@ -857,6 +916,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       updateInfo,
       checkUpdates,
       recordingError,
+      recordingErrorKind,
       activeMeeting,
       elapsedMs,
       storageWarning,
@@ -896,6 +956,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       saveGitlabConfig,
       uploadToGitlab,
       uploadSummaryToGitlab,
+      saveAgenda,
+      uploadAgendaToGitlab,
       calendarConfig,
       saveCalendarConfig,
       switchCalendarProvider,
@@ -913,13 +975,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       systemAudio,
     }),
     [
-      route, go, meetings, refresh, recordingState, recordingError, activeMeeting,
+      route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
       elapsedMs, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
       stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
-      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab,
+      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, saveAgenda, uploadAgendaToGitlab,
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
       updateInfo, checkUpdates,
       llmConfig, saveLlmConfig, summarizeMeeting,
