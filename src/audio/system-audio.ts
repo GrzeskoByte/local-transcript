@@ -21,6 +21,16 @@ interface NativeSystemAudioSource {
   sink: string;
 }
 
+/** One sound-server output whose sound can be recorded. */
+export interface SystemAudioOutput {
+  name: string;
+  description: string;
+  isDefault: boolean;
+}
+
+/** Device label of the virtual source (`SOURCE_LABEL` in system_audio.rs). */
+export const SYSTEM_AUDIO_LABEL = 'Local_Transcribe_system_audio';
+
 const UNAVAILABLE: SystemAudioStatus = { available: false, hint: null };
 
 /** Whether the desktop shell can capture system audio (Linux + pactl). */
@@ -32,6 +42,13 @@ export async function systemAudioStatus(): Promise<SystemAudioStatus> {
   } catch {
     return UNAVAILABLE;
   }
+}
+
+/** Outputs the user can record from (Linux desktop); [] elsewhere. */
+export async function systemAudioOutputs(): Promise<SystemAudioOutput[]> {
+  if (!isDesktopApp()) return [];
+  const list = await invokeDesktop<SystemAudioOutput[] | null>('native_system_audio_outputs').catch(() => null);
+  return Array.isArray(list) ? list.filter((o) => o && typeof o.name === 'string') : [];
 }
 
 /** Raw system sound: no echo cancellation/noise suppression/AGC. */
@@ -68,8 +85,13 @@ export async function findSystemAudioDevice(label: string, attempts = 25): Promi
 export class SystemAudioSource implements AudioSource {
   private stream: MediaStream | null = null;
 
+  /** @param sink output to record ('' = the default output). */
+  constructor(private readonly sink = '') {}
+
   async start(): Promise<MediaStream> {
-    const native = await invokeDesktop<NativeSystemAudioSource>('native_system_audio_start');
+    const native = await invokeDesktop<NativeSystemAudioSource>('native_system_audio_start', {
+      sink: this.sink || null,
+    });
     try {
       const device = await findSystemAudioDevice(native.label);
       this.stream = await navigator.mediaDevices.getUserMedia({

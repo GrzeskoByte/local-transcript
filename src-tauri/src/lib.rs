@@ -85,6 +85,7 @@ pub fn run() {
             updater::native_update_progress,
             system_audio::native_system_audio_status,
             system_audio::native_system_audio_start,
+            system_audio::native_system_audio_outputs,
             system_audio::native_system_audio_stop,
         ])
         .build(tauri::generate_context!())

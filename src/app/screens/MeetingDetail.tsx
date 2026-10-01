@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp, formatDuration } from '../store.tsx';
 import { CHUNK_MS, modeLabel } from '../../domain/meeting';
 import type { TranscriptionStage } from '../../asr/engine';
@@ -16,6 +16,8 @@ import { extractEventDraft } from '../../integrations/calendar';
 import type { CalendarEventDraft } from '../../integrations/calendar';
 import { claudeResumeCommand } from '../../integrations/llm';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
+import { AudioDevicePickers } from '../components/AudioDevices.tsx';
+import { applyPlaybackOutput } from '../../audio/devices';
 
 export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const {
@@ -36,6 +38,12 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   /** Agenda being edited (null = viewing). */
   const [agendaDraft, setAgendaDraft] = useState<AgendaItem[] | null>(null);
   const [agendaBusy, setAgendaBusy] = useState(false);
+  /** Players follow the playback output chosen below (where supported). */
+  const playbackRef = useRef<HTMLElement>(null);
+  const [sinkVersion, setSinkVersion] = useState(0);
+  useEffect(() => {
+    playbackRef.current?.querySelectorAll('audio').forEach((el) => void applyPlaybackOutput(el));
+  }, [detailTracks, sinkVersion]);
 
   /** Desktop webview swallows target="_blank": open GitLab links externally. */
   const openGitlabLink = (e: React.MouseEvent, url: string): void => {
@@ -106,7 +114,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           player and, on the AppImage's GStreamer 1.20, tearing a prerolled
           WAV/FLAC pipeline down later can deadlock the page. Only build one
           when the user presses play. */}
-      <section className="card" aria-label="Recording playback">
+      <section className="card" aria-label="Recording playback" ref={playbackRef}>
         {detailTracks.length === 0 ? (
           <p className="muted">Recording audio unavailable.</p>
         ) : detailTracks.length === 1 ? (
@@ -120,6 +128,9 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               </label>
             ))}
           </div>
+        )}
+        {detailTracks.length > 0 && (
+          <AudioDevicePickers playback onPlaybackChange={() => setSinkVersion((v) => v + 1)} />
         )}
       </section>
 

@@ -11,6 +11,7 @@ import {
   type MediaAccessFailure,
 } from '../../audio/permissions.ts';
 import { macDeviceAudioLimit } from '../../audio/device-audio.ts';
+import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 
 export function NewMeeting(): React.JSX.Element {
   const { startRecording, importMeeting, storageWarning, go, systemAudio } = useApp();
@@ -116,7 +117,7 @@ export function NewMeeting(): React.JSX.Element {
               <DualIcon />
             </span>
             <strong>Mic + Device</strong>
-            <small>Two-way: your microphone and the call/system audio at once. Best for online meetings.</small>
+            <small>Your microphone and the call/system audio together, in one recording. Best for online meetings.</small>
           </button>
         </div>
 
@@ -127,13 +128,20 @@ export function NewMeeting(): React.JSX.Element {
         )}
 
         {mode === 'dual' && (
-          <p className="muted" style={{ marginTop: 10 }}>
-            {directSystemAudio
-              ? 'Records your microphone and everything your computer plays (e.g. the call) as two tracks. '
-              : 'You will be asked to pick a screen or window to share — choose the meeting window (or the whole screen) and enable “Share audio”. '}
-            Wear headphones so your microphone doesn’t re-record the other participants.
-          </p>
+          <>
+            <p className="muted" style={{ marginTop: 10 }}>
+              {directSystemAudio
+                ? 'Records your microphone and everything your computer plays (e.g. the call), mixed into one recording.'
+                : 'You will be asked to pick a screen or window to share — choose the meeting window (or the whole screen) and enable “Share audio”. Both are mixed into one recording.'}
+            </p>
+            <p className="warn" style={{ marginTop: 10, marginBottom: 0 }}>
+              Wear headphones. On speakers your microphone records the call a second time, slightly delayed — the
+              recording gets an echo and transcription suffers.
+            </p>
+          </>
         )}
+
+        <AudioDevicePickers microphone={usesMic} systemOutput={mode !== 'speaker' && directSystemAudio} />
 
         {usesMic && (
           <p className="muted" style={{ marginTop: 10 }}>

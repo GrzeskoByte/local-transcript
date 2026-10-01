@@ -1,10 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Meeting, RecordingMode, RecordingState } from '../domain/meeting';
-import { DUAL_TRACKS, estimateDurationFromChunks, formatDuration, newMeetingId } from '../domain/meeting';
+import { estimateDurationFromChunks, formatDuration, newMeetingId } from '../domain/meeting';
 import { DeviceAudioSource } from '../audio/device-audio';
 import { SystemAudioSource, systemAudioStatus } from '../audio/system-audio';
 import type { SystemAudioStatus } from '../audio/system-audio';
 import { MicrophoneAudioSource } from '../audio/microphone';
+import { MixedAudioSource } from '../audio/mixed-audio';
+import { chosenMicrophoneId, getSystemOutput } from '../audio/devices';
 import { MediaRecorderAudioRecorder } from '../audio/recorder';
 import type { RecorderErrorKind, TrackSpec } from '../audio/recorder';
 import { TranscriptionService } from '../asr/transcription-service';
@@ -390,26 +392,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         durationMs: 0,
         audioPath: `meetings/${id}`,
         mimeType: '',
-        tracks: mode === 'dual' ? [...DUAL_TRACKS] : undefined,
         transcriptionStatus: 'not_started',
         unfinished: true,
       };
       const agendaItems = normalizeAgendaItems(agenda);
       if (agendaItems.length > 0) meeting.agenda = { items: agendaItems, updatedAt: now };
-      // Two-way: capture the microphone and the device/system audio as separate
-      // tracks at the same time (the Zoom case). Single-source modes stay flat.
+      // Mic + Device: the microphone and the device/system audio are mixed into
+      // one track (one file, no Me/Others split). Every mode records flat.
       // Linux desktop records system sound via the sound server; elsewhere
       // the screen-share picker provides device audio.
-      const deviceSource = () => (systemAudio?.available ? new SystemAudioSource() : new DeviceAudioSource());
+      // Input/output chosen in Settings or on New Meeting (default otherwise).
+      const micId = mode === 'device' ? undefined : await chosenMicrophoneId().catch(() => undefined);
+      const mic = () => new MicrophoneAudioSource(micId);
+      const deviceSource = () =>
+        systemAudio?.available ? new SystemAudioSource(getSystemOutput()) : new DeviceAudioSource();
       const specs: TrackSpec[] =
         mode === 'speaker'
-          ? [{ track: '', source: new MicrophoneAudioSource() }]
+          ? [{ track: '', source: mic() }]
           : mode === 'device'
             ? [{ track: '', source: deviceSource() }]
-            : [
-                { track: 'microphone', source: new MicrophoneAudioSource() },
-                { track: 'device', source: deviceSource() },
-              ];
+            : [{ track: '', source: new MixedAudioSource([mic(), deviceSource()]) }];
       const recorder = new MediaRecorderAudioRecorder();
       recorderRef.current = recorder;
       recorder.onState((s) => {

@@ -34,6 +34,7 @@ import {
   type MailAccount,
 } from '../../integrations/calendar-detect';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
+import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import {
   getAutoCheck,
   getUpdateProgress,
@@ -80,6 +81,7 @@ export function Settings(): React.JSX.Element {
     txStage,
     updateInfo,
     checkUpdates,
+    systemAudio,
   } = useApp();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [gpuBusy, setGpuBusy] = useState(false);
@@ -428,6 +430,18 @@ export function Settings(): React.JSX.Element {
             {micFailure.message} {micFailure.hint}
           </p>
         )}
+      </section>
+
+      <section className="card" aria-label="Audio devices">
+        <div className="model-title" style={{ marginBottom: 4 }}>
+          <strong>Audio devices</strong>
+        </div>
+        <div className="muted">
+          Which microphone records you{systemAudio?.available ? ', which output Device Audio records,' : ''} and
+          where recordings play. New Meeting uses the same choices; anything not connected falls back to the
+          system default.
+        </div>
+        <AudioDevicePickers microphone systemOutput={systemAudio?.available === true} playback />
       </section>
 
       <section className="card" aria-label="Local files">

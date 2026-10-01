@@ -37,6 +37,17 @@ pub struct SystemAudioSource {
     pub sink: String,
 }
 
+/// One output (sink) whose sound can be captured.
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemAudioOutput {
+    /// Sink name passed back to `native_system_audio_start`.
+    pub name: String,
+    /// Human-readable name (`Description:`), falls back to the sink name.
+    pub description: String,
+    pub is_default: bool,
+}
+
 fn pactl(args: &[&str]) -> Result<String, String> {
     let out = crate::proc::command("pactl")
         .args(args)
@@ -67,6 +78,42 @@ fn parse_default_sink(info: &str) -> Option<String> {
         .find_map(|l| l.trim().strip_prefix("Default Sink:"))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s != "@DEFAULT_SINK@")
+}
+
+/// Sinks from `pactl list sinks` (text output: `-f json` needs PulseAudio 16+).
+fn parse_sinks(list: &str, default: Option<&str>) -> Vec<SystemAudioOutput> {
+    let mut out: Vec<SystemAudioOutput> = Vec::new();
+    for line in list.lines() {
+        let t = line.trim();
+        if t.starts_with("Sink #") {
+            out.push(SystemAudioOutput { name: String::new(), description: String::new(), is_default: false });
+        } else if let Some(cur) = out.last_mut() {
+            if let Some(v) = t.strip_prefix("Name:") {
+                if cur.name.is_empty() {
+                    cur.name = v.trim().to_string();
+                }
+            } else if let Some(v) = t.strip_prefix("Description:") {
+                if cur.description.is_empty() {
+                    cur.description = v.trim().to_string();
+                }
+            }
+        }
+    }
+    out.retain(|s| !s.name.is_empty());
+    for s in &mut out {
+        if s.description.is_empty() {
+            s.description = s.name.clone();
+        }
+        s.is_default = default == Some(s.name.as_str());
+    }
+    out
+}
+
+/// A sink name we pass to `pactl` as part of one argument (`master=<sink>.monitor`).
+fn valid_sink_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 256
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | '@'))
 }
 
 /// Module indexes of our virtual source(s) in `pactl list short modules`.
@@ -106,14 +153,38 @@ pub fn native_system_audio_status() -> SystemAudioStatus {
     }
 }
 
-/// Create (or reuse) the virtual source over the default output's monitor.
+/// Outputs the user can choose to record from (Settings / New Meeting).
 #[tauri::command]
-pub async fn native_system_audio_start() -> Result<SystemAudioSource, String> {
+pub async fn native_system_audio_outputs() -> Result<Vec<SystemAudioOutput>, String> {
     tauri::async_runtime::spawn_blocking(|| {
+        if !cfg!(target_os = "linux") {
+            return Ok(Vec::new());
+        }
+        let default = default_sink().ok();
+        let list = pactl(&["list", "sinks"])?;
+        Ok(parse_sinks(&list, default.as_deref()))
+    })
+    .await
+    .map_err(|e| format!("System audio task failed: {e}"))?
+}
+
+/// Create (or reuse) the virtual source over an output's monitor: the chosen
+/// `sink` when it still exists, otherwise the default output.
+#[tauri::command]
+pub async fn native_system_audio_start(sink: Option<String>) -> Result<SystemAudioSource, String> {
+    tauri::async_runtime::spawn_blocking(move || {
         if !cfg!(target_os = "linux") {
             return Err("System audio capture through the sound server is Linux-only.".to_string());
         }
-        let sink = default_sink()?;
+        let chosen = sink.filter(|s| valid_sink_name(s)).filter(|s| {
+            pactl(&["list", "short", "sinks"])
+                .map(|l| l.lines().any(|line| line.split_whitespace().nth(1) == Some(s.as_str())))
+                .unwrap_or(false)
+        });
+        let sink = match chosen {
+            Some(s) => s,
+            None => default_sink()?,
+        };
         // A stale source (crash, other sink) is replaced so it follows the
         // current default output.
         remove_sources();
@@ -146,6 +217,32 @@ mod tests {
         assert_eq!(parse_default_sink(info).as_deref(), Some("alsa_output.pci-0000_00_1f.3.analog-stereo"));
         assert_eq!(parse_default_sink("Default Sink: @DEFAULT_SINK@"), None);
         assert_eq!(parse_default_sink("nothing"), None);
+    }
+
+    #[test]
+    fn parses_sinks_with_descriptions_and_default() {
+        let list = "Sink #55\n\tState: RUNNING\n\tName: alsa_output.pci.analog-stereo\n\tDescription: Built-in Audio Analog Stereo\n\tDriver: PipeWire\n\tProperties:\n\t\tdevice.description = \"x\"\n\nSink #61\n\tName: bluez_output.AA_BB.1\n\tDescription: WH-1000XM4\n";
+        let sinks = parse_sinks(list, Some("bluez_output.AA_BB.1"));
+        assert_eq!(
+            sinks,
+            vec![
+                SystemAudioOutput {
+                    name: "alsa_output.pci.analog-stereo".into(),
+                    description: "Built-in Audio Analog Stereo".into(),
+                    is_default: false,
+                },
+                SystemAudioOutput { name: "bluez_output.AA_BB.1".into(), description: "WH-1000XM4".into(), is_default: true },
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_sink_names() {
+        assert!(valid_sink_name("alsa_output.pci-0000_00_1f.3.analog-stereo"));
+        assert!(valid_sink_name("bluez_output.AA_BB_CC.1"));
+        assert!(!valid_sink_name(""));
+        assert!(!valid_sink_name("a b"));
+        assert!(!valid_sink_name("x source_name=evil"));
     }
 
     #[test]

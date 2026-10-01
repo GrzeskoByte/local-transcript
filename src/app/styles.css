@@ -219,6 +219,11 @@ h2 { font-size: var(--text-lg); margin: var(--space-5) 0 var(--space-3); letter-
 .source-card.selected .icon { background: var(--brand); color: #fff; }
 .source-card strong { display: block; font-size: 1rem; }
 .source-card small { display: block; color: var(--muted); margin-top: 4px; font-size: 0.82rem; line-height: 1.4; }
+.device-pickers { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); margin-top: var(--space-3); }
+.device-picker { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.device-picker .field-label { margin: 0; }
+.device-picker select { width: 100%; min-width: 0; }
+.device-picker small { font-size: var(--text-sm); }
 .field-label { display: block; font-weight: 700; margin: var(--space-4) 0 var(--space-2); font-size: var(--text-md); }
 
 /* ---------- recording ---------- */
