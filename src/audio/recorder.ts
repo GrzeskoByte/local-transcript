@@ -174,9 +174,10 @@ export class MediaRecorderAudioRecorder {
         const stream = streams[i]!;
         const options: MediaRecorderOptions = {
           ...(baseMime ? { mimeType: baseMime } : {}),
-          // Opus default is voice-grade; 128 kbps keeps consonants crisp before
-          // the 16 kHz resample and costs little space. Browsers may clamp it.
-          audioBitsPerSecond: 128000,
+          // Mono speech: Opus is transparent around 32–48 kbps and ASR
+          // resamples to 16 kHz anyway. 48 kbps ≈ 18 MB per 50 min (128 kbps
+          // was ≈ 55 MB with no audible gain). Engines may clamp it.
+          audioBitsPerSecond: 48000,
         };
         const recorder = new MediaRecorder(stream, options);
         const active: ActiveTrack = {

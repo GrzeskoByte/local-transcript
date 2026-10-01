@@ -5,6 +5,7 @@ export type RecordingMode = 'speaker' | 'device' | 'dual' | 'file';
 /** Track identifiers written under `meetings/{id}/{track}/`. '' = single-track (legacy flat layout). */
 export type TrackId = '' | 'microphone' | 'device';
 
+/** Track layout of two-way recordings made before Mic + Device was mixed into one track (still readable). */
 export const DUAL_TRACKS: TrackId[] = ['microphone', 'device'];
 
 export const MODE_LABELS: Record<RecordingMode, string> = {
@@ -19,7 +20,8 @@ export function modeLabel(mode: RecordingMode): string {
 }
 
 /**
- * Speaker attribution for a two-way recording. With mic and device captured on
+ * Speaker attribution for a legacy two-track recording (new Mic + Device
+ * recordings are mixed into one track and get none). With mic and device captured on
  * separate tracks, the track *is* the speaker — no diarization model needed.
  * Returns undefined for single-track recordings (no attribution available).
  */

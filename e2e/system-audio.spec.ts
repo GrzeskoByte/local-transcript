@@ -4,9 +4,9 @@ import { expect, test } from '@playwright/test';
  * Linux desktop: Device Audio / Two-way record system sound through the sound
  * server's virtual source (`native_system_audio_*`), never the screen picker.
  * The fake shell announces the virtual source as an extra audio input; the
- * recording, OPFS tracks and cleanup run for real.
+ * recording, the Web Audio mix, OPFS chunks and cleanup run for real.
  */
-test('two-way on Linux records mic + system audio without a screen picker', async ({ page }) => {
+test('Mic + Device on Linux mixes mic + system audio into one track without a screen picker', async ({ page }) => {
   await page.addInitScript(() => {
     const w = window as unknown as {
       __calls: string[];
@@ -50,7 +50,8 @@ test('two-way on Linux records mic + system audio without a screen picker', asyn
 
   await page.goto('/#/new');
   await page.getByRole('button', { name: /Mic \+ Device/ }).click();
-  await expect(page.getByText('everything your computer plays (e.g. the call)')).toBeVisible();
+  await expect(page.getByText('everything your computer plays (e.g. the call), mixed into one recording')).toBeVisible();
+  await expect(page.getByText(/Wear headphones/)).toBeVisible();
   await page.getByRole('button', { name: '● Start Recording' }).click();
   await expect(page.getByLabel('Recording in progress')).toBeVisible();
   await page.waitForTimeout(2500);
@@ -62,19 +63,21 @@ test('two-way on Linux records mic + system audio without a screen picker', asyn
   const state = await page.evaluate(async (meetingId) => {
     const root = await navigator.storage.getDirectory();
     const dir = await (await root.getDirectoryHandle('meetings')).getDirectoryHandle(meetingId);
-    const tracks: Record<string, number> = {};
+    const dirs: string[] = [];
+    let chunks = 0;
     for await (const [name, handle] of (dir as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
-      if (handle.kind !== 'directory') continue;
-      let n = 0;
-      for await (const _ of (handle as unknown as { entries(): AsyncIterable<unknown> }).entries()) n++;
-      tracks[name] = n;
+      if (handle.kind === 'directory') dirs.push(name);
+      else if (/^\d{6}\./.test(name)) chunks++;
     }
-    const w = window as unknown as { __calls: string[]; __gum: Array<{ audio?: { deviceId?: { exact?: string }; echoCancellation?: boolean } }> };
-    return { tracks, calls: w.__calls, gum: w.__gum };
+    const w = window as unknown as { __calls: string[]; __gum: Array<{ audio?: { deviceId?: { exact?: string }; echoCancellation?: boolean; channelCount?: number } }> };
+    return { dirs, chunks, calls: w.__calls, gum: w.__gum };
   }, id);
 
-  expect(state.tracks.microphone).toBeGreaterThan(0);
-  expect(state.tracks.device).toBeGreaterThan(0);
+  // One mixed recording: flat chunks, no microphone/device sub-tracks.
+  expect(state.dirs).toEqual([]);
+  expect(state.chunks).toBeGreaterThan(0);
+  // Both inputs were captured (mic + the virtual system source).
+  expect(state.gum.some((c) => c.audio?.channelCount === 1)).toBe(true);
   const system = state.gum.find((c) => c.audio?.deviceId?.exact === 'lt-system');
   expect(system?.audio?.echoCancellation).toBe(false);
   // The virtual source is created for the recording and removed afterwards.
