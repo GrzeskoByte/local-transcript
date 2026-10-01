@@ -4,9 +4,14 @@
  *   two-way:      meetings/{id}/{track}/{chunk} + meetings/{id}/meta.json
  * Files are written with `createWritable()` or, where the engine lacks it
  * (WKWebView before Safari 26), through a worker using sync access handles.
- * Without OPFS at all, recording is refused in a browser/webview (audio would
- * only live in memory); the in-memory map below serves Node unit tests.
+ * Without OPFS (the AppImage's WebKitGTK 2.50 has no getDirectory), the
+ * desktop shell stores the same layout on disk (`src-tauri/src/recordings.rs`).
+ * Elsewhere recording is refused (audio would only live in memory); the
+ * in-memory map below serves Node unit tests.
  */
+import { invokeDesktop, isDesktopApp } from '../platform/desktop';
+import { bytesToBase64 } from '../asr/wav';
+
 export interface RecordingMeta {
   mimeType: string;
   startedAt: number;
@@ -25,13 +30,35 @@ function hasOPFS(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
 }
 
+/** Desktop shell without OPFS: chunks go to disk through Rust. */
+function useNative(): boolean {
+  return !hasOPFS() && isDesktopApp();
+}
+
+interface NativeTrack {
+  track: string;
+  chunks: string[];
+}
+
+async function nativeList(id: string): Promise<NativeTrack[]> {
+  const list = await invokeDesktop<NativeTrack[] | null>('native_recording_list', { meetingId: id });
+  return Array.isArray(list) ? list : [];
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
 /**
  * Throws when recordings could not be stored durably. Only Node (unit tests)
  * may use the in-memory fallback — in a webview it would report audio as
  * saved that is gone after a restart (§19).
  */
 export function assertDurableStorage(): void {
-  if (hasOPFS() || typeof window === 'undefined') return;
+  if (hasOPFS() || useNative() || typeof window === 'undefined') return;
   throw new Error(
     'This system cannot store recordings safely (the app’s private file storage is unavailable). ' +
       'Update your operating system or its web engine, then try again.',
@@ -113,11 +140,23 @@ async function trackDir(
 }
 
 export async function writeMeta(id: string, meta: RecordingMeta): Promise<void> {
+  if (useNative()) {
+    await invokeDesktop('native_recording_write_meta', { meetingId: id, meta: JSON.stringify(meta) });
+    return;
+  }
   if (!hasOPFS()) return;
   await writeOpfsFile(['meetings', id, 'meta.json'], JSON.stringify(meta));
 }
 
 export async function readMeta(id: string): Promise<RecordingMeta | null> {
+  if (useNative()) {
+    const raw = await invokeDesktop<string | null>('native_recording_read_meta', { meetingId: id }).catch(() => null);
+    try {
+      return raw ? (JSON.parse(raw) as RecordingMeta) : null;
+    } catch {
+      return null;
+    }
+  }
   if (!hasOPFS()) return null;
   try {
     const dir = await meetingDir(id, false);
@@ -136,6 +175,15 @@ export async function appendChunk(
   data: Blob,
   track = '',
 ): Promise<void> {
+  if (useNative()) {
+    const dataBase64 = bytesToBase64(new Uint8Array(await data.arrayBuffer()));
+    try {
+      await invokeDesktop('native_recording_write', { request: { meetingId: id, track, name, dataBase64 } });
+    } catch (err) {
+      throw err instanceof Error ? err : new Error(`Storage write failed: ${String(err)}`);
+    }
+    return;
+  }
   if (!hasOPFS()) {
     // Accumulate per (meeting, track) so readRecordingBlob can reassemble.
     const key = memKey(id, track, name);
@@ -156,6 +204,12 @@ export async function appendChunk(
  *  - nothing stored: []
  */
 export async function listTracks(id: string): Promise<string[]> {
+  if (useNative()) {
+    const tracks = (await nativeList(id).catch(() => [])).filter((t) => t.chunks.length > 0);
+    const named = tracks.filter((t) => t.track).map((t) => t.track);
+    // Like OPFS: sub-directories win over flat chunks.
+    return named.length ? named : tracks.length ? [''] : [];
+  }
   if (!hasOPFS()) {
     const tracks = new Set<string>();
     const prefix = `${id}::`;
@@ -186,6 +240,9 @@ export async function listTracks(id: string): Promise<string[]> {
 }
 
 export async function listChunkNames(id: string, track = ''): Promise<string[]> {
+  if (useNative()) {
+    return (await nativeList(id).catch(() => [])).find((t) => t.track === track)?.chunks ?? [];
+  }
   if (!hasOPFS()) {
     const names: string[] = [];
     const prefix = `${id}::${track}::`;
@@ -215,6 +272,10 @@ export async function readRecordingBlob(
   mimeType: string,
   track = '',
 ): Promise<Blob | null> {
+  if (useNative()) {
+    const b64 = await invokeDesktop<string>('native_recording_read', { meetingId: id, track });
+    return b64 ? new Blob([base64ToBytes(b64)], { type: mimeType }) : null;
+  }
   const names = await listChunkNames(id, track);
   if (names.length === 0) return null;
   if (!hasOPFS()) {
@@ -236,6 +297,10 @@ export async function readRecordingBlob(
 }
 
 export async function deleteRecording(id: string): Promise<void> {
+  if (useNative()) {
+    await invokeDesktop('native_recording_delete', { meetingId: id });
+    return;
+  }
   if (!hasOPFS()) {
     const prefix = `${id}::`;
     for (const key of [...memFallback.keys()]) {

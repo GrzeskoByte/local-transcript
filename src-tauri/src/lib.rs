@@ -2,6 +2,7 @@ mod models;
 mod native_asr;
 mod opencode;
 mod proc;
+mod recordings;
 mod relaunch;
 mod settings;
 mod storage;
@@ -68,6 +69,12 @@ pub fn run() {
             opencode::native_opencode_summarize,
             claude_code::native_claude_status,
             claude_code::native_claude_summarize,
+            recordings::native_recording_write,
+            recordings::native_recording_write_meta,
+            recordings::native_recording_read_meta,
+            recordings::native_recording_list,
+            recordings::native_recording_read,
+            recordings::native_recording_delete,
             storage::native_storage_dir,
             storage::native_save_file,
             storage::native_open_storage_dir,
