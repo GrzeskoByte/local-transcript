@@ -11,6 +11,7 @@ import {
   type MediaAccessFailure,
 } from '../../audio/permissions.ts';
 import { macDeviceAudioLimit } from '../../audio/device-audio.ts';
+import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 
 export function NewMeeting(): React.JSX.Element {
   const { startRecording, importMeeting, storageWarning, go, systemAudio } = useApp();
@@ -139,6 +140,8 @@ export function NewMeeting(): React.JSX.Element {
             </p>
           </>
         )}
+
+        <AudioDevicePickers microphone={usesMic} systemOutput={mode !== 'speaker' && directSystemAudio} />
 
         {usesMic && (
           <p className="muted" style={{ marginTop: 10 }}>

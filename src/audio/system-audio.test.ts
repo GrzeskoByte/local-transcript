@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { findSystemAudioDevice, SystemAudioSource, systemAudioStatus } from './system-audio';
+import { findSystemAudioDevice, SystemAudioSource, systemAudioOutputs, systemAudioStatus } from './system-audio';
 
 type Dev = { kind: string; label: string; deviceId: string };
 
@@ -13,6 +13,9 @@ function install(opts: { devices: Dev[][]; start?: 'ok' | 'fail'; gum?: 'ok' | '
       invoke: async (cmd: string, args?: unknown) => {
         calls.push({ cmd, args });
         if (cmd === 'native_system_audio_status') return { available: true, hint: null };
+        if (cmd === 'native_system_audio_outputs') {
+          return [{ name: 'alsa_output.x', description: 'Speakers', isDefault: true }, { bogus: 1 }];
+        }
         if (cmd === 'native_system_audio_start') {
           if (opts.start === 'fail') throw new Error('pactl missing');
           return { label: 'Local_Transcribe_system_audio', sink: 'alsa_output.x' };
@@ -68,6 +71,19 @@ describe('system audio (Linux desktop)', () => {
     await src.stop();
     expect(env.track.stopped).toBe(true);
     expect(env.calls.map((c) => c.cmd)).toEqual(['native_system_audio_start', 'native_system_audio_stop']);
+  });
+
+  it('records the chosen output, or the default when none is chosen', async () => {
+    const env = install({ devices: [[mic, sys]] });
+    await new SystemAudioSource('bluez_output.headset').start();
+    await new SystemAudioSource().start();
+    const starts = env.calls.filter((c) => c.cmd === 'native_system_audio_start').map((c) => c.args);
+    expect(starts).toEqual([{ sink: 'bluez_output.headset' }, { sink: null }]);
+  });
+
+  it('lists the outputs that can be recorded', async () => {
+    install({ devices: [[mic]] });
+    expect(await systemAudioOutputs()).toEqual([{ name: 'alsa_output.x', description: 'Speakers', isDefault: true }]);
   });
 
   it('removes the virtual source again when capture fails', async () => {

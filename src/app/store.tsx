@@ -6,6 +6,7 @@ import { SystemAudioSource, systemAudioStatus } from '../audio/system-audio';
 import type { SystemAudioStatus } from '../audio/system-audio';
 import { MicrophoneAudioSource } from '../audio/microphone';
 import { MixedAudioSource } from '../audio/mixed-audio';
+import { chosenMicrophoneId, getSystemOutput } from '../audio/devices';
 import { MediaRecorderAudioRecorder } from '../audio/recorder';
 import type { RecorderErrorKind, TrackSpec } from '../audio/recorder';
 import { TranscriptionService } from '../asr/transcription-service';
@@ -400,13 +401,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       // one track (one file, no Me/Others split). Every mode records flat.
       // Linux desktop records system sound via the sound server; elsewhere
       // the screen-share picker provides device audio.
-      const deviceSource = () => (systemAudio?.available ? new SystemAudioSource() : new DeviceAudioSource());
+      // Input/output chosen in Settings or on New Meeting (default otherwise).
+      const micId = mode === 'device' ? undefined : await chosenMicrophoneId().catch(() => undefined);
+      const mic = () => new MicrophoneAudioSource(micId);
+      const deviceSource = () =>
+        systemAudio?.available ? new SystemAudioSource(getSystemOutput()) : new DeviceAudioSource();
       const specs: TrackSpec[] =
         mode === 'speaker'
-          ? [{ track: '', source: new MicrophoneAudioSource() }]
+          ? [{ track: '', source: mic() }]
           : mode === 'device'
             ? [{ track: '', source: deviceSource() }]
-            : [{ track: '', source: new MixedAudioSource([new MicrophoneAudioSource(), deviceSource()]) }];
+            : [{ track: '', source: new MixedAudioSource([mic(), deviceSource()]) }];
       const recorder = new MediaRecorderAudioRecorder();
       recorderRef.current = recorder;
       recorder.onState((s) => {

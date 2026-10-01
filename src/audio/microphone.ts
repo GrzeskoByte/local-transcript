@@ -5,6 +5,9 @@ import { MediaAccessError, mediaAccessError } from './permissions';
 export class MicrophoneAudioSource implements AudioSource {
   private stream: MediaStream | null = null;
 
+  /** @param deviceId microphone to use (undefined = system default). */
+  constructor(private readonly deviceId?: string) {}
+
   async start(): Promise<MediaStream> {
     // ASR-oriented capture constraints.
     //  - mono 48 kHz: fewer resampling artefacts than an unknown device default,
@@ -20,6 +23,7 @@ export class MicrophoneAudioSource implements AudioSource {
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          ...(this.deviceId ? { deviceId: { exact: this.deviceId } } : {}),
           channelCount: 1,
           sampleRate: 48000,
           echoCancellation: { ideal: false },
