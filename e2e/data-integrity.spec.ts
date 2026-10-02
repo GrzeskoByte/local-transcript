@@ -130,7 +130,15 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
   const seek = playback.getByRole('slider', { name: 'Seek' });
   const box = (await seek.boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await expect(playback.getByLabel('Playback position')).toHaveText(/^0:0[3-5] \/ 0:0[6-9]/);
+  // Lands mid-timeline. The decoded length can exceed the recorded time
+  // (WebKit's MediaRecorder may keep the paused stretch), so compare with it.
+  const clock = (t: string) => t.split(':').reduce((acc, p) => acc * 60 + Number(p), 0);
+  await expect
+    .poll(async () => {
+      const [pos, total] = (await playback.getByLabel('Playback position').textContent())!.split(' / ');
+      return Math.abs(clock(pos!) - clock(total!) / 2) <= 1.5 && clock(total!) >= 6;
+    })
+    .toBe(true);
   await playback.getByRole('button', { name: 'Back 15 seconds' }).click();
   await expect(playback.getByLabel('Playback position')).toHaveText(/^0:00 \//);
   await expect(playback.getByRole('alert')).toHaveCount(0);
