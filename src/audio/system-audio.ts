@@ -115,6 +115,11 @@ export class SystemAudioSource implements AudioSource {
     }
   }
 
+  /** The live capture stream (diagnostics), null when stopped. */
+  currentStream(): MediaStream | null {
+    return this.stream;
+  }
+
   async stop(): Promise<void> {
     const hadStream = this.stream !== null;
     this.stream?.getTracks().forEach((t) => t.stop());

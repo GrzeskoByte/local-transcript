@@ -20,6 +20,7 @@ import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { applyPlaybackOutput } from '../../audio/devices';
 import { playbackContext } from '../../audio/player';
 import { AudioPlayer, type AudioPlayerHandle } from '../components/AudioPlayer.tsx';
+import { AudioCheckCard } from '../components/AudioCheck.tsx';
 
 export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const {
@@ -140,6 +141,8 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           <AudioDevicePickers playback onPlaybackChange={() => void applyPlaybackOutput(playbackContext())} />
         )}
       </section>
+
+      {m.diagnostics && <AudioCheckCard diagnostics={m.diagnostics} />}
 
       <section className="card" aria-label="Meeting agenda">
         <div className="model-title" style={{ marginBottom: 4 }}>

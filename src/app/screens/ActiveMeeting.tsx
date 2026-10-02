@@ -3,11 +3,12 @@ import { useApp, formatDuration } from '../store.tsx';
 import { modeLabel } from '../../domain/meeting';
 import { CheckIcon } from '../components/icons.tsx';
 import { AgendaList } from '../components/Agenda.tsx';
+import { LiveAudioWarnings } from '../components/AudioCheck.tsx';
 
 export function ActiveMeeting(): React.JSX.Element {
   const {
     activeMeeting, elapsedMs, recordingState, recordingError, recordingErrorKind,
-    pauseRecording, resumeRecording, retrySaving, stopRecording,
+    pauseRecording, resumeRecording, retrySaving, stopRecording, recordingIssues,
   } = useApp();
   const [retrying, setRetrying] = useState(false);
 
@@ -93,6 +94,7 @@ export function ActiveMeeting(): React.JSX.Element {
           </div>
         )}
       </section>
+      {!failing && <LiveAudioWarnings issues={recordingIssues} />}
       {activeMeeting.agenda?.items.length ? (
         <section className="card" aria-label="Meeting agenda">
           <strong>Agenda</strong>

@@ -14,6 +14,7 @@ import type { AudioSource } from './recorder';
 export class MixedAudioSource implements AudioSource {
   private ctx: AudioContext | null = null;
   private output: MediaStream | null = null;
+  private inputStreams: MediaStream[] = [];
 
   constructor(
     private readonly inputs: AudioSource[],
@@ -30,6 +31,7 @@ export class MixedAudioSource implements AudioSource {
       throw failed.reason;
     }
     const streams = results.map((r) => (r as PromiseFulfilledResult<MediaStream>).value);
+    this.inputStreams = streams;
     try {
       const ctx = this.createContext();
       this.ctx = ctx;
@@ -73,7 +75,13 @@ export class MixedAudioSource implements AudioSource {
     }
   }
 
+  /** The mix graph and its input streams (same order as `inputs`), for diagnostics. */
+  graph(): { ctx: AudioContext; inputs: MediaStream[] } | null {
+    return this.ctx ? { ctx: this.ctx, inputs: [...this.inputStreams] } : null;
+  }
+
   async stop(): Promise<void> {
+    this.inputStreams = [];
     this.output?.getTracks().forEach((t) => t.stop());
     this.output = null;
     const ctx = this.ctx;

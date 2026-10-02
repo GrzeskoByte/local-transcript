@@ -5,6 +5,8 @@ import { CHUNK_MS } from '../domain/meeting';
 export interface AudioSource {
   start(): Promise<MediaStream>;
   stop(): Promise<void>;
+  /** The live capture stream, for diagnostics (optional). */
+  currentStream?(): MediaStream | null;
 }
 
 /** One capture channel. `track` names the OPFS sub-directory ('' = flat, single-track). */

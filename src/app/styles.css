@@ -466,3 +466,13 @@ details.tier-card[open] > summary { border-bottom: 1px solid var(--border); }
 @media (max-width: 640px) {
   .agenda-meta { grid-template-columns: 1fr 70px; }
 }
+
+/* Audio check (recording diagnostics) */
+.audio-issues { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 8px; }
+.audio-issues li { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 3px solid var(--border-strong); }
+.audio-issues li.is-problem, .audio-warnings .audio-issues li { border-left-color: #f59e0b; }
+.audio-issue-title { font-weight: 700; }
+.audio-warnings { border-color: #fcd34d; }
+.audio-details summary { cursor: pointer; font-weight: 600; margin: 6px 0; }
+.audio-details ul { padding-left: 18px; }
+.badge-warn { background: #fef3c7; color: #92400e; }

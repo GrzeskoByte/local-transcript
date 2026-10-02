@@ -1,3 +1,4 @@
+import type { RecordingDiagnostics } from './audio-diagnostics';
 import type { MeetingAgenda } from './agenda';
 
 export type RecordingMode = 'speaker' | 'device' | 'dual' | 'file';
@@ -85,6 +86,8 @@ export interface Meeting {
     createdAt: number;
     sessionId?: string;
   };
+  /** Audio health measured while recording (see audio-diagnostics.ts). */
+  diagnostics?: RecordingDiagnostics;
   /** Last calendar event created from this meeting, if any. */
   calendarEvent?: { provider: string; createdAt: number };
   /** Every calendar event created from this meeting (newest last). */
