@@ -9,6 +9,8 @@ import { MixedAudioSource } from '../audio/mixed-audio';
 import { chosenMicrophoneId, getSystemOutput } from '../audio/devices';
 import { MediaRecorderAudioRecorder } from '../audio/recorder';
 import type { RecorderErrorKind, TrackSpec } from '../audio/recorder';
+import { RecordingDiagnosticsCollector, type DiagnosticsInput } from '../audio/diagnostics';
+import type { AudioIssue } from '../domain/audio-diagnostics';
 import { TranscriptionService } from '../asr/transcription-service';
 import {
   DEFAULT_NATIVE_LANGUAGE,
@@ -71,7 +73,7 @@ export type Route =
 export interface AudioTrackView {
   track: string;
   label: string;
-  url: string;
+  blob: Blob;
 }
 
 interface AppState {
@@ -86,6 +88,8 @@ interface AppState {
   recordingErrorKind: RecorderErrorKind | null;
   activeMeeting: Meeting | null;
   elapsedMs: number;
+  /** Audio problems detected so far in the running recording (live). */
+  recordingIssues: AudioIssue[];
   storageWarning: string | null;
   startRecording: (title: string, mode: RecordingMode, agenda?: AgendaItem[]) => Promise<void>;
   /** Replace a meeting's agenda (empty list removes it). */
@@ -238,6 +242,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [systemAudio, setSystemAudio] = useState<SystemAudioStatus | null>(null);
   const [modelDownload, setModelDownload] = useState<{ name: string; received: number; total: number } | null>(null);
   const recorderRef = useRef<MediaRecorderAudioRecorder | null>(null);
+  const diagRef = useRef<{ collector: RecordingDiagnosticsCollector; timer: ReturnType<typeof setInterval> } | null>(null);
+  const [recordingIssues, setRecordingIssues] = useState<AudioIssue[]>([]);
   const timerRef = useRef<number | null>(null);
   /** Id of the recording in progress: it is never "unfinished" (§15). */
   const activeIdRef = useRef<string | null>(null);
@@ -372,6 +378,56 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     return new TranscriptionService(callbacks);
   }, []);
 
+  /**
+   * Measure the inputs while recording (levels, clipping, bleed, Bluetooth
+   * call mode, device changes). Best-effort: never affects the recording.
+   * Saved on the meeting every 30 s so a crash keeps what was measured.
+   */
+  const startDiagnostics = useCallback(
+    (id: string, mode: RecordingMode, startedAt: number, source: TrackSpec['source']) => {
+      const collector = new RecordingDiagnosticsCollector(mode, startedAt);
+      let inputs: DiagnosticsInput[] = [];
+      let ctx: AudioContext | null = null;
+      if (source instanceof MixedAudioSource) {
+        const graph = source.graph();
+        ctx = graph?.ctx ?? null;
+        const [micStream, deviceStream] = graph?.inputs ?? [];
+        inputs = [
+          ...(micStream ? [{ role: 'microphone' as const, stream: micStream }] : []),
+          ...(deviceStream ? [{ role: 'device' as const, stream: deviceStream }] : []),
+        ];
+      } else {
+        const stream = source.currentStream?.() ?? null;
+        if (stream) inputs = [{ role: mode === 'device' ? 'device' : 'microphone', stream }];
+      }
+      let ticks = 0;
+      const timer = setInterval(() => {
+        ticks++;
+        setRecordingIssues(collector.report().issues.filter((i) => i.severity === 'problem'));
+        if (ticks % 15 === 0) {
+          void collector
+            .refreshNative()
+            .then(() => updateMeeting(id, { diagnostics: collector.report() }))
+            .catch(() => undefined);
+        }
+      }, 2000);
+      diagRef.current = { collector, timer };
+      setRecordingIssues([]);
+      void collector.start(inputs, ctx).catch(() => undefined);
+    },
+    [],
+  );
+
+  /** Stop measuring (before the sources stop) and return the final report. */
+  const stopDiagnostics = useCallback(async () => {
+    const diag = diagRef.current;
+    diagRef.current = null;
+    setRecordingIssues([]);
+    if (!diag) return undefined;
+    clearInterval(diag.timer);
+    return diag.collector.stop().catch(() => undefined);
+  }, []);
+
   const startRecording = useCallback(
     async (title: string, mode: RecordingMode, agenda: AgendaItem[] = []) => {
       setRecordingError(null);
@@ -406,12 +462,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const mic = () => new MicrophoneAudioSource(micId);
       const deviceSource = () =>
         systemAudio?.available ? new SystemAudioSource(getSystemOutput()) : new DeviceAudioSource();
-      const specs: TrackSpec[] =
-        mode === 'speaker'
-          ? [{ track: '', source: mic() }]
-          : mode === 'device'
-            ? [{ track: '', source: deviceSource() }]
-            : [{ track: '', source: new MixedAudioSource([mic(), deviceSource()]) }];
+      const source =
+        mode === 'speaker' ? mic() : mode === 'device' ? deviceSource() : new MixedAudioSource([mic(), deviceSource()]);
+      const specs: TrackSpec[] = [{ track: '', source }];
       const recorder = new MediaRecorderAudioRecorder();
       recorderRef.current = recorder;
       recorder.onState((s) => {
@@ -431,6 +484,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setElapsedMs(0);
       try {
         await recorder.startTracks(specs, id, now);
+        startDiagnostics(id, mode, now, source);
         const meta = await getMeeting(id);
         if (meta) {
           const { readMeta } = await import('../storage/recordings');
@@ -449,6 +503,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setRecordingError(msg);
+        await stopDiagnostics();
         await deleteRecording(id).catch(() => undefined);
         const existing = await getMeeting(id).catch(() => undefined);
         if (existing) {
@@ -461,7 +516,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
       await refresh();
     },
-    [go, refresh, systemAudio],
+    [go, refresh, systemAudio, startDiagnostics, stopDiagnostics],
   );
 
   const pauseRecording = useCallback(async () => {
@@ -641,6 +696,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const summary: MeetingSummary = {
         text: result.summary,
         keyPoints: result.keyPoints,
+        actionItems: result.actionItems,
         model: llmConfig.model.trim(),
         createdAt: Date.now(),
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),
@@ -656,6 +712,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const recorder = recorderRef.current;
     const meeting = activeMeeting;
     if (!recorder || !meeting) return null;
+    const diagnostics = await stopDiagnostics();
     const result = await recorder.stop();
     const endedAt = Date.now();
     const recordedTracks = result.tracks.filter(Boolean);
@@ -668,6 +725,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       tracks: recordedTracks.length > 1 ? recordedTracks : undefined,
       unfinished: false,
       ...(result.unsavedChunks > 0 ? { unsavedChunks: result.unsavedChunks } : {}),
+      ...(diagnostics ? { diagnostics } : {}),
     };
     await saveMeeting(updated);
     activeIdRef.current = null;
@@ -679,17 +737,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     void mirrorToDisk(updated);
     go({ name: 'detail', id: updated.id });
     return updated;
-  }, [activeMeeting, go, refresh, mirrorToDisk]);
+  }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics]);
 
   const loadDetail = useCallback(async (id: string) => {
     const meeting = await getMeeting(id);
     setDetailMeeting(meeting ?? null);
     if (!meeting) {
       setDetailSegments([]);
-      setDetailTracks((prev) => {
-        prev.forEach((t) => URL.revokeObjectURL(t.url));
-        return [];
-      });
+      setDetailTracks([]);
       return;
     }
     setDetailSegments(await getSegments(id));
@@ -702,13 +757,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       views.push({
         track,
         label: trackSpeakerLabel(track) ?? (track || 'Recording'),
-        url: URL.createObjectURL(blob),
+        blob,
       });
     }
-    setDetailTracks((prev) => {
-      prev.forEach((t) => URL.revokeObjectURL(t.url));
-      return views;
-    });
+    setDetailTracks(views);
   }, []);
 
   const transcribe = useCallback(
@@ -921,6 +973,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       recordingErrorKind,
       activeMeeting,
       elapsedMs,
+      recordingIssues,
       storageWarning,
       startRecording,
       pauseRecording,
@@ -978,7 +1031,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
-      elapsedMs, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
+      elapsedMs, recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
       stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,

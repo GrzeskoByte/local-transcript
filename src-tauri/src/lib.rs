@@ -1,3 +1,4 @@
+mod audio_diag;
 mod models;
 mod native_asr;
 mod opencode;
@@ -58,6 +59,9 @@ pub fn run() {
             _ => PermissionResponse::Default,
         })
         .invoke_handler(tauri::generate_handler![
+            audio_diag::native_audio_diag_start,
+            audio_diag::native_audio_diag_peek,
+            audio_diag::native_audio_diag_stop,
             native_asr::native_asr_status,
             native_asr::native_asr_models,
             native_asr::native_asr_download_model,
@@ -100,6 +104,7 @@ pub fn run() {
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 system_audio::remove_sources();
+                audio_diag::shutdown();
             }
         });
 }

@@ -36,6 +36,22 @@ describe('parseSummaryReply', () => {
     expect(r.keyPoints).toEqual([]);
   });
 
+  it('splits TL;DR, key points and action items', () => {
+    const r = parseSummaryReply(
+      '# TL;DR\nRelease moves to Friday.\n\n# Key points\n- Ship on Friday\n\n# Action items\n- Anna: update docs (Thu)\n* Unassigned: book room\n',
+    );
+    expect(r.summary).toBe('Release moves to Friday.');
+    expect(r.keyPoints).toEqual(['Ship on Friday']);
+    expect(r.actionItems).toEqual(['Anna: update docs (Thu)', 'Unassigned: book room']);
+  });
+
+  it('drops a "None" action item and accepts bold or numbered variants', () => {
+    const r = parseSummaryReply('**TL;DR:**\nShort.\n## Key Points\n1. One\n2) Two\n### Action Items\n- None\n');
+    expect(r.summary).toBe('Short.');
+    expect(r.keyPoints).toEqual(['One', 'Two']);
+    expect(r.actionItems).toEqual([]);
+  });
+
   it('ignores non-bullet lines in the key-points section', () => {
     const r = parseSummaryReply('# Key points\nIntro line\n- Real point\n');
     expect(r.keyPoints).toEqual(['Real point']);
@@ -157,7 +173,7 @@ describe('claude preset', () => {
       },
     });
     const result = await createLlmClient(claude).summarize('Standup', '**Alice:** launch Friday');
-    expect(result).toEqual({ summary: 'Shipped.', keyPoints: ['Launch Friday'], sessionId: 'sess-1' });
+    expect(result).toEqual({ summary: 'Shipped.', keyPoints: ['Launch Friday'], actionItems: [], sessionId: 'sess-1' });
     expect(calls[0]?.cmd).toBe('native_claude_summarize');
     const request = (calls[0]?.args as { request: Record<string, string> }).request;
     expect(request.model).toBe('opus');

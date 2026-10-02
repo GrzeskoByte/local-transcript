@@ -48,7 +48,7 @@ pub struct SystemAudioOutput {
     pub is_default: bool,
 }
 
-fn pactl(args: &[&str]) -> Result<String, String> {
+pub(crate) fn pactl(args: &[&str]) -> Result<String, String> {
     let out = crate::proc::command("pactl")
         .args(args)
         .output()

@@ -72,8 +72,11 @@ export const DEFAULT_LLM_CONFIG: LlmConfig = {
 };
 
 export interface MeetingSummary {
+  /** TL;DR: one or two sentences. */
   text: string;
   keyPoints: string[];
+  /** "Owner: task (due)" lines; absent on summaries made before they existed. */
+  actionItems?: string[];
   model: string;
   createdAt: number;
   /** Claude Code session that produced it (`claude --resume <id>`). */
@@ -83,35 +86,73 @@ export interface MeetingSummary {
 export interface LlmSummaryResult {
   summary: string;
   keyPoints: string[];
+  actionItems: string[];
   sessionId?: string;
 }
 
+// Short on purpose: a summary is read in seconds, the transcript has the rest.
 const SUMMARY_SYSTEM = [
-  'You summarize meeting transcripts.',
-  'Reply in Markdown with exactly two sections:',
-  '# Summary (2-4 short paragraphs)',
-  '# Key points (a bullet list, one fact or decision per bullet, no sub-bullets).',
-  'Nothing before the first heading, nothing after the last bullet.',
+  'You summarize meeting transcripts for busy people. Be brief: the reader wants the outcome, not a retelling.',
+  'Reply in Markdown with exactly these three sections and nothing else:',
+  '# TL;DR',
+  'One or two sentences: what the meeting was about and what was decided.',
+  '# Key points',
+  'At most 7 bullets, each under 20 words: decisions, agreements, important facts, open questions. Skip small talk and anything already in the TL;DR.',
+  '# Action items',
+  'One bullet per task as "Owner: task (due date)"; use "Unassigned" when no owner was named and omit the due date when none was given. Write "- None" when there are no tasks.',
+  'No sub-bullets, no other headings, no text before the first heading or after the last bullet. Write in the language of the transcript.',
 ].join('\n');
 
 export function summaryUserPrompt(title: string, transcriptMarkdown: string): string {
   return [`Meeting title: ${title || 'Untitled'}`, '', 'Transcript:', transcriptMarkdown].join('\n');
 }
 
-/** Split a model reply into summary body + key-point bullets. */
+type SummarySection = 'summary' | 'keyPoints' | 'actionItems';
+
+function sectionFor(heading: string): SummarySection | null {
+  const h = heading.toLowerCase().replace(/[^a-z;]+/g, ' ').trim();
+  if (/^(tl;?dr|summary)\b/.test(h)) return 'summary';
+  if (/^(key points|highlights|decisions)\b/.test(h)) return 'keyPoints';
+  if (/^(action items|actions|next steps|tasks|todo|to do)\b/.test(h)) return 'actionItems';
+  return null;
+}
+
+const NONE = /^(none|n\/a|no action items|-)\.?$/i;
+
+/** Split a model reply into TL;DR + key-point bullets + action items. */
 export function parseSummaryReply(content: string): LlmSummaryResult {
   const text = content.trim();
-  const pointsIdx = text.search(/^#\s*key points\s*$/gim);
-  if (pointsIdx === -1) return { summary: text, keyPoints: [] };
-  const summary = text.slice(0, pointsIdx).replace(/^#\s*summary\s*$/gim, '').trim();
-  const rest = text.slice(pointsIdx);
-  const keyPoints = rest
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => /^[-*]\s+/.test(l))
-    .map((l) => l.replace(/^[-*]\s+/, '').trim())
-    .filter(Boolean);
-  return { summary, keyPoints };
+  const parts: Record<SummarySection, string[]> = { summary: [], keyPoints: [], actionItems: [] };
+  let current: SummarySection | null = null;
+  let sawHeading = false;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    const heading = /^#{1,6}\s*(.+?)\s*#*$/.exec(line) ?? /^\*\*(.+?):?\*\*:?$/.exec(line);
+    if (heading) {
+      const section = sectionFor(heading[1]!);
+      if (section) {
+        current = section;
+        sawHeading = true;
+        continue;
+      }
+    }
+    if (!current) {
+      parts.summary.push(raw);
+      continue;
+    }
+    if (current === 'summary') {
+      parts.summary.push(raw);
+      continue;
+    }
+    const bullet = /^(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line);
+    if (bullet && !NONE.test(bullet[1]!.trim())) parts[current].push(bullet[1]!.trim());
+  }
+  if (!sawHeading) return { summary: text, keyPoints: [], actionItems: [] };
+  return {
+    summary: parts.summary.join('\n').trim(),
+    keyPoints: parts.keyPoints,
+    actionItems: parts.actionItems,
+  };
 }
 
 export class LlmClient {

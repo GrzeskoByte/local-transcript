@@ -60,6 +60,9 @@ export const SYSTEM_AUDIO_PROCESSING = {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Time for the capture pipeline to release the source before it is unloaded. */
+const RELEASE_DELAY_MS = 300;
+
 /**
  * Find the virtual source among the audio inputs. Labels are only exposed
  * after one capture grant, and the sound server needs a moment to announce a
@@ -112,9 +115,18 @@ export class SystemAudioSource implements AudioSource {
     }
   }
 
+  /** The live capture stream (diagnostics), null when stopped. */
+  currentStream(): MediaStream | null {
+    return this.stream;
+  }
+
   async stop(): Promise<void> {
+    const hadStream = this.stream !== null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
+    // Track.stop() returns before WebKit's pulsesrc has disconnected; unloading
+    // the virtual source under a live capture pipeline can stall it.
+    if (hadStream) await sleep(RELEASE_DELAY_MS);
     await invokeDesktop('native_system_audio_stop').catch(() => undefined);
   }
 }

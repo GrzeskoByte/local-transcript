@@ -44,6 +44,11 @@ export class DeviceAudioSource implements AudioSource {
     return this.stream;
   }
 
+  /** The live capture stream (diagnostics), null when stopped. */
+  currentStream(): MediaStream | null {
+    return this.stream;
+  }
+
   async stop(): Promise<void> {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;

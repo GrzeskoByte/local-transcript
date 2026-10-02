@@ -121,17 +121,27 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
   // --- close / reopen → play ---
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Integrity Test' })).toBeVisible();
-  const playable = await page.locator('audio.player').first().evaluate(
-    (a: HTMLAudioElement) =>
-      new Promise<boolean>((res) => {
-        if (a.readyState >= 1) return res(true);
-        a.onloadedmetadata = () => res(true);
-        a.onerror = () => res(false);
-        // Players use preload="none": ask for the data like pressing play would.
-        a.load();
-      }),
-  );
-  expect(playable).toBe(true);
+  // Web Audio player (no <audio>): decodes on first Play, then seeks exactly.
+  const playback = page.getByRole('region', { name: 'Recording playback' });
+  await playback.getByRole('button', { name: 'Play' }).click();
+  await expect(playback.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 15_000 });
+  await playback.getByRole('button', { name: 'Pause' }).click();
+  // Click the middle of the timeline (fill() bypasses React's change tracking).
+  const seek = playback.getByRole('slider', { name: 'Seek' });
+  const box = (await seek.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  // Lands mid-timeline. The decoded length can exceed the recorded time
+  // (WebKit's MediaRecorder may keep the paused stretch), so compare with it.
+  const clock = (t: string) => t.split(':').reduce((acc, p) => acc * 60 + Number(p), 0);
+  await expect
+    .poll(async () => {
+      const [pos, total] = (await playback.getByLabel('Playback position').textContent())!.split(' / ');
+      return Math.abs(clock(pos!) - clock(total!) / 2) <= 1.5 && clock(total!) >= 6;
+    })
+    .toBe(true);
+  await playback.getByRole('button', { name: 'Back 15 seconds' }).click();
+  await expect(playback.getByLabel('Playback position')).toHaveText(/^0:00 \//);
+  await expect(playback.getByRole('alert')).toHaveCount(0);
   expect((await storedFor(page, id)).meeting?.transcriptionStatus).toBe('not_started');
 
   // --- transcribe (speech-chunked for the text-only voxtype backend) ---

@@ -70,6 +70,15 @@ export async function mirrorMeetingToDisk(meeting: Meeting): Promise<string[]> {
     );
   }
 
+  if (meeting.diagnostics) {
+    written.push(
+      await saveFileToDisk(
+        `${folder}/diagnostics.json`,
+        encoder.encode(JSON.stringify(meeting.diagnostics, null, 2)),
+      ),
+    );
+  }
+
   written.push(
     await saveFileToDisk(
       `${folder}/meeting.json`,

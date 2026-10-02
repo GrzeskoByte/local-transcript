@@ -120,6 +120,9 @@ export function summaryMarkdown(meeting: Meeting): string {
     '',
     ...summary.keyPoints.map((p) => `- ${p}`),
     '',
+    ...((summary.actionItems?.length ?? 0) > 0
+      ? ['## Action items', '', ...summary.actionItems!.map((a) => `- [ ] ${a}`), '']
+      : []),
     `> Summarized with ${summary.model} on ${date}`,
   ].join('\n');
 }

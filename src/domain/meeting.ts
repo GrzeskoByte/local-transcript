@@ -1,3 +1,4 @@
+import type { RecordingDiagnostics } from './audio-diagnostics';
 import type { MeetingAgenda } from './agenda';
 
 export type RecordingMode = 'speaker' | 'device' | 'dual' | 'file';
@@ -77,7 +78,16 @@ export interface Meeting {
   /** Last GitLab agenda upload of this meeting, if any. */
   gitlabAgenda?: { url: string; target: string; uploadedAt: number };
   /** LLM summary; `sessionId` = Claude Code session that produced it. */
-  summary?: { text: string; keyPoints: string[]; model: string; createdAt: number; sessionId?: string };
+  summary?: {
+    text: string;
+    keyPoints: string[];
+    actionItems?: string[];
+    model: string;
+    createdAt: number;
+    sessionId?: string;
+  };
+  /** Audio health measured while recording (see audio-diagnostics.ts). */
+  diagnostics?: RecordingDiagnostics;
   /** Last calendar event created from this meeting, if any. */
   calendarEvent?: { provider: string; createdAt: number };
   /** Every calendar event created from this meeting (newest last). */
