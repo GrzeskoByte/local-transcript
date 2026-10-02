@@ -33,8 +33,9 @@ suite relies on (`.sidebar .model-chip`, `h1 + p.muted`, `.transcript li`,
 - Colours: exactly the DESIGN.md palette (`--primary #e91d2a`, `--ink #000`,
   `--canvas #fff`, `--yellow #fcc20f`, `--purple #6a26a4`, `--link #0000ee`,
   8 tints). Aliases `--frame`, `--muted` (`#333`, AA on white and on every tint).
-- Fonts: `--font-display` Arial Black → Archivo Black (bundled via
-  `@fontsource/archivo-black`, because Linux has no Arial Black) ;
+- Fonts: `--font-display` Archivo Black (bundled via `@fontsource/archivo-black`)
+  first, then Arial Black. It must come first: in the AppImage, fontconfig answers
+  "Arial Black" with a regular bold sans, so WebKitGTK never falls back;
   `--font-ui` Helvetica → Arial → Liberation/Nimbus Sans; `--font-body` Times
   New Roman → Liberation Serif/Nimbus Roman.
 - Type scale = DESIGN.md typography tokens (36/24/16/14/14/12/11/12/12).

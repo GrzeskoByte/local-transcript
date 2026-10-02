@@ -24,7 +24,7 @@
   --tint-periwinkle: #8c9ae0;
 
   /* type (DESIGN.md › typography) */
-  --font-display: "Arial Black", "Archivo Black", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: "Archivo Black", "Arial Black", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-ui: Helvetica, Arial, "Liberation Sans", "Nimbus Sans", sans-serif;
   --font-body: "Times New Roman", Times, "Liberation Serif", "Nimbus Roman", serif;
   --font-mono: "Courier New", Courier, "Liberation Mono", "Nimbus Mono PS", monospace;

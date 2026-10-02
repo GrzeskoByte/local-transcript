@@ -10,6 +10,7 @@
  * in-memory map below serves Node unit tests.
  */
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
+import { repairFragmentedMp4 } from '../audio/mp4-repair';
 import { bytesToBase64 } from '../asr/wav';
 
 export interface RecordingMeta {
@@ -274,7 +275,7 @@ export async function readRecordingBlob(
 ): Promise<Blob | null> {
   if (useNative()) {
     const b64 = await invokeDesktop<string>('native_recording_read', { meetingId: id, track });
-    return b64 ? new Blob([base64ToBytes(b64)], { type: mimeType }) : null;
+    return b64 ? assembled([base64ToBytes(b64)], mimeType) : null;
   }
   const names = await listChunkNames(id, track);
   if (names.length === 0) return null;
@@ -284,7 +285,7 @@ export async function readRecordingBlob(
       const part = memFallback.get(memKey(id, track, name));
       if (part) parts.push(part);
     }
-    return parts.length ? new Blob(parts, { type: mimeType }) : null;
+    return parts.length ? assembled(parts, mimeType) : null;
   }
   const dir = await trackDir(id, track, false);
   if (!dir) return null;
@@ -293,7 +294,16 @@ export async function readRecordingBlob(
     const file = await dir.getFileHandle(name);
     parts.push(await file.getFile());
   }
-  return new Blob(parts, { type: mimeType });
+  return assembled(parts, mimeType);
+}
+
+/** Joins stored chunks; MP4 recordings are repaired (see repairFragmentedMp4). */
+async function assembled(parts: BlobPart[], mimeType: string): Promise<Blob> {
+  const blob = new Blob(parts, { type: mimeType });
+  if (!mimeType.includes('mp4')) return blob;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const repaired = repairFragmentedMp4(bytes);
+  return repaired === bytes ? blob : new Blob([repaired], { type: mimeType });
 }
 
 export async function deleteRecording(id: string): Promise<void> {
