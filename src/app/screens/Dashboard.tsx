@@ -4,7 +4,7 @@ import { formatDuration, modeLabel } from '../../domain/meeting.ts';
 import { searchSegments } from '../../domain/transcript.ts';
 import { getSegments } from '../../storage/transcripts.ts';
 import { describeNativeRuntime } from '../../asr/model-manager.ts';
-import { MicIcon, PlusIcon, SearchIcon, WaveIcon } from '../components/icons.tsx';
+import { MicIcon, PlusIcon, SearchIcon } from '../components/icons.tsx';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { isDesktopApp } from '../../platform/desktop.ts';
 
@@ -51,7 +51,7 @@ export function Dashboard(): React.JSX.Element {
 
   return (
     <>
-      <div className="page-head">
+      <div className="page-head tint-sky">
         <div>
           <h1>My Meetings</h1>
           <p className="muted">Your recording and transcript stay on this device.</p>
@@ -133,44 +133,37 @@ export function Dashboard(): React.JSX.Element {
       )}
 
       {!modelReady && nativeStatus?.available && installedModels.length === 0 && (
-        <section className="card" aria-label="Local speech model">
-          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-            <div className="media-art">
-              <WaveIcon />
-            </div>
-            <div style={{ flex: 1 }}>
-              <strong>Set up on-device transcription</strong>
-              <div className="muted">
-                One click downloads the speech model ({firstRunModel}) once. Recording already works without it.
-              </div>
-              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }} aria-label="Acceleration">
-                {describeNativeRuntime(nativeStatus)}
-              </p>
-              {modelDownload ? (
-                <div className="mt-3">
-                  <ModelDownloadProgress />
-                </div>
-              ) : (
-                <div className="btn-row">
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => {
-                      setSetupError(null);
-                      downloadModel(firstRunModel).catch((e: unknown) =>
-                        setSetupError(e instanceof Error ? e.message : String(e)),
-                      );
-                    }}
-                  >
-                    Set up transcription
-                  </button>
-                  <button className="btn" onClick={() => go({ name: 'settings' })}>
-                    Choose another model
-                  </button>
-                </div>
-              )}
-              {setupError && <p className="error mb-0">{setupError}</p>}
-            </div>
+        <section className="cta-red" aria-label="Local speech model">
+          <span className="cta-title">Set up on-device transcription</span>
+          <div>
+            One click downloads the speech model ({firstRunModel}) once. Recording already works without it.
           </div>
+          <p className="mt-2 mb-0" aria-label="Acceleration">
+            {describeNativeRuntime(nativeStatus)}
+          </p>
+          {modelDownload ? (
+            <div className="mt-3">
+              <ModelDownloadProgress />
+            </div>
+          ) : (
+            <div className="btn-row">
+              <button
+                className="btn btn-primary btn-lg"
+                onClick={() => {
+                  setSetupError(null);
+                  downloadModel(firstRunModel).catch((e: unknown) =>
+                    setSetupError(e instanceof Error ? e.message : String(e)),
+                  );
+                }}
+              >
+                Set up transcription
+              </button>
+              <button className="btn btn-lg" onClick={() => go({ name: 'settings' })}>
+                Choose another model
+              </button>
+            </div>
+          )}
+          {setupError && <p className="banner mt-3 mb-0">{setupError}</p>}
         </section>
       )}
 
@@ -248,7 +241,7 @@ export function Dashboard(): React.JSX.Element {
           <ul className="meeting-list">
             {meetings.map((m) => (
               <li key={m.id}>
-                <button className="meeting-item" onClick={() => go({ name: 'detail', id: m.id })}>
+                <button className={`meeting-item mode-${m.mode}`} onClick={() => go({ name: 'detail', id: m.id })}>
                   <span className="body">
                     <span className="title">{m.title}</span>
                     <span className="meta">

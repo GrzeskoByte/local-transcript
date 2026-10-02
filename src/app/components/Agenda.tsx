@@ -25,7 +25,7 @@ export function AgendaList({ items }: { items: AgendaItem[] }): React.JSX.Elemen
           </li>
         ))}
       </ol>
-      {total > 0 && <p className="muted small" style={{ marginBottom: 0 }}>Planned: {total} min</p>}
+      {total > 0 && <p className="muted small mb-0">Planned: {total} min</p>}
     </>
   );
 }
@@ -119,7 +119,7 @@ export function AgendaEditor({
           </div>
         </div>
       ))}
-      {total > 0 && <p className="muted small" style={{ margin: '4px 0 0' }}>Planned: {total} min</p>}
+      {total > 0 && <p className="muted small mt-1 mb-0">Planned: {total} min</p>}
 
       {paste !== null && (
         <>

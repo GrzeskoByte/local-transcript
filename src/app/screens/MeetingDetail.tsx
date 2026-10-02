@@ -89,7 +89,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
         ← All meetings
       </button>
 
-      <div className="mt-3">
+      <div className="page-head detail-head tint-peach">
         <h1>{m.title}</h1>
         <p className="muted">
           {m.durationEstimated ? '≈ ' : ''}{formatDuration(m.durationMs)} · Recorded {new Date(m.createdAt).toLocaleString()}
@@ -145,7 +145,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
       {m.diagnostics && <AudioCheckCard diagnostics={m.diagnostics} />}
 
       <section className="card" aria-label="Meeting agenda">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>Agenda</strong>
           {m.agenda && <span className="badge">{m.agenda.items.length} topics</span>}
         </div>
@@ -183,11 +183,11 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           </>
         ) : (
           <>
-            <p className="muted" style={{ marginTop: 0 }}>
+            <p className="muted mt-0">
               Plan the topics for this meeting. The agenda is included in transcript exports and can be
               uploaded to GitLab.
             </p>
-            <div className="btn-row" style={{ marginTop: 0 }}>
+            <div className="btn-row mt-0">
               <button className="btn" onClick={() => setAgendaDraft([newAgendaItem()])}>
                 Create agenda
               </button>
@@ -239,7 +239,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             </label>
           </div>
           {installedModels.length === 0 && nativeStatus?.available && (
-            <p className="muted" style={{ margin: '10px 0 0' }}>
+            <p className="muted mt-2 mb-0">
               Your first transcription downloads the speech model ({firstRunModel}) once — about{' '}
               {firstRunModel.includes('q5') ? '550 MB' : '1.6 GB'}. Other models live in{' '}
               <button className="link-btn" onClick={() => go({ name: 'settings' })}>
@@ -248,15 +248,15 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               .
             </p>
           )}
-          <p className="muted" style={{ marginBottom: 0 }}>
+          <p className="muted mb-0">
             Desktop engine: models run natively and language auto-detection is available (whisper.cpp).
           </p>
           {nativeAccuracyHint(modelMeta.modelId) && (
-            <p className="muted" style={{ marginBottom: 0 }}>
+            <p className="muted mb-0">
               {nativeAccuracyHint(modelMeta.modelId)}
             </p>
           )}
-          <p className="muted" style={{ marginBottom: 0 }} aria-label="Acceleration">
+          <p className="muted mb-0" aria-label="Acceleration">
             {describeNativeRuntime(nativeStatus)}
           </p>
         </div>
@@ -264,7 +264,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
       <ModelDownloadProgress />
       {m.transcriptionStatus === 'not_started' && !busy && !modelDownload && (
         <div className="card">
-          <p className="muted" style={{ marginTop: 0 }}>
+          <p className="muted mt-0">
             Not transcribed yet. Transcription runs fully on this device.
           </p>
           <button
@@ -301,7 +301,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
 
       {m.transcriptionStatus === 'failed' && !busy && (
         <div className="card">
-          <p style={{ marginTop: 0 }}>
+          <p className="mt-0">
             <strong>Transcription failed.</strong>
           </p>
           <p className="muted">Your original recording is still safe.</p>
@@ -347,11 +347,11 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
 
       {m.summary && (
         <section className="card" aria-label="Meeting summary">
-          <div className="model-title" style={{ marginBottom: 4 }}>
+          <div className="model-title">
             <strong>Summary</strong>
             <span className="badge">{m.summary.model}</span>
           </div>
-          {m.summary.text && <p style={{ whiteSpace: 'pre-wrap' }}>{m.summary.text}</p>}
+          {m.summary.text && <p className="pre-wrap">{m.summary.text}</p>}
           {m.summary.keyPoints.length > 0 && (
             <>
               <strong>Key points</strong>
@@ -378,7 +378,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
 
       {m.summary && (
         <section className="card" aria-label="Calendar event">
-          <div className="model-title" style={{ marginBottom: 4 }}>
+          <div className="model-title">
             <strong>Calendar event</strong>
           </div>
           <div className="muted">
@@ -451,7 +451,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
                 onChange={(e) => setCalDraft({ ...calDraft, location: e.target.value })}
                 placeholder="Room, link…"
               />
-              {calMessage && <p className="muted small" style={{ marginBottom: 0 }}>{calMessage}</p>}
+              {calMessage && <p className="muted small mb-0">{calMessage}</p>}
               <div className="btn-row">
                 <button
                   className="btn btn-primary"
@@ -480,7 +480,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           )}
           {m.calendarEvents && m.calendarEvents.length > 0 ? (
             <>
-              <p className="muted small" style={{ marginBottom: 0 }}>Events created from this meeting</p>
+              <p className="muted small mb-0">Events created from this meeting</p>
               <ul className="model-list" aria-label="Created calendar events">
                 {m.calendarEvents.map((ev) => (
                   <li key={ev.uid} className="model-row">
@@ -496,7 +496,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             </>
           ) : (
             m.calendarEvent && (
-              <p className="muted small" style={{ marginBottom: 0 }}>
+              <p className="muted small mb-0">
                 Last event created: {new Date(m.calendarEvent.createdAt).toLocaleString()} · {m.calendarEvent.provider}
               </p>
             )
@@ -510,7 +510,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
       )}
 
       {detailSegments.length > 0 && (
-        <section style={{ marginTop: 8 }}>
+        <section className="mt-2">
           <input
             className="input"
             aria-label="Search transcript"
@@ -542,7 +542,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
 
       <h2>Manage</h2>
       <div className="card">
-        <div className="btn-row" style={{ marginTop: 0 }}>
+        <div className="btn-row mt-0">
           <button
             className="btn btn-primary"
             disabled={gitlabBusy || m.transcriptionStatus !== 'completed'}
@@ -623,7 +623,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             </a>
           ) : (
             m.gitlab && (
-              <span className="muted small" style={{ alignSelf: 'center' }}>
+              <span className="muted small self-center">
                 Re-upload to get a working link.
               </span>
             )
@@ -651,19 +651,19 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             </a>
           )}
         </div>
-        {gitlabMessage && <p className="muted small" style={{ marginBottom: 0 }}>{gitlabMessage}</p>}
+        {gitlabMessage && <p className="muted small mb-0">{gitlabMessage}</p>}
         {m.gitlab && (
-          <p className="muted small" style={{ marginBottom: 0 }}>
+          <p className="muted small mb-0">
             Last upload: {new Date(m.gitlab.uploadedAt).toLocaleString()} · {m.gitlab.target}
           </p>
         )}
         {m.gitlabAgenda && (
-          <p className="muted small" style={{ marginBottom: 0 }}>
+          <p className="muted small mb-0">
             Last agenda upload: {new Date(m.gitlabAgenda.uploadedAt).toLocaleString()} · {m.gitlabAgenda.target}
           </p>
         )}
         {m.gitlabSummary && (
-          <p className="muted small" style={{ marginBottom: 0 }}>
+          <p className="muted small mb-0">
             Last summary upload: {new Date(m.gitlabSummary.uploadedAt).toLocaleString()} · {m.gitlabSummary.target}
           </p>
         )}
@@ -719,9 +719,9 @@ function ClaudeSessionHint({ sessionId }: { sessionId: string }): React.JSX.Elem
   const [copied, setCopied] = useState(false);
   const command = claudeResumeCommand(sessionId);
   return (
-    <p className="muted small" style={{ marginBottom: 0 }}>
+    <p className="muted small mb-0">
       Ask follow-up questions in Claude Code:{' '}
-      <code style={{ userSelect: 'all' }}>{command}</code>{' '}
+      <code className="select-all">{command}</code>{' '}
       <button
         type="button"
         className="link-btn"

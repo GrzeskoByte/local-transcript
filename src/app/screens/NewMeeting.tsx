@@ -67,7 +67,7 @@ export function NewMeeting(): React.JSX.Element {
 
   return (
     <>
-      <div className="page-head">
+      <div className="page-head tint-salmon">
         <div>
           <h1>New Meeting</h1>
           <p className="muted">Record first, transcribe later — everything stays on this device.</p>
@@ -75,7 +75,7 @@ export function NewMeeting(): React.JSX.Element {
       </div>
 
       <section className="card" aria-label="Recording setup">
-        <span className="field-label" style={{ marginTop: 0 }}>
+        <span className="field-label mt-0">
           1 · What do you want to capture?
         </span>
         <div className="source-grid" role="group" aria-label="Recording source">
@@ -122,19 +122,19 @@ export function NewMeeting(): React.JSX.Element {
         </div>
 
         {macLimit && (mode === 'device' || mode === 'dual') && (
-          <p className="warn" style={{ marginTop: 10, marginBottom: 0 }}>
+          <p className="warn mt-2 mb-0">
             {macLimit}
           </p>
         )}
 
         {mode === 'dual' && (
           <>
-            <p className="muted" style={{ marginTop: 10 }}>
+            <p className="muted mt-2">
               {directSystemAudio
                 ? 'Records your microphone and everything your computer plays (e.g. the call), mixed into one recording.'
                 : 'You will be asked to pick a screen or window to share — choose the meeting window (or the whole screen) and enable “Share audio”. Both are mixed into one recording.'}
             </p>
-            <p className="warn" style={{ marginTop: 10, marginBottom: 0 }}>
+            <p className="warn mt-2 mb-0">
               Wear headphones. On speakers your microphone records the call a second time, slightly delayed — the
               recording gets an echo and transcription suffers.
             </p>
@@ -144,7 +144,7 @@ export function NewMeeting(): React.JSX.Element {
         <AudioDevicePickers microphone={usesMic} systemOutput={mode !== 'speaker' && directSystemAudio} />
 
         {usesMic && (
-          <p className="muted" style={{ marginTop: 10 }}>
+          <p className="muted mt-2">
             {secure ? (
               <>
                 Your browser will ask for microphone access when you start.{' '}
@@ -178,30 +178,30 @@ export function NewMeeting(): React.JSX.Element {
         ) : (
           <>
             <AgendaEditor items={agenda} onChange={setAgenda} />
-            <button type="button" className="link-btn" style={{ marginTop: 8 }} onClick={() => setAgenda(null)}>
+            <button type="button" className="link-btn mt-2" onClick={() => setAgenda(null)}>
               Remove agenda
             </button>
           </>
         )}
 
         {!secure && (
-          <p className="warn" style={{ marginBottom: 0 }} role="alert">
+          <p className="warn mb-0" role="alert">
             Audio capture is unavailable on this page. Browsers block the microphone and screen
             audio on plain http:// — open the app over https:// or on localhost.
           </p>
         )}
-        {storageWarning && <p className="warn" style={{ marginBottom: 0 }}>{storageWarning}</p>}
+        {storageWarning && <p className="warn mb-0">{storageWarning}</p>}
 
         {error && (
-          <div className="error" role="alert" style={{ marginBottom: 0 }}>
+          <div className="error mb-0" role="alert">
             <strong>{typeof error === 'string' ? error : error.message}</strong>
             {typeof error !== 'string' && (
-              <p className="muted small" style={{ margin: '6px 0 0', color: 'inherit' }}>
+              <p className="small mt-1 mb-0">
                 {error.hint}
               </p>
             )}
             {typeof error !== 'string' && error.retryable && (
-              <div className="btn-row" style={{ marginTop: 10 }}>
+              <div className="btn-row mt-2">
                 <button type="button" className="btn" disabled={busy} onClick={start}>
                   Try again
                 </button>

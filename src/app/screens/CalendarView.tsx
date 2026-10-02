@@ -124,14 +124,13 @@ export function CalendarView(): React.JSX.Element {
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head tint-lime">
         <h1>Calendar</h1>
         <div className="row">
           <label className="muted" htmlFor="cal-provider">Provider</label>
           <select
             id="cal-provider"
             className="input"
-            style={{ width: 'auto' }}
             aria-label="Calendar provider"
             value={calendarConfig.provider}
             onChange={(e) => switchProvider(e.target.value as CalendarProvider)}
@@ -144,7 +143,7 @@ export function CalendarView(): React.JSX.Element {
       </div>
 
       <section className="card" aria-label="Month calendar">
-        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+        <div className="row between mb-3">
           <div className="row">
             <button className="btn" type="button" onClick={() => shift(-1)} aria-label="Previous month">‹</button>
             <button

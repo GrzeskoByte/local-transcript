@@ -108,7 +108,7 @@ export function GearIcon({ size = 18 }: P): React.JSX.Element {  return (
 
 export function LogoMark(): React.JSX.Element {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
       <path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 10v4" />
     </svg>
   );

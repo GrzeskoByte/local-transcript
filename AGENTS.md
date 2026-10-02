@@ -5,6 +5,9 @@ Spec source of truth: `/home/gsierock/obsidian_vaults/gs_n/local-transcribe/MVP.
 ## Response style
 - **Be concise. Every response.** Short sentences, bullet points, no filler, no restating the request, no play-by-play of tool calls. State what changed and the command/result that verified it. Skip optional commentary unless asked.
 
+## Design
+- **Every UI change starts from `DESIGN.md`** (Dell 1996 catalog language: black page frame, ribbon cards, tint family, Arial Black / Helvetica / Times, 0 radius, no soft shadows). Check its rules before touching CSS or markup; `docs/REDESIGN.md` maps it onto the app's screens and components.
+
 ## Intended stack
 - TypeScript + React + Vite, packaged with Tauri v2 (`src-tauri/`). Test: Vitest + Playwright.
 - Audio: `MediaRecorder` primary (§8); Web Audio API / AudioWorklet allowed per recommended stack (§6) for decode/resample only.

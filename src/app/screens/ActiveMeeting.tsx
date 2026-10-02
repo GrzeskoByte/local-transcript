@@ -24,9 +24,11 @@ export function ActiveMeeting(): React.JSX.Element {
       <section className="rec-hero" aria-label="Recording in progress">
         <div className="src">{modeLabel(activeMeeting.mode)}</div>
         <h1>{activeMeeting.title}</h1>
-        <div className={`rec-orb${paused ? ' paused' : ''}`} aria-hidden="true" />
-        <div className="timer" aria-label="Elapsed time">
-          {formatDuration(elapsedMs)}
+        <div className="rec-readout">
+          <div className={`rec-orb${paused ? ' paused' : ''}`} aria-hidden="true" />
+          <div className="timer" aria-label="Elapsed time">
+            {formatDuration(elapsedMs)}
+          </div>
         </div>
         <div className="rec-state">
           {sourceLost ? 'Audio source lost' : failing ? 'Recording — not saving' : paused ? 'Paused' : 'Recording'}
@@ -101,7 +103,7 @@ export function ActiveMeeting(): React.JSX.Element {
           <AgendaList items={activeMeeting.agenda.items} />
         </section>
       ) : null}
-      <p className="muted" style={{ textAlign: 'center' }}>
+      <p className="muted center">
         You can leave this screen — recording continues. Transcribe after stopping.
       </p>
     </>

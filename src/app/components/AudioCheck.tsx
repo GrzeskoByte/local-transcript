@@ -56,7 +56,7 @@ export function AudioCheckCard({ diagnostics: d }: { diagnostics: RecordingDiagn
 
   return (
     <section className="card" aria-label="Audio check">
-      <div className="model-title" style={{ marginBottom: 4 }}>
+      <div className="model-title">
         <strong>Audio check</strong>
         <span className={`badge${problems.length ? ' badge-warn' : ''}`}>
           {problems.length ? `${problems.length} problem${problems.length > 1 ? 's' : ''}` : 'OK'}
