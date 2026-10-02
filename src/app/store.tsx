@@ -71,7 +71,7 @@ export type Route =
 export interface AudioTrackView {
   track: string;
   label: string;
-  url: string;
+  blob: Blob;
 }
 
 interface AppState {
@@ -641,6 +641,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const summary: MeetingSummary = {
         text: result.summary,
         keyPoints: result.keyPoints,
+        actionItems: result.actionItems,
         model: llmConfig.model.trim(),
         createdAt: Date.now(),
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),
@@ -686,10 +687,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setDetailMeeting(meeting ?? null);
     if (!meeting) {
       setDetailSegments([]);
-      setDetailTracks((prev) => {
-        prev.forEach((t) => URL.revokeObjectURL(t.url));
-        return [];
-      });
+      setDetailTracks([]);
       return;
     }
     setDetailSegments(await getSegments(id));
@@ -702,13 +700,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       views.push({
         track,
         label: trackSpeakerLabel(track) ?? (track || 'Recording'),
-        url: URL.createObjectURL(blob),
+        blob,
       });
     }
-    setDetailTracks((prev) => {
-      prev.forEach((t) => URL.revokeObjectURL(t.url));
-      return views;
-    });
+    setDetailTracks(views);
   }, []);
 
   const transcribe = useCallback(

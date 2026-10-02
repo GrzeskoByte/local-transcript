@@ -25,30 +25,21 @@ export function audioMimeFor(name: string, declared?: string): string {
   return EXTENSION_MIME[ext] ?? 'audio/mpeg';
 }
 
-/** Best-effort duration read from the file's metadata (0 when unknown). */
-export function measureDuration(blob: Blob): Promise<number> {
-  return new Promise((resolve) => {
-    if (typeof document === 'undefined' || typeof URL?.createObjectURL !== 'function') {
-      resolve(0);
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const audio = document.createElement('audio');
-    let done = false;
-    const finish = (ms: number): void => {
-      if (done) return;
-      done = true;
-      URL.revokeObjectURL(url);
-      audio.removeAttribute('src');
-      resolve(Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0);
-    };
-    audio.preload = 'metadata';
-    audio.onloadedmetadata = () => finish(audio.duration * 1000);
-    audio.onerror = () => finish(0);
-    // Some containers never report metadata — don't hang the import.
-    window.setTimeout(() => finish(0), 10_000);
-    audio.src = url;
-  });
+/**
+ * Best-effort duration (0 when unknown). Decoded with Web Audio at a low rate
+ * rather than read by an <audio> element: in the AppImage each <audio> is a
+ * GStreamer playbin whose teardown can deadlock the page (see audio/player.ts).
+ */
+export async function measureDuration(blob: Blob): Promise<number> {
+  if (typeof OfflineAudioContext === 'undefined') return 0;
+  try {
+    const ctx = new OfflineAudioContext(1, 1, 8000);
+    const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const ms = buffer.duration * 1000;
+    return Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0;
+  } catch {
+    return 0;
+  }
 }
 
 export function titleFromFileName(name: string): string {

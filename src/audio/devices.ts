@@ -10,7 +10,7 @@ import { SYSTEM_AUDIO_LABEL } from './system-audio';
  *  - system-audio output (Linux desktop): which sound-server output's sound
  *    Device Audio / Mic + Device record (see system-audio.ts).
  *  - playback output: where Meeting Detail plays recordings, only where the
- *    engine supports `HTMLMediaElement.setSinkId` (Chromium/WebView2).
+ *    engine supports `AudioContext.setSinkId` (Chromium/WebView2).
  */
 export const MIC_DEVICE_PREF = 'audio-input-device';
 export const SYSTEM_OUTPUT_PREF = 'audio-system-output';
@@ -96,16 +96,20 @@ export async function chosenMicrophoneId(): Promise<string | undefined> {
   return resolveDevice(saved, (await listDevices('audioinput')).options);
 }
 
+type SinkCapable = { setSinkId(id: string): Promise<void>; sinkId?: unknown };
+
+/** Players are Web Audio (see `player.ts`): routing needs AudioContext.setSinkId. */
 export function canChoosePlaybackOutput(): boolean {
-  return typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
+  return typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
 }
 
-/** Route a player to the chosen playback output (no-op where unsupported). */
-export async function applyPlaybackOutput(el: HTMLMediaElement): Promise<void> {
+/** Route the playback context to the chosen output (no-op where unsupported). */
+export async function applyPlaybackOutput(ctx: AudioContext): Promise<void> {
   if (!canChoosePlaybackOutput()) return;
   const saved = getPlaybackDevice();
   const id = saved ? resolveDevice(saved, (await listDevices('audiooutput')).options) : undefined;
-  const media = el as HTMLMediaElement & { setSinkId(id: string): Promise<void>; sinkId?: string };
-  if ((media.sinkId ?? '') === (id ?? '')) return;
-  await media.setSinkId(id ?? '').catch(() => undefined);
+  const target = ctx as AudioContext & SinkCapable;
+  const current = typeof target.sinkId === 'string' ? target.sinkId : '';
+  if (current === (id ?? '')) return;
+  await target.setSinkId(id ?? '').catch(() => undefined);
 }

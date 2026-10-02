@@ -18,6 +18,8 @@ import { claudeResumeCommand } from '../../integrations/llm';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { applyPlaybackOutput } from '../../audio/devices';
+import { playbackContext } from '../../audio/player';
+import { AudioPlayer, type AudioPlayerHandle } from '../components/AudioPlayer.tsx';
 
 export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const {
@@ -38,12 +40,12 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   /** Agenda being edited (null = viewing). */
   const [agendaDraft, setAgendaDraft] = useState<AgendaItem[] | null>(null);
   const [agendaBusy, setAgendaBusy] = useState(false);
-  /** Players follow the playback output chosen below (where supported). */
-  const playbackRef = useRef<HTMLElement>(null);
-  const [sinkVersion, setSinkVersion] = useState(0);
-  useEffect(() => {
-    playbackRef.current?.querySelectorAll('audio').forEach((el) => void applyPlaybackOutput(el));
-  }, [detailTracks, sinkVersion]);
+  /** One player per track; transcript timestamps seek the matching one. */
+  const players = useRef(new Map<string, AudioPlayerHandle>());
+  const playSegment = (startMs: number, speaker?: string): void => {
+    const track = detailTracks.find((t) => speaker && t.label === speaker) ?? detailTracks[0];
+    if (track) players.current.get(track.track)?.playFrom(startMs / 1000);
+  };
 
   /** Desktop webview swallows target="_blank": open GitLab links externally. */
   const openGitlabLink = (e: React.MouseEvent, url: string): void => {
@@ -110,27 +112,32 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
         </section>
       )}
 
-      {/* preload="none": WebKitGTK builds a GStreamer pipeline per preloaded
-          player and, on the AppImage's GStreamer 1.20, tearing a prerolled
-          WAV/FLAC pipeline down later can deadlock the page. Only build one
-          when the user presses play. */}
-      <section className="card" aria-label="Recording playback" ref={playbackRef}>
+      {/* Web Audio player, not <audio>: in the AppImage every <audio> is a
+          GStreamer playbin whose teardown can deadlock the page (see
+          src/audio/player.ts). */}
+      <section className="card" aria-label="Recording playback">
         {detailTracks.length === 0 ? (
           <p className="muted">Recording audio unavailable.</p>
-        ) : detailTracks.length === 1 ? (
-          <audio className="player" controls preload="none" src={detailTracks[0]!.url} />
         ) : (
           <div className="player-stack">
             {detailTracks.map((t) => (
-              <label key={t.track || 'recording'} className="track-player">
-                <span className="track-label">{t.label}</span>
-                <audio className="player" controls preload="none" src={t.url} />
-              </label>
+              <div key={`${m.id}:${t.track}`} className="track-player">
+                {detailTracks.length > 1 && <span className="track-label">{t.label}</span>}
+                <AudioPlayer
+                  ref={(h) => {
+                    if (h) players.current.set(t.track, h);
+                    else players.current.delete(t.track);
+                  }}
+                  blob={t.blob}
+                  label={detailTracks.length > 1 ? t.label : 'Recording'}
+                  durationHintMs={m.durationMs}
+                />
+              </div>
             ))}
           </div>
         )}
         {detailTracks.length > 0 && (
-          <AudioDevicePickers playback onPlaybackChange={() => setSinkVersion((v) => v + 1)} />
+          <AudioDevicePickers playback onPlaybackChange={() => void applyPlaybackOutput(playbackContext())} />
         )}
       </section>
 
@@ -341,13 +348,23 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             <strong>Summary</strong>
             <span className="badge">{m.summary.model}</span>
           </div>
-          <p className="muted" style={{ whiteSpace: 'pre-wrap' }}>{m.summary.text}</p>
+          {m.summary.text && <p style={{ whiteSpace: 'pre-wrap' }}>{m.summary.text}</p>}
           {m.summary.keyPoints.length > 0 && (
             <>
               <strong>Key points</strong>
               <ul className="transcript">
                 {m.summary.keyPoints.map((p, i) => (
                   <li key={i}>{p}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {(m.summary.actionItems?.length ?? 0) > 0 && (
+            <>
+              <strong>Action items</strong>
+              <ul className="transcript" aria-label="Action items">
+                {m.summary.actionItems!.map((a, i) => (
+                  <li key={i}>☐ {a}</li>
                 ))}
               </ul>
             </>
@@ -501,10 +518,16 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           <ul className="transcript">
             {filtered.map((s) => (
               <li key={s.id}>
-                <span className="ts">
+                <button
+                  type="button"
+                  className="ts ts-seek"
+                  title="Play from here"
+                  disabled={detailTracks.length === 0}
+                  onClick={() => playSegment(s.startMs, s.speaker)}
+                >
                   {String(Math.floor(s.startMs / 60000)).padStart(2, '0')}:
                   {String(Math.floor((s.startMs % 60000) / 1000)).padStart(2, '0')}
-                </span>
+                </button>
                 {s.speaker && <span className="who">{s.speaker}</span>}
                 {s.text}
               </li>

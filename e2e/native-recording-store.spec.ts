@@ -85,7 +85,7 @@ test('records to the native store when the webview has no OPFS', async ({ page }
   expect(result.chunks).toBeGreaterThanOrEqual(2);
   expect(result.seconds).toBeGreaterThan(5);
   // The player gets the recording from the native store.
-  await expect(page.getByRole('region', { name: 'Recording playback' }).locator('audio')).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Recording playback' }).getByRole('button', { name: 'Play' })).toHaveCount(1);
 
   // Delete removes the chunks from disk too.
   await page.getByRole('button', { name: /^Delete/ }).first().click();

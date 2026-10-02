@@ -78,8 +78,10 @@ export class MixedAudioSource implements AudioSource {
     this.output = null;
     const ctx = this.ctx;
     this.ctx = null;
-    await this.stopInputs();
+    // Graph first, inputs second: the mix must stop pulling from the capture
+    // pipelines before they are torn down (WebKitGTK/GStreamer).
     if (ctx && ctx.state !== 'closed') await ctx.close().catch(() => undefined);
+    await this.stopInputs();
   }
 
   private async stopInputs(): Promise<void> {

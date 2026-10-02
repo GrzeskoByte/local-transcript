@@ -270,7 +270,6 @@ h2 { font-size: var(--text-lg); margin: var(--space-5) 0 var(--space-3); letter-
 .detail-head .sub { margin: 6px 0 0; }
 .pill-row { display: flex; gap: 6px; margin-top: 10px; }
 .player-card { padding: var(--space-3) var(--space-4); }
-audio.player { width: 100%; }
 .cta { display: flex; gap: 14px; align-items: flex-start; margin-top: 14px; }
 .cta .art {
   width: 44px; height: 44px; border-radius: 12px; flex: none;
@@ -304,8 +303,22 @@ progress { width: 100%; height: 10px; margin-top: 10px; accent-color: var(--bran
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 .player-stack { display: flex; flex-direction: column; gap: 10px; }
-.track-player { display: flex; align-items: center; gap: 10px; }
-.track-player .player { flex: 1; }
+.track-player { display: flex; align-items: flex-start; gap: 10px; }
+.track-player .track-label { padding-top: 10px; }
+.audio-player { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.audio-player-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.player-play { min-width: 44px; justify-content: center; }
+.player-skip { padding-left: 10px; padding-right: 10px; font-variant-numeric: tabular-nums; }
+.player-seek { flex: 1; min-width: 140px; accent-color: var(--brand); }
+.player-time { font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.player-wave {
+  width: 100%; height: 44px; cursor: pointer; display: block;
+  --wave-played: var(--brand); --wave-rest: var(--border-strong);
+}
+.transcript .ts-seek {
+  appearance: none; background: none; border: 0; padding: 0; cursor: pointer;
+}
+.transcript .ts-seek:hover:not(:disabled) { text-decoration: underline; }
 .track-label {
   flex: none; min-width: 62px; font-size: 0.76rem; font-weight: 800; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.06em;
