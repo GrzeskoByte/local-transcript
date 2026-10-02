@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { AppProvider } from './store';
 import { loadNativeSettings } from '../platform/native-settings';
+import '@fontsource/archivo-black/400.css';
 import './styles.css';
 
 // Desktop settings live in a file (they survive updates); load them before

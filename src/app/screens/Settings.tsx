@@ -249,7 +249,7 @@ export function Settings(): React.JSX.Element {
 
   return (
     <>
-      <div className="page-head">
+      <div className="page-head tint-periwinkle">
         <div>
           <h1>Settings</h1>
           <p className="muted">Models, calendar, sharing, AI, and app preferences.</p>
@@ -285,18 +285,18 @@ export function Settings(): React.JSX.Element {
       {tab === 'models' && (
       <>
       <section className="card" aria-label="Engine">
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <span className="media-art" style={{ width: 36, height: 36 }}>
+        <div className="media-row">
+          <span className="media-art">
             <GearIcon />
           </span>
-          <div style={{ flex: 1 }}>
+          <div className="grow">
             <strong>Desktop engine</strong>
             <div className="muted" aria-label="Acceleration">
               {describeNativeRuntime(nativeStatus)}
             </div>
           </div>
         </div>
-        <p className="muted" style={{ marginBottom: 0 }}>
+        <p className="muted mb-0">
           Native models live on disk and are shared with your system CLI. Only installed
           models appear in the transcription options.
         </p>
@@ -307,7 +307,7 @@ export function Settings(): React.JSX.Element {
       {tab === 'app' && (
       <>
       <section className="card" aria-label="Updates">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>Updates</strong>
           {updateInfo && !updateInfo.available && (
             <span className="badge badge-ok">
@@ -328,11 +328,11 @@ export function Settings(): React.JSX.Element {
             </div>
             {updateInfo?.available && (
               <>
-                <p style={{ marginBottom: 4 }}>
+                <p className="mb-1">
                   <strong>Version {updateInfo.version} is available.</strong>
                 </p>
                 {updateInfo.notes && (
-                  <p className="muted small" style={{ whiteSpace: 'pre-wrap', marginTop: 0 }}>{updateInfo.notes}</p>
+                  <p className="muted small pre-wrap mt-0">{updateInfo.notes}</p>
                 )}
                 {!updateInfo.canSelfUpdate && (
                   <p className="muted small">
@@ -346,7 +346,7 @@ export function Settings(): React.JSX.Element {
               </>
             )}
             {updateBusy === 'installing' && (
-              <div style={{ marginTop: 10 }} aria-label="Update progress">
+              <div className="mt-3" aria-label="Update progress">
                 {updateProgress && updateRatio(updateProgress) !== null ? (
                   <progress max={1} value={updateRatio(updateProgress) ?? 0} />
                 ) : (
@@ -361,7 +361,7 @@ export function Settings(): React.JSX.Element {
                 </div>
               </div>
             )}
-            {updateMessage && <p className="muted small" role="status" style={{ marginBottom: 0 }}>{updateMessage}</p>}
+            {updateMessage && <p className="muted small mb-0" role="status">{updateMessage}</p>}
             <div className="btn-row">
               {updateInfo?.available && updateInfo.canSelfUpdate && (
                 <button
@@ -386,7 +386,7 @@ export function Settings(): React.JSX.Element {
                 {updateBusy === 'checking' ? 'Checking…' : 'Check for updates'}
               </button>
             </div>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+            <label className="check-row mt-3">
               <input
                 type="checkbox"
                 checked={autoCheck}
@@ -401,7 +401,7 @@ export function Settings(): React.JSX.Element {
         )}
       </section>
       <section className="card" aria-label="Microphone access">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>Microphone access</strong>
           {micPermission === 'granted' && (
             <span className="badge badge-ok">
@@ -419,21 +419,21 @@ export function Settings(): React.JSX.Element {
                 : 'Grant access now so the permission prompt appears before you start a recording.'}
         </div>
         {secure && micPermission !== 'granted' && (
-          <div style={{ marginTop: 12 }}>
+          <div className="mt-3">
             <button className="btn btn-primary" disabled={micBusy} onClick={() => void grantMicNow()}>
               {micBusy ? 'Requesting…' : 'Grant microphone access'}
             </button>
           </div>
         )}
         {micFailure && (
-          <p className="warn" style={{ marginTop: 10, marginBottom: 0 }} role="alert">
+          <p className="warn mt-2 mb-0" role="alert">
             {micFailure.message} {micFailure.hint}
           </p>
         )}
       </section>
 
       <section className="card" aria-label="Audio devices">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>Audio devices</strong>
         </div>
         <div className="muted">
@@ -445,7 +445,7 @@ export function Settings(): React.JSX.Element {
       </section>
 
       <section className="card" aria-label="Local files">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>Local files</strong>
           {saveToDisk && <span className="badge badge-ok">Saving</span>}
         </div>
@@ -459,7 +459,7 @@ export function Settings(): React.JSX.Element {
             'Locating the local storage folder…'
           )}
         </div>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+        <label className="check-row mt-3">
           <input
             type="checkbox"
             checked={saveToDisk}
@@ -467,7 +467,7 @@ export function Settings(): React.JSX.Element {
           />
           Save recordings and transcripts to disk automatically
         </label>
-        <div style={{ marginTop: 12 }}>
+        <div className="mt-3">
           <button className="btn" onClick={() => void openStorageDir()}>
             Open folder
           </button>
@@ -479,7 +479,7 @@ export function Settings(): React.JSX.Element {
       {tab === 'sharing' && (
       <>
       <section className="card" aria-label="GitLab team sharing">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>GitLab team sharing</strong>
         </div>
         <div className="muted">
@@ -553,7 +553,7 @@ export function Settings(): React.JSX.Element {
             </label>
           )}
         </div>
-        {gitlabMessage && <p className="muted small" style={{ marginBottom: 0 }}>{gitlabMessage}</p>}
+        {gitlabMessage && <p className="muted small mb-0">{gitlabMessage}</p>}
         <div className="btn-row">
           <button
             className="btn btn-primary"
@@ -596,7 +596,7 @@ export function Settings(): React.JSX.Element {
       {tab === 'calendar' && (
       <>
       <section className="card" aria-label="Company calendar">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>Company calendar</strong>
         </div>
         <div className="muted">
@@ -662,19 +662,19 @@ export function Settings(): React.JSX.Element {
             {detectBusy ? 'Detecting…' : 'Detect from server'}
           </button>
         </div>
-        <div className="muted small" style={{ marginBottom: 0 }}>
+        <div className="muted small mb-0">
           Thunderbird is read on this device only (no passwords). Server detection
           tries standard calendar addresses on the host (plus your password, if
           entered, to list calendars).
         </div>
-        {detectMessage && <p className="muted small" role="status" style={{ marginBottom: 0 }}>{detectMessage}</p>}
+        {detectMessage && <p className="muted small mb-0" role="status">{detectMessage}</p>}
         {detected && detected.length > 0 && (
           <ul className="model-list" aria-label="Detected calendars">
             {detected.map((d) => (
               <li key={d.source + d.url} className="model-row">
                 <div className="model-main">
                   <span className="model-name">{d.name} · {CALENDAR_SYSTEM_LABELS[d.system]}</span>
-                  <span className="muted small" style={{ wordBreak: 'break-all' }}>
+                  <span className="muted small break-all">
                     {d.url}{d.username ? ` · ${d.username}` : ''}{d.detail ? ` · ${d.detail}` : ''}
                   </span>
                 </div>
@@ -763,7 +763,7 @@ export function Settings(): React.JSX.Element {
             />
           </label>
         </div>
-        <div className="muted small" style={{ marginBottom: 0 }}>
+        <div className="muted small mb-0">
           A full URL with its own scheme (https://…) is used as-is; otherwise
           protocol + port above are applied.
         </div>
@@ -823,7 +823,7 @@ export function Settings(): React.JSX.Element {
                 Use SOGo address
               </button>
             </div>
-            <div className="muted small" style={{ marginBottom: 0 }}>
+            <div className="muted small mb-0">
               SOGo (also what Thunderbird uses): enter the mail host and username,
               then fill in the default calendar path. Another calendar? Copy its
               Location from Thunderbird → calendar Properties.
@@ -842,7 +842,7 @@ export function Settings(): React.JSX.Element {
           </>
         )}
         {calDraft.provider === 'ews' && (
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+          <label className="check-row mt-3">
             <input
               type="checkbox"
               checked={calDraft.useNtlm}
@@ -851,7 +851,7 @@ export function Settings(): React.JSX.Element {
             Use NTLM authentication
           </label>
         )}
-        {calMessage && <p className="muted small" style={{ marginBottom: 0 }}>{calMessage}</p>}
+        {calMessage && <p className="muted small mb-0">{calMessage}</p>}
         <div className="btn-row">
           <button
             className="btn btn-primary"
@@ -898,7 +898,7 @@ export function Settings(): React.JSX.Element {
       {tab === 'ai' && (
       <>
       <section className="card" aria-label="LLM provider">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>LLM provider</strong>
         </div>
         <div className="muted">
@@ -960,13 +960,13 @@ export function Settings(): React.JSX.Element {
           </>
         )}
         {llmDraft.preset === 'opencode' && (
-          <div className="muted" style={{ marginTop: 8 }}>
+          <div className="muted mt-2">
             Uses the OpenCode CLI on this machine — no URL or key needed.
             Pick a model below.
           </div>
         )}
         {llmDraft.preset === 'claude' && (
-          <div className="muted" style={{ marginTop: 8 }}>
+          <div className="muted mt-2">
             Uses the Claude Code CLI on this machine with your Claude login — no URL or key
             needed. Each summary is saved as a Claude Code session you can continue with{' '}
             <code>claude --resume</code>.
@@ -1004,7 +1004,7 @@ export function Settings(): React.JSX.Element {
         {isLocalAgentPreset(llmDraft.preset) && agentModelsError && (
           <div className="warn small" role="alert">{agentModelsError}</div>
         )}
-        {llmMessage && <p className="muted small" style={{ marginBottom: 0 }}>{llmMessage}</p>}
+        {llmMessage && <p className="muted small mb-0">{llmMessage}</p>}
         <div className="btn-row">
           <button
             className="btn btn-primary"
@@ -1048,7 +1048,7 @@ export function Settings(): React.JSX.Element {
       <>
       {(!nativeStatus || nativeStatus.backend === 'voxtype') && (
         <section className="card" aria-label="GPU acceleration">
-        <div className="model-title" style={{ marginBottom: 4 }}>
+        <div className="model-title">
           <strong>GPU acceleration</strong>
           {gpu?.active && <span className="badge badge-ok">Active</span>}
         </div>
@@ -1057,7 +1057,7 @@ export function Settings(): React.JSX.Element {
         </div>
         {gpu && gpu.available && !gpu.active && (
           <div
-            style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}
+            className="row wrap mt-3"
           >
             <button className="btn btn-primary" disabled={gpuBusy} onClick={() => void enableGpuNow()}>
               {gpuBusy ? 'Enabling…' : 'Enable GPU acceleration'}
@@ -1066,7 +1066,7 @@ export function Settings(): React.JSX.Element {
           </div>
         )}
         {gpu && gpu.hint && !gpu.active && (
-          <p className="muted small" style={{ marginBottom: 0, marginTop: 8 }}>
+          <p className="muted small mt-2 mb-0">
             Or run: <code>{gpu.hint}</code>
           </p>
         )}
@@ -1094,25 +1094,25 @@ export function Settings(): React.JSX.Element {
             </option>
           ))}
         </select>
-        <p className="muted" style={{ marginBottom: 0 }}>
+        <p className="muted mb-0">
           Native whisper.cpp can auto-detect the language.
         </p>
       </section>
 
       <h2>Models</h2>
-      <p className="muted" style={{ marginTop: 0 }}>
+      <p className="muted mt-0">
         Tiered from best (S) to fastest (D). Download the tier you need; only downloaded
         models show up when you transcribe.
       </p>
       {hint && (
-        <p className="muted" style={{ marginTop: 0 }} aria-label="Accuracy tip">
+        <p className="muted mt-0" aria-label="Accuracy tip">
           {hint}
         </p>
       )}
 
       {groups.length === 0 && (
         <section className="card">
-          <p className="muted" style={{ marginTop: 0 }}>
+          <p className="muted mt-0">
             {nativeStatus?.installHint ??
               'No desktop transcription engine found. Install whisper.cpp or voxtype.'}
           </p>
