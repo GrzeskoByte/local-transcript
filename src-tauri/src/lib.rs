@@ -4,6 +4,7 @@ mod models;
 mod native_asr;
 mod opencode;
 mod proc;
+mod recorder;
 mod recordings;
 mod relaunch;
 mod settings;
@@ -36,6 +37,18 @@ fn use_own_gstreamer_registry() {
     }
 }
 
+/// Print a line from the app to the terminal it was started from (e.g. how
+/// long each step of Stop took), so a slow step can be reported.
+#[tauri::command]
+async fn native_log(message: String) {
+    eprintln!("[local-transcribe] {}", log_line(&message));
+}
+
+/// One bounded line: newlines flattened, at most 2000 characters.
+fn log_line(message: &str) -> String {
+    message.chars().take(2000).map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // After an update/reset relaunch: let the old instance release the profile.
@@ -61,6 +74,16 @@ pub fn run() {
             _ => PermissionResponse::Default,
         })
         .invoke_handler(tauri::generate_handler![
+            native_log,
+            recorder::native_recorder_devices,
+            recorder::native_recorder_start,
+            recorder::native_recorder_pause,
+            recorder::native_recorder_resume,
+            recorder::native_recorder_retry,
+            recorder::native_recorder_poll,
+            recorder::native_recorder_live_take,
+            recorder::native_recorder_stop,
+            recorder::native_audio_decode,
             audio_diag::native_audio_diag_start,
             audio_diag::native_audio_diag_peek,
             audio_diag::native_audio_diag_stop,
@@ -108,8 +131,20 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
+                recorder::shutdown();
                 system_audio::remove_sources();
                 audio_diag::shutdown();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_line;
+
+    #[test]
+    fn log_line_is_one_bounded_line() {
+        assert_eq!(log_line("Stop took 5 ms:\nsave 5 ms"), "Stop took 5 ms: save 5 ms");
+        assert_eq!(log_line(&"x".repeat(5000)).len(), 2000);
+    }
 }

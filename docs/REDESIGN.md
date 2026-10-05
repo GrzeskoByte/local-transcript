@@ -67,6 +67,7 @@ suite relies on (`.sidebar .model-chip`, `h1 + p.muted`, `.transcript li`,
 | `text-input` | `.input`, selects, textareas: 1 px black, Times 14 |
 | `footer-band` | `.footer-band` under every screen: privacy line + engine status, body-sm |
 | `ex-data-table-cell` | transcript rows, model rows, calendar grid: 1 px black rules |
+| `.loader` (app-only) | **Saving recording…** in the Active Meeting hero while Stop runs (`.rec-saving`: white box, square `.spinner`, replaces the buttons) |
 | `ribbon-card-title` + `.transcript` | **Live transcript** card on Active Meeting (white body, ruled `.transcript` list capped at 320 px with its own scroll, lime/salmon status badge) and the **Live transcription** card in Settings → Models |
 
 ### Tint assignment (one family per "product line")

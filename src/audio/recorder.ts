@@ -1,5 +1,6 @@
 import { chunkFileName, pickSupportedMimeType } from './formats';
 import { settleWithin } from '../domain/settle';
+import { StopTrace, nextPaint } from '../domain/stop-trace';
 import { appendChunk, assertDurableStorage, writeMeta } from '../storage/recordings';
 import { CHUNK_MS } from '../domain/meeting';
 
@@ -413,43 +414,60 @@ export class MediaRecorderAudioRecorder {
     };
   }
 
-  async stop(): Promise<Recording> {
+  /**
+   * Stop recording and save everything. `trace` (optional) records how long
+   * each step took; the UI gets a chance to paint between steps.
+   */
+  async stop(trace?: StopTrace): Promise<Recording> {
     const tracks = this.tracks;
     if (tracks.length === 0) return { mimeType: '', chunkCount: 0, tracks: [], durationMs: 0, unsavedChunks: 0 };
+    const t = trace ?? new StopTrace();
     this.stopClock();
     this.setState('STOPPING');
-    await Promise.all(
-      tracks.map(
-        (t) =>
-          new Promise<void>((resolve) => {
-            // Flush the final slice, then resolve on the next tick so
-            // ondataavailable lands first. If the engine never fires onstop,
-            // stop waiting: everything delivered so far is saved below.
-            let done = false;
-            const finish = () => {
-              if (done) return;
-              done = true;
-              setTimeout(resolve, 50);
-            };
-            setTimeout(finish, RECORDER_STOP_TIMEOUT_MS);
-            t.recorder.onstop = finish;
-            try {
-              if (t.recorder.state !== 'inactive') t.recorder.stop();
-              else finish();
-            } catch {
-              finish();
-            }
-          }),
+    await t.time('finish recorder', () =>
+      Promise.all(
+        tracks.map(
+          (tr, i) =>
+            new Promise<void>((resolve) => {
+              // Flush the final slice, then resolve on the next tick so
+              // ondataavailable lands first. If the engine never fires onstop,
+              // stop waiting: everything delivered so far is saved below.
+              let done = false;
+              const finish = () => {
+                if (done) return;
+                done = true;
+                setTimeout(resolve, 50);
+              };
+              setTimeout(finish, RECORDER_STOP_TIMEOUT_MS);
+              tr.recorder.onstop = finish;
+              try {
+                if (tr.recorder.state !== 'inactive') {
+                  // Synchronous in the engine: a long call here blocks the page.
+                  const t0 = performance.now();
+                  tr.recorder.stop();
+                  t.add(`MediaRecorder.stop${tracks.length > 1 ? ` #${i + 1}` : ''}`, performance.now() - t0);
+                } else finish();
+              } catch {
+                finish();
+              }
+            }),
+        ),
       ),
     );
+    await nextPaint();
     // Releasing a capture device can stall in the OS / GStreamer; it must
     // not hold the recording (or the UI) hostage.
-    await Promise.all(tracks.map((t) => settleWithin(t.source.stop(), SOURCE_STOP_TIMEOUT_MS, undefined)));
+    await t.time('release capture', () =>
+      Promise.all(tracks.map((tr) => settleWithin(tr.source.stop(), SOURCE_STOP_TIMEOUT_MS, undefined))),
+    );
     this.detachLifecycle?.();
+    await nextPaint();
     // Every write must settle before the recording is reported: a slow disk
     // (e.g. antivirus scanning each file) must not turn into silent loss.
-    await this.drainWrites();
-    if (this.pending.length) await this.retryPending();
+    await t.time('save chunks', async () => {
+      await this.drainWrites();
+      if (this.pending.length) await this.retryPending();
+    });
     const result: Recording = {
       mimeType: tracks[0]?.mimeType ?? '',
       chunkCount: tracks.reduce((n, t) => n + t.chunkIndex, 0),

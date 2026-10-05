@@ -8,6 +8,10 @@
  * desktop shell stores the same layout on disk (`src-tauri/src/recordings.rs`).
  * Elsewhere recording is refused (audio would only live in memory); the
  * in-memory map below serves Node unit tests.
+ *
+ * Native recordings (recorded in Rust, `src-tauri/src/recorder`) always live
+ * in that on-disk store, on every OS: reads, listing and deletion check it
+ * per meeting (`inNativeStore`).
  */
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
 import { Mp4StreamRepair } from '../audio/mp4-repair';
@@ -34,6 +38,23 @@ function hasOPFS(): boolean {
 /** Desktop shell without OPFS: chunks go to disk through Rust. */
 function useNative(): boolean {
   return !hasOPFS() && isDesktopApp();
+}
+
+/** Meetings known to be in the native store (recorded natively). */
+const nativeMeetings = new Set<string>();
+
+/** Mark a meeting as recorded into the native store (the native recorder). */
+export function markNativeRecording(id: string): void {
+  nativeMeetings.add(id);
+}
+
+/** Whether this meeting's audio lives in the desktop shell's store. */
+async function inNativeStore(id: string): Promise<boolean> {
+  if (useNative() || nativeMeetings.has(id)) return true;
+  if (!isDesktopApp()) return false;
+  const found = (await nativeList(id).catch(() => [])).some((t) => t.chunks.length > 0);
+  if (found) nativeMeetings.add(id);
+  return found;
 }
 
 interface NativeTrack {
@@ -165,7 +186,7 @@ export async function writeMeta(id: string, meta: RecordingMeta): Promise<void> 
 }
 
 export async function readMeta(id: string): Promise<RecordingMeta | null> {
-  if (useNative()) {
+  if (await inNativeStore(id)) {
     const raw = await invokeDesktop<string | null>('native_recording_read_meta', { meetingId: id }).catch(() => null);
     try {
       return raw ? (JSON.parse(raw) as RecordingMeta) : null;
@@ -220,7 +241,7 @@ export async function appendChunk(
  *  - nothing stored: []
  */
 export async function listTracks(id: string): Promise<string[]> {
-  if (useNative()) {
+  if (await inNativeStore(id)) {
     const tracks = (await nativeList(id).catch(() => [])).filter((t) => t.chunks.length > 0);
     const named = tracks.filter((t) => t.track).map((t) => t.track);
     // Like OPFS: sub-directories win over flat chunks.
@@ -256,7 +277,7 @@ export async function listTracks(id: string): Promise<string[]> {
 }
 
 export async function listChunkNames(id: string, track = ''): Promise<string[]> {
-  if (useNative()) {
+  if (await inNativeStore(id)) {
     return (await nativeList(id).catch(() => [])).find((t) => t.track === track)?.chunks ?? [];
   }
   if (!hasOPFS()) {
@@ -288,7 +309,7 @@ export async function readRecordingBlob(
   mimeType: string,
   track = '',
 ): Promise<Blob | null> {
-  if (useNative()) {
+  if (await inNativeStore(id)) {
     const bytes = nativeBytes(await invokeDesktop<unknown>('native_recording_read', { meetingId: id, track }));
     return bytes ? assembled([bytes], mimeType) : null;
   }
@@ -330,9 +351,15 @@ async function assembled(parts: (Blob | Uint8Array)[], mimeType: string): Promis
 }
 
 export async function deleteRecording(id: string): Promise<void> {
-  if (useNative()) {
-    await invokeDesktop('native_recording_delete', { meetingId: id });
-    return;
+  if (isDesktopApp()) {
+    // Native recordings live there on every OS (no orphans, §23).
+    const native = invokeDesktop('native_recording_delete', { meetingId: id });
+    nativeMeetings.delete(id);
+    if (useNative()) {
+      await native;
+      return;
+    }
+    await native.catch(() => undefined);
   }
   if (!hasOPFS()) {
     const prefix = `${id}::`;

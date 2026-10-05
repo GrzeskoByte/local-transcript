@@ -460,6 +460,7 @@ progress:not([value])::-webkit-progress-bar {
 .rec-alert { margin-top: var(--sp-xl); background: var(--canvas); color: var(--ink); border: 2px solid var(--primary); padding: var(--sp-lg); }
 .rec-alert strong { color: var(--primary); font-family: var(--font-ui); text-transform: uppercase; }
 .rec-alert p { margin: var(--sp-xs) 0 0; }
+.rec-saving { margin: var(--sp-xl) 0 0; }
 .rec-alert .btn-ghostlight { background: var(--canvas); color: var(--ink); border-color: var(--ink); }
 .saved-note {
   display: flex; align-items: center; gap: var(--sp-s); margin-top: var(--sp-lg);

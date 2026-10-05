@@ -20,6 +20,11 @@ function folderName(meeting: Pick<Meeting, 'id' | 'title'>): string {
   return `${base}-${meeting.id.slice(-8)}`;
 }
 
+/** Where a recording's audio goes in the meeting folder (relative path). */
+export function audioMirrorPath(meeting: Pick<Meeting, 'id' | 'title'>, mimeType: string, track = ''): string {
+  return `${folderName(meeting)}/${audioName(track, mimeType)}`;
+}
+
 function audioName(track: string, mimeType: string): string {
   const ext = fileExtensionForMimeType(mimeType);
   return track ? `${track}.${ext}` : `audio.${ext}`;

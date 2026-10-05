@@ -8,6 +8,8 @@
  * hour), and no realtime AudioContext is opened or closed (closing one tears
  * down WebKitGTK's GStreamer sink).
  */
+import { decodeOggNative } from './native-decode';
+
 export const ASR_SAMPLE_RATE = 16000;
 
 export async function decodeToMono16k(
@@ -15,6 +17,15 @@ export async function decodeToMono16k(
   onProgress?: (ratio: number) => void,
 ): Promise<Float32Array> {
   onProgress?.(0);
+  // Native recordings (Ogg Opus): libopus in the desktop shell, at 16 kHz.
+  const native = await decodeOggNative(blob, ASR_SAMPLE_RATE);
+  if (native) {
+    const mono = new Float32Array(native.length);
+    for (let i = 0; i < native.length; i++) mono[i] = native[i]! / 0x8000;
+    highpassInPlace(mono, ASR_SAMPLE_RATE, 80, 0.7);
+    onProgress?.(1);
+    return mono;
+  }
   const arrayBuffer = await blob.arrayBuffer();
   const Offline =
     typeof window === 'undefined'

@@ -142,7 +142,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
         )}
       </section>
 
-      {m.diagnostics && <AudioCheckCard diagnostics={m.diagnostics} />}
+      {m.diagnostics && <AudioCheckCard diagnostics={m.diagnostics} stopTrace={m.stopTrace} />}
 
       <section className="card" aria-label="Meeting agenda">
         <div className="model-title">

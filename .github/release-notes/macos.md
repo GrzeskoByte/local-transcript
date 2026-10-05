@@ -12,6 +12,8 @@ Private, on-device meeting recorder and transcriber. Your audio never leaves you
 | `LocalTranscriber_{{VERSION}}_macos_x64.dmg` | Intel Macs. |
 
 macOS 12 or later. macOS asks for microphone access the first time you record — click **Allow**.
+Device Audio (the sound your Mac plays, e.g. the other side of a call) needs macOS 14.2 or later
+and asks once for **System Audio Recording** access; no screen sharing.
 
 This early build is not notarized yet, so macOS blocks the first launch:
 - *"cannot be opened because Apple cannot check it"* → open **System Settings → Privacy & Security**

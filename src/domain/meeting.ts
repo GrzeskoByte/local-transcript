@@ -1,5 +1,6 @@
 import type { RecordingDiagnostics } from './audio-diagnostics';
 import type { MeetingAgenda } from './agenda';
+import type { StopStep } from './stop-trace';
 
 export type RecordingMode = 'speaker' | 'device' | 'dual' | 'file';
 
@@ -91,6 +92,8 @@ export interface Meeting {
   };
   /** Audio health measured while recording (see audio-diagnostics.ts). */
   diagnostics?: RecordingDiagnostics;
+  /** How long each step of Stop took (see stop-trace.ts). */
+  stopTrace?: { steps: StopStep[]; totalMs: number };
   /** Last calendar event created from this meeting, if any. */
   calendarEvent?: { provider: string; createdAt: number };
   /** Every calendar event created from this meeting (newest last). */

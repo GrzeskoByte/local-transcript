@@ -13,11 +13,14 @@ import {
 import { macDeviceAudioLimit } from '../../audio/device-audio.ts';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { LiveTranscriptionToggle } from '../components/LiveTranscription.tsx';
+import { nativeRecordingEnabled } from '../../audio/native-recorder';
 
 export function NewMeeting(): React.JSX.Element {
-  const { startRecording, importMeeting, storageWarning, go, systemAudio } = useApp();
-  // Linux desktop: device audio comes straight from the sound server.
-  const directSystemAudio = systemAudio?.available === true;
+  const { startRecording, importMeeting, storageWarning, go, systemAudio, nativeRecording } = useApp();
+  // Desktop: device audio is recorded directly (native recorder: WASAPI
+  // loopback, CoreAudio tap, PulseAudio monitor; Linux webview: sound server).
+  const directSystemAudio =
+    systemAudio?.available === true || (nativeRecording?.systemAudio === true && nativeRecordingEnabled());
   const macLimit = directSystemAudio ? null : macDeviceAudioLimit();
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState<RecordingMode>('speaker');

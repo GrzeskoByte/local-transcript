@@ -201,6 +201,8 @@ export class RecordingDiagnosticsCollector {
   private error: string | undefined;
   private knownDevices: string[] = [];
   private stopped = false;
+  /** Measurements taken natively (native recorder) instead of by analysers. */
+  private external: { inputs: InputStats[]; bleed?: BleedStats; events: DiagEvent[] } | null = null;
 
   constructor(
     private readonly mode: string,
@@ -261,6 +263,9 @@ export class RecordingDiagnosticsCollector {
       }
     }
 
+    // Native recording: the shell measures the inputs (setNativeMeasurements);
+    // no AudioContext is needed here.
+    if (inputs.length === 0) return;
     try {
       const context = ctx ?? acquireCaptureContext();
       if (!ctx) this.ownCtx = context;
@@ -361,9 +366,14 @@ export class RecordingDiagnosticsCollector {
     p.bucket = null;
   }
 
+  /** Use measurements taken by the native recorder (src-tauri/src/recorder/stats.rs). */
+  setNativeMeasurements(m: { inputs: InputStats[]; bleed?: BleedStats; events?: DiagEvent[] } | null): void {
+    if (m) this.external = { inputs: m.inputs, bleed: m.bleed, events: m.events ?? [] };
+  }
+
   /** Current state (for live warnings and periodic saves). */
   report(): RecordingDiagnostics {
-    const inputs = this.probes.map((p) => {
+    const probed = this.probes.map((p) => {
       const timeline = [...p.stats.timeline];
       if (p.bucket && p.bucket.n > 0) {
         timeline.push({
@@ -375,6 +385,9 @@ export class RecordingDiagnosticsCollector {
       }
       return { ...p.stats, settings: { ...p.stats.settings }, timeline };
     });
+    const ext = this.external;
+    const inputs = ext ? ext.inputs : probed;
+    const events = ext ? [...this.events, ...ext.events].sort((a, b) => a.atMs - b.atMs) : [...this.events];
     const base = {
       version: 1 as const,
       mode: this.mode,
@@ -383,8 +396,8 @@ export class RecordingDiagnosticsCollector {
       complete: this.stopped,
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
       inputs,
-      bleed: summarizeBleed(this.bleed),
-      events: [...this.events],
+      bleed: ext ? ext.bleed : summarizeBleed(this.bleed),
+      events,
       native: this.native,
       ...(this.error ? { error: this.error } : {}),
     };

@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager};
 
 const META: &str = "meta.json";
 
-fn root(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn root(app: &AppHandle) -> Result<PathBuf, String> {
     let base = app
         .path()
         .app_data_dir()
@@ -33,7 +33,7 @@ fn valid_segment(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-fn meeting_dir(root: &Path, meeting_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn meeting_dir(root: &Path, meeting_id: &str) -> Result<PathBuf, String> {
     if !valid_segment(meeting_id) {
         return Err(format!("Invalid meeting id: {meeting_id}"));
     }
@@ -52,7 +52,7 @@ fn track_dir(root: &Path, meeting_id: &str, track: &str) -> Result<PathBuf, Stri
 }
 
 /// Write via a temp file + rename so a crash never leaves a torn chunk.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path.parent().ok_or("Invalid path")?;
     fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let tmp = path.with_extension("part");
@@ -123,7 +123,7 @@ fn list(root: &Path, meeting_id: &str) -> Result<Vec<TrackChunks>, String> {
     Ok(tracks)
 }
 
-fn read_track(root: &Path, meeting_id: &str, track: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn read_track(root: &Path, meeting_id: &str, track: &str) -> Result<Vec<u8>, String> {
     let dir = track_dir(root, meeting_id, track)?;
     let mut out = Vec::new();
     for name in chunk_names(&dir) {

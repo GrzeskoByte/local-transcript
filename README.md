@@ -14,10 +14,13 @@ audio.
 
 ## Features
 
-- **Three recording modes** — Speaker (microphone), Device Audio (shared tab/window),
-  and Mic + Device two-way (separate tracks labelled *Me* / *Others*, ideal for Zoom/Meet calls).
+- **Three recording modes** — Speaker (microphone), Device Audio (everything the computer
+  plays — no screen sharing), and Mic + Device (both mixed into one recording, ideal for Zoom/Meet calls).
+- **Native recording engine** — the desktop app captures, mixes and encodes audio itself
+  (WASAPI loopback on Windows, a CoreAudio tap on macOS 14.2+, PulseAudio/PipeWire on Linux),
+  so stopping even an hours-long recording never freezes the window.
 - **Import audio files** — turn an existing recording into a meeting for playback and transcription.
-- **Crash-safe recording** — `MediaRecorder` writes 5-second chunks straight to OPFS;
+- **Crash-safe recording** — audio is written in 5-second Ogg Opus chunks as it is recorded;
   unfinished recordings offer Recover / Delete on next launch.
 - **Native transcription** — whisper.cpp via voxtype, with per-track transcription,
   progress stages, cancel/retry, and VAD + preprocessing for accuracy.
@@ -162,7 +165,10 @@ all run on this computer. It goes online **only when you click something**:
 | LLM summary | You click Summarize (Ollama stays local; API/Open WebUI/OpenCode/Claude Code send the transcript to that provider) | The endpoint you configured |
 
 The bundled whisper.cpp engine is built without its network features
-(`WHISPER_CURL=OFF`, `GGML_RPC=OFF`, no server). `src/privacy.test.ts` fails if
+(`WHISPER_CURL=OFF`, `GGML_RPC=OFF`, no server). The desktop app records with
+its own audio engine (`cpal` for capture, `libopus` for encoding): it talks
+only to the operating system's sound service (WASAPI, CoreAudio, or
+PulseAudio/PipeWire over its local socket). `src/privacy.test.ts` fails if
 code gains a new way to reach the network. The OS web view (WebView2 / WebKit)
 follows your operating system's own diagnostic-data settings.
 

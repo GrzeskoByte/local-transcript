@@ -14,6 +14,8 @@
  * never closed. Seeking is exact and instant; nothing is torn down mid-stream.
  */
 
+import { decodeOggNative } from './native-decode';
+
 /** Decode rate: plenty for speech, half the memory of 48 kHz (~170 MB/hour). */
 export const PLAYER_SAMPLE_RATE = 24000;
 /** Length of each scheduled slice and how far ahead we keep scheduled. */
@@ -43,6 +45,9 @@ export function toMonoInt16(channels: Float32Array[]): Int16Array {
 
 /** Decode a recording into mono PCM for playback. */
 export async function decodeForPlayback(blob: Blob, rate = PLAYER_SAMPLE_RATE): Promise<DecodedAudio> {
+  // Native recordings (Ogg Opus) decode in the desktop shell, at `rate`.
+  const native = await decodeOggNative(blob, rate);
+  if (native) return { pcm: native, sampleRate: rate };
   const data = await blob.arrayBuffer();
   // decodeAudioData resamples to the context's rate; an offline context avoids
   // opening an output device just to decode.
