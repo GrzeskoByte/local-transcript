@@ -6,6 +6,7 @@ import {
   type InputStats,
   type RecordingDiagnostics,
 } from '../../domain/audio-diagnostics';
+import { formatStopTrace, type StopStep } from '../../domain/stop-trace';
 
 const ROLE: Record<InputStats['role'], string> = { microphone: 'Microphone', device: 'System sound' };
 
@@ -48,7 +49,13 @@ function inputSummary(input: InputStats): string {
 }
 
 /** What was measured during the recording, with plain advice (Meeting Detail). */
-export function AudioCheckCard({ diagnostics: d }: { diagnostics: RecordingDiagnostics }): React.JSX.Element {
+export function AudioCheckCard({
+  diagnostics: d,
+  stopTrace,
+}: {
+  diagnostics: RecordingDiagnostics;
+  stopTrace?: { steps: StopStep[]; totalMs: number };
+}): React.JSX.Element {
   const [copied, setCopied] = useState<string | null>(null);
   const problems = d.issues.filter((i) => i.severity === 'problem');
   const notices = d.issues.filter((i) => i.severity === 'notice');
@@ -106,6 +113,11 @@ export function AudioCheckCard({ diagnostics: d }: { diagnostics: RecordingDiagn
               ))}
             </li>
           )}
+          {stopTrace && (
+            <li>
+              <strong>Stop:</strong> {formatStopTrace(stopTrace.steps, stopTrace.totalMs).replace(/^Stop /, '')}
+            </li>
+          )}
           {d.events.map((e, n) => (
             <li key={`${e.atMs}-${n}`}>
               {formatAt(e.atMs)} — {e.detail}
@@ -117,7 +129,7 @@ export function AudioCheckCard({ diagnostics: d }: { diagnostics: RecordingDiagn
           className="btn"
           onClick={() => {
             navigator.clipboard
-              .writeText(JSON.stringify(d, null, 2))
+              .writeText(JSON.stringify(stopTrace ? { ...d, stopTrace } : d, null, 2))
               .then(() => setCopied('Copied the full report.'))
               .catch(() => setCopied('Copy failed — the report is also saved as diagnostics.json in the meeting folder.'));
           }}

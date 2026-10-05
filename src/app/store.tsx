@@ -70,9 +70,17 @@ import type { LlmConfig, MeetingSummary } from '../integrations/llm';
 import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
 import { normalizeAgendaItems, type AgendaItem } from '../domain/agenda';
 import { settleWithin } from '../domain/settle';
+import { StopTrace, formatStopTrace, nextPaint } from '../domain/stop-trace';
 
 /** Longest wait for one best-effort teardown step when a recording stops. */
 const STOP_STEP_TIMEOUT_MS = 3000;
+
+/** Print the Stop timings to the console and, on desktop, the terminal. */
+function reportStopTrace(trace: StopTrace): void {
+  const line = formatStopTrace(trace.steps, trace.totalMs());
+  console.info(line);
+  if (isDesktopApp()) void invokeDesktop('native_log', { message: line }).catch(() => undefined);
+}
 
 export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'app';
 const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'app'];
@@ -122,6 +130,8 @@ interface AppState {
   /** Delete a meeting everywhere, stopping its transcription first (§23). */
   deleteMeeting: (id: string) => Promise<void>;
   stopRecording: () => Promise<Meeting | null>;
+  /** True from the Stop click until the recording is saved (Active Meeting shows a loader). */
+  stopping: boolean;
   // detail
   detailMeeting: Meeting | null;
   detailSegments: TranscriptSegment[];
@@ -249,6 +259,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [recordingErrorKind, setRecordingErrorKind] = useState<RecorderErrorKind | null>(null);
   const [activeMeeting, setActiveMeeting] = useState<Meeting | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const stoppingRef = useRef(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
   const [detailMeeting, setDetailMeeting] = useState<Meeting | null>(null);
@@ -884,12 +896,29 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const stopRecording = useCallback(async () => {
     const recorder = recorderRef.current;
     const meeting = activeMeeting;
-    if (!recorder || !meeting) return null;
-    const diagnostics = await stopDiagnostics();
+    if (!recorder || !meeting || stoppingRef.current) return null;
+    stoppingRef.current = true;
+    // "Saving recording…" is painted before any teardown starts: if a step
+    // blocks the page, the user still sees that Stop is working.
+    setStopping(true);
+    try {
+      await nextPaint();
+      return await finishStop(recorder, meeting);
+    } finally {
+      stoppingRef.current = false;
+      setStopping(false);
+    }
+  }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics, stopLive, drainLive]);
+
+  async function finishStop(recorder: MediaRecorderAudioRecorder, meeting: Meeting): Promise<Meeting> {
+    const trace = new StopTrace();
+    const diagnostics = await trace.time('diagnostics', stopDiagnostics);
+    await nextPaint();
     // Detach the live tap before the capture sources stop (WebKitGTK).
-    const liveTranscriber = await stopLive();
+    const liveTranscriber = await trace.time('live tap', stopLive);
     const liveRun = liveTranscriber && liveTranscriber.snapshot().status !== 'failed' ? liveTranscriber : null;
-    const result = await recorder.stop();
+    await nextPaint();
+    const result = await recorder.stop(trace);
     const endedAt = Date.now();
     const recordedTracks = result.tracks.filter(Boolean);
     const updated: Meeting = {
@@ -904,7 +933,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       ...(diagnostics ? { diagnostics } : {}),
       ...(liveRun ? { transcriptionStatus: 'processing' as const } : {}),
     };
-    await saveMeeting(updated);
+    // Saved with the meeting and printed to the terminal: a slow Stop names its step.
+    updated.stopTrace = { steps: [...trace.steps], totalMs: trace.totalMs() };
+    await trace.time('save meeting', () => saveMeeting(updated));
+    reportStopTrace(trace);
     activeIdRef.current = null;
     setRecordingError(null);
     setActiveMeeting(null);
@@ -924,7 +956,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     })();
     if (liveRun) drainLive(updated.id, liveRun);
     return updated;
-  }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics, stopLive, drainLive]);
+  }
 
   const loadDetail = useCallback(async (id: string) => {
     detailIdRef.current = id;
@@ -1206,6 +1238,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       retrySaving,
       deleteMeeting,
       stopRecording,
+      stopping,
       detailMeeting,
       detailSegments,
       detailTracks,
@@ -1266,7 +1299,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
       recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
-      stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
+      stopRecording, stopping, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,

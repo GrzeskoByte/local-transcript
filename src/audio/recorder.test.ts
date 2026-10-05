@@ -108,6 +108,20 @@ describe('MediaRecorderAudioRecorder', () => {
     expect(rec.getState()).toBe('COMPLETED');
   });
 
+  it('times each step of stop for the stop trace', async () => {
+    const { StopTrace } = await import('../domain/stop-trace');
+    const rec = new MediaRecorderAudioRecorder();
+    await rec.start(source(), 'm-trace', Date.now());
+    const trace = new StopTrace();
+    await rec.stop(trace);
+    expect(trace.steps.map((s) => s.step)).toEqual([
+      'MediaRecorder.stop',
+      'finish recorder',
+      'release capture',
+      'save chunks',
+    ]);
+  });
+
   it('hands every chunk to the chunk listener in order, even when saving fails', async () => {
     const rec = new MediaRecorderAudioRecorder();
     const seen: number[] = [];

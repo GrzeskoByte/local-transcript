@@ -9,7 +9,7 @@ import { LiveAudioWarnings } from '../components/AudioCheck.tsx';
 export function ActiveMeeting(): React.JSX.Element {
   const {
     activeMeeting, recordingState, recordingError, recordingErrorKind,
-    pauseRecording, resumeRecording, retrySaving, stopRecording, recordingIssues, live,
+    pauseRecording, resumeRecording, retrySaving, stopRecording, stopping, recordingIssues, live,
   } = useApp();
   const [retrying, setRetrying] = useState(false);
 
@@ -32,9 +32,17 @@ export function ActiveMeeting(): React.JSX.Element {
           </div>
         </div>
         <div className="rec-state">
-          {sourceLost ? 'Audio source lost' : failing ? 'Recording — not saving' : paused ? 'Paused' : 'Recording'}
+          {stopping ? 'Saving' : sourceLost ? 'Audio source lost' : failing ? 'Recording — not saving' : paused ? 'Paused' : 'Recording'}
         </div>
-        {sourceLost ? (
+        {stopping ? (
+          <div className="loader rec-saving" role="status" aria-live="polite" aria-label="Saving recording">
+            <div className="loader-head">
+              <span className="spinner" aria-hidden="true" />
+              <strong>Saving recording…</strong>
+            </div>
+            <p className="muted small mb-0">Finishing the audio file. The meeting opens as soon as it is saved.</p>
+          </div>
+        ) : sourceLost ? (
           <div className="rec-alert" role="alert">
             <strong>Recording interrupted.</strong>
             <p>
