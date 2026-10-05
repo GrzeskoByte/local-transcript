@@ -42,18 +42,14 @@ import {
 } from '../platform/updater';
 import {
   LiveTranscriber,
-  downloadWhistle,
   getLiveEnabled,
   getLiveModel,
   liveModelOptions,
   resolveLiveModel,
   setLiveEnabled,
   setLiveModel,
-  whistleDownloadProgress,
-  whistleStatus as fetchWhistleStatus,
   type LiveModelOption,
   type LiveSnapshot,
-  type WhistleStatus,
 } from '../asr/live';
 import { LivePcmTap } from '../audio/live-tap';
 import { nativeDownloadModel, nativeDownloadProgress, nativeEnableGpu, nativeStatus as fetchNativeStatus } from '../asr/native-engine';
@@ -185,18 +181,17 @@ interface AppState {
   /** Transcribe while recording (pref; applies to the next recording). */
   liveEnabled: boolean;
   setLiveTranscription: (enabled: boolean) => void;
-  /** Saved live model choice ('whistle' or a native model name). */
+  /** Saved live model choice (a native model name). */
   liveModel: string;
   setLiveModelChoice: (id: string) => void;
-  /** Models live transcription can use (Whistle + installed models). */
+  /** Models live transcription can use (installed + the recommended small one). */
   liveOptions: LiveModelOption[];
   /** The model the next recording will use live (null = none usable). */
   liveChoice: LiveModelOption | null;
-  /** Whistle engine state on this computer (null before the probe / outside desktop). */
-  whistle: WhistleStatus | null;
-  /** Whistle download in flight (bytes); null when idle. */
-  whistleDownload: { received: number; total: number } | null;
-  downloadWhistleModel: () => Promise<void>;
+  /** Live-model download in flight (bytes); null when idle. */
+  liveDownload: { name: string; received: number; total: number } | null;
+  /** Download a model for live use without changing the main transcription model. */
+  downloadLiveModel: (name: string) => Promise<void>;
   /** Live transcript of the recording in progress (null when off). */
   live: LiveSnapshot | null;
   // recovery
@@ -277,8 +272,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [modelDownload, setModelDownload] = useState<{ name: string; received: number; total: number } | null>(null);
   const [liveEnabled, setLiveEnabledState] = useState<boolean>(() => getLiveEnabled());
   const [liveModel, setLiveModelState] = useState<string>(() => getLiveModel());
-  const [whistle, setWhistle] = useState<WhistleStatus | null>(null);
-  const [whistleDownload, setWhistleDownload] = useState<{ received: number; total: number } | null>(null);
+  const [liveDownload, setLiveDownload] = useState<{ name: string; received: number; total: number } | null>(null);
   const [live, setLive] = useState<LiveSnapshot | null>(null);
   /** Live transcription of the recording in progress. */
   const liveRef = useRef<{ transcriber: LiveTranscriber; tap: LivePcmTap; timer: ReturnType<typeof setInterval> } | null>(null);
@@ -366,12 +360,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  // Can this computer run Whistle, and is it downloaded?
-  useEffect(() => {
-    if (!isDesktopApp()) return;
-    void fetchWhistleStatus().then(setWhistle).catch(() => undefined);
   }, []);
 
   const refreshNativeStatus = useCallback(async () => {
@@ -1126,7 +1114,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [modelCatalog],
   );
 
-  const liveOptions = useMemo(() => liveModelOptions(whistle, installedModels), [whistle, installedModels]);
+  const liveOptions = useMemo(() => liveModelOptions(modelCatalog), [modelCatalog]);
   const liveChoice = useMemo(() => resolveLiveModel(liveModel, liveOptions), [liveModel, liveOptions]);
   liveChoiceRef.current = liveChoice;
 
@@ -1140,22 +1128,25 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setLiveModelState(id);
   }, []);
 
-  /** Fetch the Whistle engine + weights (~18 MB) with live progress. */
-  const downloadWhistleModel = useCallback(async () => {
-    setWhistleDownload({ received: 0, total: 0 });
-    const poll = window.setInterval(() => {
-      void whistleDownloadProgress()
-        .then((p) => setWhistleDownload({ received: p.received, total: p.total }))
-        .catch(() => undefined);
-    }, 500);
-    try {
-      await downloadWhistle();
-      setWhistle(await fetchWhistleStatus());
-    } finally {
-      window.clearInterval(poll);
-      setWhistleDownload(null);
-    }
-  }, []);
+  /** Fetch a (small) model for live use, with progress; the main model stays selected. */
+  const downloadLiveModel = useCallback(
+    async (name: string) => {
+      setLiveDownload({ name, received: 0, total: 0 });
+      const poll = window.setInterval(() => {
+        void nativeDownloadProgress(name)
+          .then((p) => setLiveDownload({ name, received: p.received, total: p.total }))
+          .catch(() => undefined);
+      }, 500);
+      try {
+        await nativeDownloadModel(name);
+        await refreshNativeStatus();
+      } finally {
+        window.clearInterval(poll);
+        setLiveDownload(null);
+      }
+    },
+    [refreshNativeStatus],
+  );
 
   // Keep the selected model in step with what is on disk (sidebar chip,
   // Meeting Detail picker). Only once the native probe has answered.
@@ -1246,9 +1237,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setLiveModelChoice,
       liveOptions,
       liveChoice,
-      whistle,
-      whistleDownload,
-      downloadWhistleModel,
+      liveDownload,
+      downloadLiveModel,
       live,
       unfinished,
       recoverUnfinished,
@@ -1264,7 +1254,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,
-      whistle, whistleDownload, downloadWhistleModel, live,
+      liveDownload, downloadLiveModel, live,
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
       gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, saveAgenda, uploadAgendaToGitlab,
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,

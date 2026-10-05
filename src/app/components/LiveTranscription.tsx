@@ -1,23 +1,21 @@
 import { useState } from 'react';
 import { useApp } from '../store.tsx';
-import { WHISTLE_DOWNLOAD_MB, WHISTLE_MODEL } from '../../asr/live';
 
-const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`;
+const mb = (bytes: number) => `${Math.round(bytes / 1_048_576)} MB`;
 
 /** Settings → Models: turn live transcription on and pick its model. */
 export function LiveTranscriptionSettings(): React.JSX.Element {
   const {
     liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,
-    whistle, whistleDownload, downloadWhistleModel, recordingState,
+    liveDownload, downloadLiveModel, recordingState,
   } = useApp();
   const [error, setError] = useState<string | null>(null);
   const selected = liveOptions.find((o) => o.id === liveModel) ?? liveChoice ?? liveOptions[0] ?? null;
-  const needsWhistle = selected?.id === WHISTLE_MODEL && !selected.ready;
   const recording = recordingState !== 'IDLE' && recordingState !== 'COMPLETED';
 
-  const download = (): void => {
+  const download = (name: string): void => {
     setError(null);
-    downloadWhistleModel().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    downloadLiveModel(name).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   };
 
   return (
@@ -27,8 +25,9 @@ export function LiveTranscriptionSettings(): React.JSX.Element {
         {liveEnabled && liveChoice && <span className="badge badge-ok">On</span>}
       </div>
       <div className="muted">
-        Shows the transcript while you record. The text is saved as the meeting&apos;s transcript when you stop;
-        Re-transcribe on the meeting redoes it from the whole recording with the model selected below in Models.
+        Shows the transcript while you record, using the built-in whisper.cpp engine on this computer — no audio or
+        text leaves it. The text is saved as the meeting&apos;s transcript when you stop; Re-transcribe on the meeting
+        redoes it from the whole recording with your main model.
       </div>
       <label className="check-row">
         <input
@@ -61,49 +60,42 @@ export function LiveTranscriptionSettings(): React.JSX.Element {
         </select>
       )}
       <p className="muted mb-0">
-        Whistle is a 17 MB speech model by Cactus Compute (Apache-2.0) that runs on the CPU and keeps up in real time,
-        in English, German, French, Spanish, Italian, Dutch and Polish. Accuracy is close to Whisper base — a quick
-        preview, not a replacement for the larger models.
+        A small model (base or small) keeps up in real time on a CPU; large models give better text but may fall
+        behind, and the rest is finished after you stop.
       </p>
-      {whistle && !whistle.supported && (
-        <p className="muted mb-0">
-          Whistle has no build for this computer (Intel Macs). Use an installed model for live text instead — a small
-          one (base or small) keeps up best.
-        </p>
-      )}
-      {needsWhistle && (
+      {selected && !selected.ready && (
         <div className="mt-3">
-          {whistleDownload ? (
-            <div className="loader" role="status" aria-label="Whistle download">
+          {liveDownload ? (
+            <div className="loader" role="status" aria-label="Live model download">
               <div className="loader-head">
                 <span className="spinner" aria-hidden="true" />
-                <strong>Downloading Whistle…</strong>
-                {whistleDownload.total > 0 && (
+                <strong>Downloading {liveDownload.name}…</strong>
+                {liveDownload.total > 0 && (
                   <span className="muted">
-                    {mb(whistleDownload.received)} of {mb(whistleDownload.total)}
+                    {mb(liveDownload.received)} of {mb(liveDownload.total)}
                   </span>
                 )}
               </div>
-              {whistleDownload.total > 0 ? (
-                <progress value={whistleDownload.received} max={whistleDownload.total} />
+              {liveDownload.total > 0 ? (
+                <progress value={liveDownload.received} max={liveDownload.total} />
               ) : (
                 <progress />
               )}
             </div>
           ) : (
-            <button className="btn btn-primary" onClick={download}>
-              Download Whistle (~{WHISTLE_DOWNLOAD_MB} MB)
+            <button className="btn btn-primary" onClick={() => download(selected.id)}>
+              Download {selected.label}
             </button>
           )}
         </div>
-      )}
-      {liveEnabled && !liveChoice && (
-        <p className="warn mt-2 mb-0">Download Whistle or a speech model to see text while recording.</p>
       )}
       {liveChoice && selected && liveChoice.id !== selected.id && (
         <p className="muted mb-0">
           Until {selected.label} is downloaded, live transcription uses {liveChoice.label}.
         </p>
+      )}
+      {liveEnabled && !liveChoice && (
+        <p className="warn mt-2 mb-0">Download a speech model to see text while recording.</p>
       )}
       {recording && <p className="muted small mb-0">Changes apply to the next recording.</p>}
       {error && (
@@ -119,7 +111,6 @@ export function LiveTranscriptionSettings(): React.JSX.Element {
 export function LiveTranscriptionToggle(): React.JSX.Element | null {
   const { liveEnabled, setLiveTranscription, liveChoice, go, nativeStatus } = useApp();
   if (!nativeStatus) return null;
-  const name = liveChoice ? (liveChoice.id === WHISTLE_MODEL ? 'Whistle' : liveChoice.label) : null;
   return (
     <div>
       <label className="check-row">
@@ -128,13 +119,13 @@ export function LiveTranscriptionToggle(): React.JSX.Element | null {
           checked={liveEnabled}
           onChange={(e) => setLiveTranscription(e.target.checked)}
         />
-        Transcribe live while recording{name ? ` (${name})` : ''}
+        Transcribe live while recording{liveChoice ? ` (${liveChoice.label})` : ''}
       </label>
       {liveEnabled && !liveChoice && (
         <p className="warn mt-2 mb-0">
           No live model yet —{' '}
           <button className="link-btn" onClick={() => go({ name: 'settings', tab: 'models' })}>
-            download Whistle in Settings
+            download one in Settings
           </button>
           . The recording works without it.
         </p>

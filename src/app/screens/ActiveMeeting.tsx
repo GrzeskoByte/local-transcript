@@ -126,7 +126,6 @@ function LiveTranscript({ live }: { live: LiveSnapshot }): React.JSX.Element {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [count]);
-  const model = live.model === 'whistle' ? 'Whistle' : live.model;
   const state =
     live.status === 'failed'
       ? 'Stopped'
@@ -138,7 +137,7 @@ function LiveTranscript({ live }: { live: LiveSnapshot }): React.JSX.Element {
       <div className="card-title">
         <strong>Live transcript</strong>
         <span className={`badge ${live.status === 'failed' ? 'pill-failed' : 'badge-ok'}`}>{state}</span>
-        <span className="muted small">{model}</span>
+        <span className="muted small">{live.model}</span>
       </div>
       {live.status === 'failed' ? (
         <p className="warn mb-0" role="alert">

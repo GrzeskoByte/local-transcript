@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LiveTranscriber, liveModelOptions, liveRequest, resolveLiveModel, WHISTLE_MODEL } from './live';
+import { LIVE_RECOMMENDED_MODEL, LiveTranscriber, liveModelOptions, liveRequest, resolveLiveModel } from './live';
 import type { CatalogModel } from './model-tiers';
 import type { NativeSegment } from './native-types';
 
@@ -16,41 +16,37 @@ function speech(seconds: number): Float32Array {
 
 const quiet = (seconds: number) => new Float32Array(Math.round(seconds * SR)).fill(0.0003);
 
-const model = (id: string, accuracy: number): CatalogModel => ({
-  id, label: id, engine: 'whisper', accuracy, tier: 'C', installed: true, downloadable: true, recommended: false, detail: '~1 MB',
+const model = (id: string, accuracy: number, installed = true): CatalogModel => ({
+  id, label: id, engine: 'whisper', accuracy, tier: 'C', installed, downloadable: true, recommended: false, detail: '~1 MB',
 });
 
 describe('live model options', () => {
-  it('offers Whistle first (even before download), then installed models fastest first', () => {
-    const opts = liveModelOptions(
-      { supported: true, installed: false, platform: 'linux-x86_64', dir: '/m/whistle' },
-      [model('large-v3-turbo', 5), model('base', 2)],
-    );
-    expect(opts.map((o) => o.id)).toEqual([WHISTLE_MODEL, 'base', 'large-v3-turbo']);
-    expect(opts[0]!.ready).toBe(false);
+  it('lists installed models fastest first', () => {
+    const opts = liveModelOptions([model('large-v3-turbo', 5), model('small', 3), model('base', 2)]);
+    expect(opts.map((o) => o.id)).toEqual(['base', 'small', 'large-v3-turbo']);
+    expect(opts.every((o) => o.ready)).toBe(true);
+    expect(opts[0]!.detail).toContain('recommended for live');
     expect(opts[2]!.detail).toContain('may lag');
   });
 
-  it('hides Whistle where no engine build exists (Intel Mac)', () => {
-    const opts = liveModelOptions({ supported: false, installed: false, platform: null, dir: null }, [model('base', 2)]);
-    expect(opts.map((o) => o.id)).toEqual(['base']);
+  it('offers the recommended small model for download when missing', () => {
+    const opts = liveModelOptions([model('large-v3-turbo', 5), model('base', 2, false), model('tiny', 1, false)]);
+    expect(opts.map((o) => [o.id, o.ready])).toEqual([
+      [LIVE_RECOMMENDED_MODEL, false],
+      ['large-v3-turbo', true],
+    ]);
   });
 
-  it('falls back to a usable model when the saved one is not ready', () => {
-    const opts = liveModelOptions(
-      { supported: true, installed: false, platform: 'macos-arm64', dir: null },
-      [model('small', 3)],
-    );
-    expect(resolveLiveModel(WHISTLE_MODEL, opts)?.id).toBe('small');
-    expect(resolveLiveModel(WHISTLE_MODEL, opts.slice(0, 1))).toBeNull();
+  it('falls back to a usable model when the saved one is not downloaded', () => {
+    const opts = liveModelOptions([model('base', 2, false), model('small', 3)]);
+    expect(resolveLiveModel('base', opts)?.id).toBe('small');
+    expect(resolveLiveModel('base', liveModelOptions([model('base', 2, false)]))).toBeNull();
   });
 
-  it('routes Whistle and native models to their engines', () => {
-    const wav = new Uint8Array([1, 2, 3]);
-    expect(liveRequest(WHISTLE_MODEL, wav, 'pl')).toEqual({
-      samplesBase64: 'AQID', sampleRate: SR, engine: 'whistle', language: 'pl',
+  it('sends the model and language with the utterance', () => {
+    expect(liveRequest('base', new Uint8Array([1, 2, 3]), 'pl')).toEqual({
+      samplesBase64: 'AQID', sampleRate: SR, model: 'base', language: 'pl',
     });
-    expect(liveRequest('base', wav, 'auto')).toMatchObject({ engine: 'native', model: 'base' });
   });
 });
 
@@ -61,7 +57,7 @@ describe('LiveTranscriber', () => {
       calls.push(req.samplesBase64.length);
       return [{ startMs: 0, endMs: 1, text: ` line ${calls.length} ` }];
     };
-    const live = new LiveTranscriber('m1', WHISTLE_MODEL, 'auto', invoke);
+    const live = new LiveTranscriber('m1', 'base', 'auto', invoke);
     live.push(quiet(1));
     live.push(speech(2));
     live.push(quiet(2));
@@ -91,7 +87,7 @@ describe('LiveTranscriber', () => {
   });
 
   it('gives up after repeated engine errors without throwing', async () => {
-    const live = new LiveTranscriber('m3', WHISTLE_MODEL, 'auto', async () => {
+    const live = new LiveTranscriber('m3', 'base', 'auto', async () => {
       throw new Error('engine crashed');
     });
     for (let i = 0; i < 4; i++) {
@@ -108,7 +104,7 @@ describe('LiveTranscriber', () => {
 
   it('cancel resolves finish() with what was done', async () => {
     let release!: () => void;
-    const live = new LiveTranscriber('m4', WHISTLE_MODEL, 'auto', () =>
+    const live = new LiveTranscriber('m4', 'base', 'auto', () =>
       new Promise<NativeSegment[]>((resolve) => {
         release = () => resolve([{ startMs: 0, endMs: 1, text: 'late' }]);
       }),

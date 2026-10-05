@@ -8,33 +8,22 @@
  * Active Meeting. On stop the live text becomes the meeting's transcript;
  * whole-file transcription (any model) stays available as Re-transcribe.
  *
- * Engines: Cactus Whistle (16.9 MB, CPU, 7 languages; downloaded on request)
- * or any installed whisper.cpp / voxtype model.
+ * Engine: the app's own whisper.cpp (or voxtype) with an installed model —
+ * fully local, no other runtime. A small model keeps up on a CPU.
  */
 import { invokeDesktop } from '../platform/desktop';
 import { getPref, setPref } from '../platform/prefs';
 import type { TranscriptSegment } from '../domain/transcript';
 import type { CatalogModel } from './model-tiers';
-import type { NativeDownloadProgress, NativeSegment } from './native-types';
+import type { NativeSegment } from './native-types';
 import { preprocessForASR } from './preprocess';
 import { bytesToBase64, encodeWav16 } from './wav';
 import { LIVE_SAMPLE_RATE, LiveSegmenter } from './live-segmenter';
 
 export const LIVE_ENABLED_PREF = 'live-transcription';
 export const LIVE_MODEL_PREF = 'live-transcription-model';
-/** Model id of Cactus Whistle in the live model picker. */
-export const WHISTLE_MODEL = 'whistle';
-export const WHISTLE_LANGUAGES = ['en', 'de', 'fr', 'es', 'it', 'nl', 'pl'];
-/** Approximate download: the engine (~1.5 MB) plus the weights (16.9 MB). */
-export const WHISTLE_DOWNLOAD_MB = 18;
-
-export interface WhistleStatus {
-  /** A Whistle engine build exists for this OS/CPU (not Intel Macs). */
-  supported: boolean;
-  installed: boolean;
-  platform: string | null;
-  dir: string | null;
-}
+/** Small multilingual Whisper model (~142 MB) that keeps up in real time on a CPU. */
+export const LIVE_RECOMMENDED_MODEL = 'base';
 
 export function getLiveEnabled(): boolean {
   return getPref(LIVE_ENABLED_PREF) === 'true';
@@ -45,23 +34,11 @@ export function setLiveEnabled(value: boolean): void {
 }
 
 export function getLiveModel(): string {
-  return getPref(LIVE_MODEL_PREF) || WHISTLE_MODEL;
+  return getPref(LIVE_MODEL_PREF) || LIVE_RECOMMENDED_MODEL;
 }
 
 export function setLiveModel(id: string): void {
   setPref(LIVE_MODEL_PREF, id);
-}
-
-export async function whistleStatus(): Promise<WhistleStatus> {
-  return invokeDesktop<WhistleStatus>('native_whistle_status');
-}
-
-export async function downloadWhistle(): Promise<void> {
-  await invokeDesktop('native_whistle_download');
-}
-
-export async function whistleDownloadProgress(): Promise<NativeDownloadProgress> {
-  return invokeDesktop<NativeDownloadProgress>('native_whistle_download_progress');
 }
 
 /** One choice in the live model picker. */
@@ -73,44 +50,41 @@ export interface LiveModelOption {
   ready: boolean;
 }
 
-/** Whistle first (when this computer can run it), then every installed model, fastest first. */
-export function liveModelOptions(whistle: WhistleStatus | null, installed: CatalogModel[]): LiveModelOption[] {
-  const out: LiveModelOption[] = [];
-  if (whistle?.supported) {
-    out.push({
-      id: WHISTLE_MODEL,
-      label: 'Whistle',
-      detail: whistle.installed
-        ? '17 MB · fastest · en, de, fr, es, it, nl, pl'
-        : `not downloaded (~${WHISTLE_DOWNLOAD_MB} MB) · fastest · 7 languages`,
-      ready: whistle.installed,
-    });
-  }
-  for (const m of [...installed].sort((a, b) => a.accuracy - b.accuracy || a.label.localeCompare(b.label))) {
-    out.push({
-      id: m.id,
-      label: m.label,
-      detail: [m.engine, m.detail, m.accuracy >= 4 ? 'may lag behind on a CPU' : ''].filter(Boolean).join(' · '),
-      ready: true,
-    });
+/**
+ * Installed models, fastest first, plus the recommended small model when it
+ * is not downloaded yet (offered with a download button).
+ */
+export function liveModelOptions(catalog: CatalogModel[]): LiveModelOption[] {
+  const installed = catalog
+    .filter((m) => m.installed)
+    .sort((a, b) => a.accuracy - b.accuracy || a.label.localeCompare(b.label));
+  const out: LiveModelOption[] = installed.map((m) => ({
+    id: m.id,
+    label: m.label,
+    detail: [
+      m.id === LIVE_RECOMMENDED_MODEL ? 'recommended for live' : '',
+      m.detail,
+      m.accuracy >= 4 ? 'may lag behind on a CPU' : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    ready: true,
+  }));
+  const rec = catalog.find((m) => m.id === LIVE_RECOMMENDED_MODEL);
+  if (rec && !rec.installed && rec.downloadable) {
+    out.unshift({ id: rec.id, label: rec.label, detail: 'recommended for live · not downloaded (~142 MB)', ready: false });
   }
   return out;
 }
 
-/** The model live transcription will use: the saved choice if usable, else the first usable one. */
+/** The model live transcription will use: the saved choice if usable, else the fastest usable one. */
 export function resolveLiveModel(saved: string, options: LiveModelOption[]): LiveModelOption | null {
   return options.find((o) => o.id === saved && o.ready) ?? options.find((o) => o.ready) ?? null;
 }
 
 /** Native request for one utterance (`native_live_transcribe`). */
 export function liveRequest(model: string, wav: Uint8Array, language: string) {
-  return {
-    samplesBase64: bytesToBase64(wav),
-    sampleRate: LIVE_SAMPLE_RATE,
-    engine: model === WHISTLE_MODEL ? 'whistle' : 'native',
-    ...(model === WHISTLE_MODEL ? {} : { model }),
-    language,
-  };
+  return { samplesBase64: bytesToBase64(wav), sampleRate: LIVE_SAMPLE_RATE, model, language };
 }
 
 export type LiveStatus = 'listening' | 'transcribing' | 'finishing' | 'stopped' | 'failed';

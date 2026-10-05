@@ -319,7 +319,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
 
       {m.transcriptionStatus === 'completed' && !busy && m.transcriptSource?.kind === 'live' && (
         <p className="muted" aria-label="Transcript source">
-          Live transcript ({m.transcriptSource.model === 'whistle' ? 'Whistle' : m.transcriptSource.model}), made
+          Live transcript ({m.transcriptSource.model}), made
           while recording. Re-transcribe redoes it from the whole recording with {modelMeta.modelId} for the best
           accuracy.
         </p>

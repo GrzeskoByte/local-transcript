@@ -86,7 +86,7 @@ npm run build         # frontend only (dist/)
 
 1. **New Meeting** — pick Speaker, Device Audio, or Mic + Device (wear headphones
    for calls), or **Import audio file**. Press Start.
-2. **Active Meeting** — timer with Pause/Resume/Stop. Nothing is transcribed live unless you turn on **Live transcription** (Settings → Models): then text appears a few seconds after each sentence (Whistle, a 17 MB CPU model, or any installed model), and is saved as the meeting's transcript; Re-transcribe redoes it from the whole recording.
+2. **Active Meeting** — timer with Pause/Resume/Stop. Nothing is transcribed live unless you turn on **Live transcription** (Settings → Models): then text appears a few seconds after each sentence (the built-in whisper.cpp with a small model such as `base`, fully on-device), and is saved as the meeting's transcript; Re-transcribe redoes it from the whole recording.
 3. **Meeting Detail** — play back, then **Transcribe** (pick a downloaded model first
    in Settings). Search the transcript, export it, or delete everything.
 4. **Settings** — download/select models (tiered S–D), spoken language, microphone
