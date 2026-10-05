@@ -8,6 +8,10 @@ import { MicIcon, PlusIcon, SearchIcon } from '../components/icons.tsx';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { isDesktopApp } from '../../platform/desktop.ts';
 
+const SEARCH_DEBOUNCE_MS = 200;
+const SEARCH_BATCH = 8;
+const MAX_HITS = 30;
+
 export function Dashboard(): React.JSX.Element {
   const {
     meetings, go, unfinished, recoverUnfinished, discardUnfinished, modelMeta, nativeStatus,
@@ -21,27 +25,33 @@ export function Dashboard(): React.JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
+    const q = query.trim();
+    if (!q) {
+      setHits([]);
+      return;
+    }
+    // Debounced: search once typing pauses, not on every keystroke. Segments
+    // are read in parallel batches and a newer query abandons this one.
+    const timer = window.setTimeout(() => void run(), SEARCH_DEBOUNCE_MS);
     async function run(): Promise<void> {
-      const q = query.trim();
-      if (!q) {
-        setHits([]);
-        return;
-      }
       const out: { meetingId: string; title: string; snippet: string }[] = [];
-      for (const m of meetings) {
-        if (m.transcriptionStatus !== 'completed') continue;
-        const segs = await getSegments(m.id);
-        for (const h of searchSegments(segs, q)) {
-          out.push({ meetingId: m.id, title: m.title, snippet: h.snippet });
-          if (out.length >= 30) break;
-        }
-        if (out.length >= 30) break;
+      const done = meetings.filter((m) => m.transcriptionStatus === 'completed');
+      for (let i = 0; i < done.length && out.length < MAX_HITS; i += SEARCH_BATCH) {
+        const batch = done.slice(i, i + SEARCH_BATCH);
+        const segs = await Promise.all(batch.map((m) => getSegments(m.id).catch(() => [])));
+        if (cancelled) return;
+        batch.forEach((m, k) => {
+          for (const h of searchSegments(segs[k]!, q)) {
+            if (out.length >= MAX_HITS) break;
+            out.push({ meetingId: m.id, title: m.title, snippet: h.snippet });
+          }
+        });
       }
       if (!cancelled) setHits(out);
     }
-    void run();
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [query, meetings]);
 

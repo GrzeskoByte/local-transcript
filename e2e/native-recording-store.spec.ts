@@ -65,6 +65,16 @@ test('records to the native store when the webview has no OPFS', async ({ page }
   await expect(page).toHaveURL(/#\/meeting\//);
   await expect(page.getByText(/could not be saved/i)).toHaveCount(0);
   const id = decodeURIComponent(page.url().split('#/meeting/')[1] ?? '');
+  // Meeting Detail does not read the recording until it is played.
+  const reads = () =>
+    page.evaluate(() => (window as unknown as { __calls: string[] }).__calls.filter((c) => c === 'native_recording_read').length);
+  await expect(page.getByRole('region', { name: 'Recording playback' }).getByRole('button', { name: 'Play' })).toHaveCount(1);
+  await page.waitForTimeout(500);
+  expect(await reads()).toBe(0);
+  await page.getByRole('region', { name: 'Recording playback' }).getByRole('button', { name: 'Play' }).click();
+  await expect.poll(reads).toBe(1);
+  await expect(page.getByRole('region', { name: 'Recording playback' }).getByRole('button', { name: 'Pause' })).toHaveCount(1);
+  await page.getByRole('region', { name: 'Recording playback' }).getByRole('button', { name: 'Pause' }).click();
 
   const result = await page.evaluate(async (meetingId) => {
     const w = window as unknown as {

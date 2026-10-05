@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LiveSnapshot } from '../../asr/live';
-import { useApp, formatDuration } from '../store.tsx';
+import { useApp, ElapsedClock } from '../store.tsx';
 import { modeLabel } from '../../domain/meeting';
 import { CheckIcon } from '../components/icons.tsx';
 import { AgendaList } from '../components/Agenda.tsx';
@@ -8,7 +8,7 @@ import { LiveAudioWarnings } from '../components/AudioCheck.tsx';
 
 export function ActiveMeeting(): React.JSX.Element {
   const {
-    activeMeeting, elapsedMs, recordingState, recordingError, recordingErrorKind,
+    activeMeeting, recordingState, recordingError, recordingErrorKind,
     pauseRecording, resumeRecording, retrySaving, stopRecording, recordingIssues, live,
   } = useApp();
   const [retrying, setRetrying] = useState(false);
@@ -28,7 +28,7 @@ export function ActiveMeeting(): React.JSX.Element {
         <div className="rec-readout">
           <div className={`rec-orb${paused ? ' paused' : ''}`} aria-hidden="true" />
           <div className="timer" aria-label="Elapsed time">
-            {formatDuration(elapsedMs)}
+            <ElapsedClock />
           </div>
         </div>
         <div className="rec-state">

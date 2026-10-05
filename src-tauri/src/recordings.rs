@@ -156,13 +156,20 @@ pub fn native_recording_list(app: AppHandle, meeting_id: String) -> Result<Vec<T
     list(&root(&app)?, &meeting_id)
 }
 
-/// All chunks of a track, concatenated in order, as base64.
+/// All chunks of a track, concatenated in order, as raw bytes: Tauri's binary
+/// IPC hands the webview an ArrayBuffer, so an hour-long recording never
+/// becomes a ~30 MB base64 string to build, send, parse and decode.
 #[tauri::command]
-pub async fn native_recording_read(app: AppHandle, meeting_id: String, track: String) -> Result<String, String> {
+pub async fn native_recording_read(
+    app: AppHandle,
+    meeting_id: String,
+    track: String,
+) -> Result<tauri::ipc::Response, String> {
     let root = root(&app)?;
-    tauri::async_runtime::spawn_blocking(move || read_track(&root, &meeting_id, &track).map(|b| STANDARD.encode(b)))
+    tauri::async_runtime::spawn_blocking(move || read_track(&root, &meeting_id, &track))
         .await
         .map_err(|e| format!("Read task failed: {e}"))?
+        .map(tauri::ipc::Response::new)
 }
 
 #[tauri::command]
