@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { LiveSnapshot } from '../../asr/live';
 import { useApp, formatDuration } from '../store.tsx';
 import { modeLabel } from '../../domain/meeting';
 import { CheckIcon } from '../components/icons.tsx';
@@ -8,7 +9,7 @@ import { LiveAudioWarnings } from '../components/AudioCheck.tsx';
 export function ActiveMeeting(): React.JSX.Element {
   const {
     activeMeeting, elapsedMs, recordingState, recordingError, recordingErrorKind,
-    pauseRecording, resumeRecording, retrySaving, stopRecording, recordingIssues,
+    pauseRecording, resumeRecording, retrySaving, stopRecording, recordingIssues, live,
   } = useApp();
   const [retrying, setRetrying] = useState(false);
 
@@ -97,6 +98,7 @@ export function ActiveMeeting(): React.JSX.Element {
         )}
       </section>
       {!failing && <LiveAudioWarnings issues={recordingIssues} />}
+      {live && <LiveTranscript live={live} />}
       {activeMeeting.agenda?.items.length ? (
         <section className="card" aria-label="Meeting agenda">
           <strong>Agenda</strong>
@@ -104,8 +106,61 @@ export function ActiveMeeting(): React.JSX.Element {
         </section>
       ) : null}
       <p className="muted center">
-        You can leave this screen — recording continues. Transcribe after stopping.
+        You can leave this screen — recording continues.{' '}
+        {live
+          ? 'The live transcript is saved with the meeting; re-transcribe the whole recording later for the best accuracy.'
+          : 'Transcribe after stopping.'}
       </p>
     </>
+  );
+}
+
+const clock = (ms: number) =>
+  `${String(Math.floor(ms / 60000)).padStart(2, '0')}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`;
+
+/** Text transcribed while recording; new lines scroll into view. */
+function LiveTranscript({ live }: { live: LiveSnapshot }): React.JSX.Element {
+  const listRef = useRef<HTMLUListElement>(null);
+  const count = live.segments.length;
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [count]);
+  const state =
+    live.status === 'failed'
+      ? 'Stopped'
+      : live.pending > 0
+        ? `Transcribing… (${live.pending} waiting)`
+        : 'Listening';
+  return (
+    <section className="card" aria-label="Live transcript">
+      <div className="card-title">
+        <strong>Live transcript</strong>
+        <span className={`badge ${live.status === 'failed' ? 'pill-failed' : 'badge-ok'}`}>{state}</span>
+        <span className="muted small">{live.model}</span>
+      </div>
+      {live.status === 'failed' ? (
+        <p className="warn mb-0" role="alert">
+          Live transcription stopped: {live.error ?? 'the engine failed.'} The recording is not affected — transcribe
+          it after stopping.
+        </p>
+      ) : (
+        live.error && <p className="warn mb-0">{live.error}</p>
+      )}
+      {count === 0 ? (
+        live.status !== 'failed' && (
+          <p className="muted mb-0">Text appears here a few seconds after each sentence.</p>
+        )
+      ) : (
+        <ul className="transcript live-transcript" ref={listRef} aria-live="polite">
+          {live.segments.map((s) => (
+            <li key={s.id}>
+              <span className="ts">{clock(s.startMs)}</span>
+              {s.text}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

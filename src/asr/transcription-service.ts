@@ -103,7 +103,9 @@ export class TranscriptionService {
         sequence: i,
       }));
       // Atomic, and a no-op if the meeting was deleted while we worked.
-      await commitTranscript(meetingId, merged);
+      await commitTranscript(meetingId, merged, {
+        transcriptSource: { kind: 'file', model: modelId, createdAt: Date.now() },
+      });
       this.callbacks.onProgress?.(meetingId, 1);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

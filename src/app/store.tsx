@@ -26,7 +26,7 @@ import { nativeCatalog } from '../asr/model-tiers';
 import type { CatalogModel } from '../asr/model-tiers';
 import { findUnfinishedMeetings, getMeeting, listMeetings, saveMeeting, updateMeeting } from '../storage/meetings';
 import { deleteMeetingEverywhere } from '../features/meetings/exports';
-import { getSegments } from '../storage/transcripts';
+import { commitTranscript, getSegments } from '../storage/transcripts';
 import { DatabaseOpenError } from '../storage/database';
 import type { TranscriptSegment } from '../domain/transcript';
 import type { TranscriptionStage } from '../asr/engine';
@@ -40,6 +40,18 @@ import {
   setLastCheck,
   type UpdateInfo,
 } from '../platform/updater';
+import {
+  LiveTranscriber,
+  getLiveEnabled,
+  getLiveModel,
+  liveModelOptions,
+  resolveLiveModel,
+  setLiveEnabled,
+  setLiveModel,
+  type LiveModelOption,
+  type LiveSnapshot,
+} from '../asr/live';
+import { LivePcmTap } from '../audio/live-tap';
 import { nativeDownloadModel, nativeDownloadProgress, nativeEnableGpu, nativeStatus as fetchNativeStatus } from '../asr/native-engine';
 import type { NativeAsrStatus, NativeModelInfo } from '../asr/native-types';
 import { desktopStorageDir, openDesktopStorageDir } from '../platform/desktop-storage';
@@ -165,6 +177,23 @@ interface AppState {
   checkUpdates: () => Promise<UpdateInfo>;
   /** Enable GPU acceleration via the desktop backend (desktop only). */
   enableGpu: () => Promise<void>;
+  // live transcription (desktop, opt-in)
+  /** Transcribe while recording (pref; applies to the next recording). */
+  liveEnabled: boolean;
+  setLiveTranscription: (enabled: boolean) => void;
+  /** Saved live model choice (a native model name). */
+  liveModel: string;
+  setLiveModelChoice: (id: string) => void;
+  /** Models live transcription can use (installed + the recommended small one). */
+  liveOptions: LiveModelOption[];
+  /** The model the next recording will use live (null = none usable). */
+  liveChoice: LiveModelOption | null;
+  /** Live-model download in flight (bytes); null when idle. */
+  liveDownload: { name: string; received: number; total: number } | null;
+  /** Download a model for live use without changing the main transcription model. */
+  downloadLiveModel: (name: string) => Promise<void>;
+  /** Live transcript of the recording in progress (null when off). */
+  live: LiveSnapshot | null;
   // recovery
   unfinished: Meeting[];
   recoverUnfinished: (id: string) => Promise<void>;
@@ -241,6 +270,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [systemAudio, setSystemAudio] = useState<SystemAudioStatus | null>(null);
   const [modelDownload, setModelDownload] = useState<{ name: string; received: number; total: number } | null>(null);
+  const [liveEnabled, setLiveEnabledState] = useState<boolean>(() => getLiveEnabled());
+  const [liveModel, setLiveModelState] = useState<string>(() => getLiveModel());
+  const [liveDownload, setLiveDownload] = useState<{ name: string; received: number; total: number } | null>(null);
+  const [live, setLive] = useState<LiveSnapshot | null>(null);
+  /** Live transcription of the recording in progress. */
+  const liveRef = useRef<{ transcriber: LiveTranscriber; tap: LivePcmTap; timer: ReturnType<typeof setInterval> } | null>(null);
+  /** Model live transcription uses (computed further down, read when a recording starts). */
+  const liveChoiceRef = useRef<LiveModelOption | null>(null);
+  /** Meeting Detail currently shown (late async results must not land on another one). */
+  const detailIdRef = useRef<string | null>(null);
+  /** Live transcripts still finishing after Stop, by meeting id. */
+  const liveDrainRef = useRef(new Map<string, { transcriber: LiveTranscriber; done: Promise<void> }>());
   const recorderRef = useRef<MediaRecorderAudioRecorder | null>(null);
   /** Desktop: writes the live recording into the local folder chunk by chunk. */
   const liveMirrorRef = useRef<LiveAudioMirror | null>(null);
@@ -430,6 +471,54 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     return diag.collector.stop().catch(() => undefined);
   }, []);
 
+  /**
+   * Transcribe while recording, when enabled and a model is usable. Taps the
+   * recorded stream (the mix for Mic + Device). Best-effort: a failure here
+   * only shows on Active Meeting and never affects the recording.
+   */
+  const startLive = useCallback(
+    async (id: string, source: TrackSpec['source']) => {
+      const choice = liveChoiceRef.current;
+      if (!isDesktopApp() || !getLiveEnabled() || !choice) return;
+      const transcriber = new LiveTranscriber(id, choice.id, language);
+      transcriber.onUpdate(setLive);
+      const tap = new LivePcmTap((samples) => transcriber.push(samples));
+      const timer = setInterval(() => transcriber.tick(), 700);
+      liveRef.current = { transcriber, tap, timer };
+      setLive(transcriber.snapshot());
+      try {
+        const stream = source.currentStream?.() ?? null;
+        if (!stream) throw new Error('The recorded audio is not available for live transcription.');
+        const ctx = source instanceof MixedAudioSource ? (source.graph()?.ctx ?? null) : null;
+        await tap.start(stream, ctx);
+      } catch (err) {
+        clearInterval(timer);
+        await tap.stop();
+        transcriber.cancel();
+        // Recording may have stopped meanwhile: only report on the live one.
+        if (liveRef.current?.transcriber !== transcriber) return;
+        liveRef.current = null;
+        setLive({
+          ...transcriber.snapshot(),
+          status: 'failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+    [language],
+  );
+
+  /** Stop feeding live audio (before the capture sources stop). */
+  const stopLive = useCallback(async (): Promise<LiveTranscriber | null> => {
+    const current = liveRef.current;
+    liveRef.current = null;
+    setLive(null);
+    if (!current) return null;
+    clearInterval(current.timer);
+    await current.tap.stop().catch(() => undefined);
+    return current.transcriber;
+  }, []);
+
   const startRecording = useCallback(
     async (title: string, mode: RecordingMode, agenda: AgendaItem[] = []) => {
       setRecordingError(null);
@@ -493,6 +582,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       try {
         await recorder.startTracks(specs, id, now);
         startDiagnostics(id, mode, now, source);
+        void startLive(id, source);
         const meta = await getMeeting(id);
         if (meta) {
           const { readMeta } = await import('../storage/recordings');
@@ -511,6 +601,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setRecordingError(msg);
+        await stopLive().then((t) => t?.cancel());
         await stopDiagnostics();
         await deleteRecording(id).catch(() => undefined);
         const existing = await getMeeting(id).catch(() => undefined);
@@ -525,14 +616,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       }
       await refresh();
     },
-    [go, refresh, systemAudio, startDiagnostics, stopDiagnostics],
+    [go, refresh, systemAudio, startDiagnostics, stopDiagnostics, startLive, stopLive],
   );
 
   const pauseRecording = useCallback(async () => {
     await recorderRef.current?.pause();
+    liveRef.current?.tap.setPaused(true);
   }, []);
 
   const resumeRecording = useCallback(async () => {
+    liveRef.current?.tap.setPaused(false);
     await recorderRef.current?.resume();
   }, []);
 
@@ -717,11 +810,64 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [llmConfig],
   );
 
+  /**
+   * After Stop: transcribe the utterances still queued, then save the live
+   * text as the meeting's transcript (Meeting Detail shows the usual loader
+   * meanwhile, and Re-transcribe redoes it from the whole recording). A live
+   * run that failed or was cancelled leaves the meeting untranscribed.
+   */
+  const drainLive = useCallback(
+    (meetingId: string, transcriber: LiveTranscriber) => {
+      setTxStage((p) => ({ ...p, [meetingId]: 'transcribing' }));
+      setTxProgress((p) => ({ ...p, [meetingId]: 0 }));
+      const done = (async () => {
+        try {
+          const segments = await transcriber.finish((r) => setTxProgress((p) => ({ ...p, [meetingId]: r })));
+          const failed = transcriber.snapshot().status === 'failed';
+          if (!transcriber.wasCancelled && !failed && segments.length > 0) {
+            await commitTranscript(meetingId, segments, {
+              transcriptSource: { kind: 'live', model: transcriber.model, createdAt: Date.now() },
+            });
+          } else {
+            await updateMeeting(meetingId, { transcriptionStatus: 'not_started' });
+          }
+        } catch {
+          await updateMeeting(meetingId, { transcriptionStatus: 'not_started' }).catch(() => undefined);
+        } finally {
+          liveDrainRef.current.delete(meetingId);
+          setTxProgress((p) => {
+            const next = { ...p };
+            delete next[meetingId];
+            return next;
+          });
+          setTxStage((p) => {
+            const next = { ...p };
+            delete next[meetingId];
+            return next;
+          });
+          await refresh().catch(() => undefined);
+          const m = await getMeeting(meetingId).catch(() => undefined);
+          setDetailMeeting((d) => (d && d.id === meetingId ? (m ?? null) : d));
+          if (m) {
+            const segs = await getSegments(meetingId).catch(() => [] as TranscriptSegment[]);
+            setDetailSegments((cur) => (detailIdRef.current === meetingId ? segs : cur));
+            if (m.transcriptionStatus === 'completed') void mirrorToDisk(m);
+          }
+        }
+      })();
+      liveDrainRef.current.set(meetingId, { transcriber, done });
+    },
+    [refresh, mirrorToDisk],
+  );
+
   const stopRecording = useCallback(async () => {
     const recorder = recorderRef.current;
     const meeting = activeMeeting;
     if (!recorder || !meeting) return null;
     const diagnostics = await stopDiagnostics();
+    // Detach the live tap before the capture sources stop (WebKitGTK).
+    const liveTranscriber = await stopLive();
+    const liveRun = liveTranscriber && liveTranscriber.snapshot().status !== 'failed' ? liveTranscriber : null;
     const result = await recorder.stop();
     const endedAt = Date.now();
     const recordedTracks = result.tracks.filter(Boolean);
@@ -735,6 +881,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       unfinished: false,
       ...(result.unsavedChunks > 0 ? { unsavedChunks: result.unsavedChunks } : {}),
       ...(diagnostics ? { diagnostics } : {}),
+      ...(liveRun ? { transcriptionStatus: 'processing' as const } : {}),
     };
     await saveMeeting(updated);
     activeIdRef.current = null;
@@ -751,11 +898,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const complete = liveMirror ? await liveMirror.finish().catch(() => false) : false;
       await mirrorToDisk(updated, complete ? 'skip' : 'copy');
     })();
+    if (liveRun) drainLive(updated.id, liveRun);
     go({ name: 'detail', id: updated.id });
     return updated;
-  }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics]);
+  }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics, stopLive, drainLive]);
 
   const loadDetail = useCallback(async (id: string) => {
+    detailIdRef.current = id;
     const meeting = await getMeeting(id);
     setDetailMeeting(meeting ?? null);
     if (!meeting) {
@@ -816,6 +965,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     async (id: string) => {
       // A transcription outliving the delete could write the meeting back.
       await txService.cancelAndWait(id);
+      const drain = liveDrainRef.current.get(id);
+      if (drain) {
+        drain.transcriber.cancel();
+        await drain.done;
+      }
       await deleteMeetingEverywhere(id);
       setDetailMeeting((d) => (d && d.id === id ? null : d));
       await refresh();
@@ -825,6 +979,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const cancelTranscription = useCallback(
     async (id: string) => {
+      const drain = liveDrainRef.current.get(id);
+      if (drain) {
+        drain.transcriber.cancel();
+        await drain.done;
+      }
       await txService.cancel(id);
       await refresh();
     },
@@ -955,6 +1114,40 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [modelCatalog],
   );
 
+  const liveOptions = useMemo(() => liveModelOptions(modelCatalog), [modelCatalog]);
+  const liveChoice = useMemo(() => resolveLiveModel(liveModel, liveOptions), [liveModel, liveOptions]);
+  liveChoiceRef.current = liveChoice;
+
+  const setLiveTranscription = useCallback((enabled: boolean) => {
+    setLiveEnabled(enabled);
+    setLiveEnabledState(enabled);
+  }, []);
+
+  const setLiveModelChoice = useCallback((id: string) => {
+    setLiveModel(id);
+    setLiveModelState(id);
+  }, []);
+
+  /** Fetch a (small) model for live use, with progress; the main model stays selected. */
+  const downloadLiveModel = useCallback(
+    async (name: string) => {
+      setLiveDownload({ name, received: 0, total: 0 });
+      const poll = window.setInterval(() => {
+        void nativeDownloadProgress(name)
+          .then((p) => setLiveDownload({ name, received: p.received, total: p.total }))
+          .catch(() => undefined);
+      }, 500);
+      try {
+        await nativeDownloadModel(name);
+        await refreshNativeStatus();
+      } finally {
+        window.clearInterval(poll);
+        setLiveDownload(null);
+      }
+    },
+    [refreshNativeStatus],
+  );
+
   // Keep the selected model in step with what is on disk (sidebar chip,
   // Meeting Detail picker). Only once the native probe has answered.
   useEffect(() => {
@@ -1038,6 +1231,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       saveLlmConfig,
       summarizeMeeting,
       enableGpu,
+      liveEnabled,
+      setLiveTranscription,
+      liveModel,
+      setLiveModelChoice,
+      liveOptions,
+      liveChoice,
+      liveDownload,
+      downloadLiveModel,
+      live,
       unfinished,
       recoverUnfinished,
       discardUnfinished,
@@ -1051,6 +1253,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
+      liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,
+      liveDownload, downloadLiveModel, live,
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
       gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, saveAgenda, uploadAgendaToGitlab,
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,

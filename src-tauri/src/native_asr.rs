@@ -169,7 +169,7 @@ fn model_download_url(name: &str) -> String {
 }
 
 /// Reject anything that is not a plain model name (no paths, no flags).
-fn valid_model_name(name: &str) -> bool {
+pub(crate) fn valid_model_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && !name.starts_with('.')
@@ -406,7 +406,7 @@ pub fn native_asr_cancel(state: State<'_, AppState>) -> Result<(), String> {
 // Transcription core
 // ---------------------------------------------------------------------------
 
-fn transcribe_blocking(
+pub(crate) fn transcribe_blocking(
     slot: &Arc<Mutex<Option<Child>>>,
     request: TranscribeRequest,
 ) -> Result<Vec<NativeSegment>, String> {

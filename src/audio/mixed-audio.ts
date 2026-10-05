@@ -75,6 +75,11 @@ export class MixedAudioSource implements AudioSource {
     }
   }
 
+  /** The mixed stream being recorded (null before start / after stop). */
+  currentStream(): MediaStream | null {
+    return this.output;
+  }
+
   /** The mix graph and its input streams (same order as `inputs`), for diagnostics. */
   graph(): { ctx: AudioContext; inputs: MediaStream[] } | null {
     return this.ctx ? { ctx: this.ctx, inputs: [...this.inputStreams] } : null;

@@ -494,6 +494,7 @@ progress:not([value])::-webkit-progress-bar {
 }
 .transcript .ts-seek { appearance: none; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
 .transcript .ts-seek:disabled { color: var(--faint); text-decoration: none; cursor: default; }
+.live-transcript { max-height: 320px; overflow-y: auto; }
 .transcript .who { margin-right: var(--sp-sm); font-family: var(--font-ui); font-weight: 700; font-size: var(--fs-button); text-transform: uppercase; }
 
 .player-stack { display: flex; flex-direction: column; gap: var(--sp-m); }
