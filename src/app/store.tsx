@@ -43,7 +43,7 @@ import {
 import { nativeDownloadModel, nativeDownloadProgress, nativeEnableGpu, nativeStatus as fetchNativeStatus } from '../asr/native-engine';
 import type { NativeAsrStatus, NativeModelInfo } from '../asr/native-types';
 import { desktopStorageDir, openDesktopStorageDir } from '../platform/desktop-storage';
-import { mirrorMeetingToDisk } from '../features/meetings/disk-sync';
+import { LiveAudioMirror, mirrorMeetingToDisk, type MirrorAudio } from '../features/meetings/disk-sync';
 import { importAudioFile } from '../features/meetings/import-audio';
 import { createGitlabClient, DEFAULT_GITLAB_CONFIG } from '../integrations/gitlab';
 import type { GitlabConfig, GitlabUploadResult } from '../integrations/gitlab';
@@ -242,6 +242,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [systemAudio, setSystemAudio] = useState<SystemAudioStatus | null>(null);
   const [modelDownload, setModelDownload] = useState<{ name: string; received: number; total: number } | null>(null);
   const recorderRef = useRef<MediaRecorderAudioRecorder | null>(null);
+  /** Desktop: writes the live recording into the local folder chunk by chunk. */
+  const liveMirrorRef = useRef<LiveAudioMirror | null>(null);
   const diagRef = useRef<{ collector: RecordingDiagnosticsCollector; timer: ReturnType<typeof setInterval> } | null>(null);
   const [recordingIssues, setRecordingIssues] = useState<AudioIssue[]>([]);
   const timerRef = useRef<number | null>(null);
@@ -467,6 +469,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const specs: TrackSpec[] = [{ track: '', source }];
       const recorder = new MediaRecorderAudioRecorder();
       recorderRef.current = recorder;
+      // Desktop: append each chunk to the local folder as it is recorded, so
+      // Stop does not copy the whole recording at once.
+      const liveMirror =
+        isDesktopApp() && getPref('desktop-save-to-disk') !== 'false' ? new LiveAudioMirror(meeting) : null;
+      liveMirrorRef.current = liveMirror;
+      if (liveMirror) recorder.onChunk((c) => liveMirror.push(c.track, c.mimeType, c.data));
       recorder.onState((s) => {
         setRecordingState(s);
         // Surface storage failures instead of implying audio is safe (§19).
@@ -512,6 +520,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         }
         setActiveMeeting(null);
         activeIdRef.current = null;
+        liveMirrorRef.current = null;
         throw err;
       }
       await refresh();
@@ -536,11 +545,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, []);
 
   // Best-effort mirror of a finished meeting to the desktop folder.
-  const mirrorToDisk = useCallback(async (meeting: Meeting | null) => {
+  const mirrorToDisk = useCallback(async (meeting: Meeting | null, audio?: MirrorAudio) => {
     if (!meeting || !isDesktopApp()) return;
     if (getPref('desktop-save-to-disk') === 'false') return;
     try {
-      await mirrorMeetingToDisk(meeting);
+      await mirrorMeetingToDisk(meeting, audio);
     } catch {
       // Non-fatal: OPFS/IndexedDB remain the source of truth.
     }
@@ -733,8 +742,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setActiveMeeting(null);
     setElapsedMs(0);
     recorderRef.current = null;
+    const liveMirror = liveMirrorRef.current;
+    liveMirrorRef.current = null;
     await refresh();
-    void mirrorToDisk(updated);
+    // The audio is already on disk when the live mirror kept up; otherwise
+    // copy it (in slices) from storage.
+    void (async () => {
+      const complete = liveMirror ? await liveMirror.finish().catch(() => false) : false;
+      await mirrorToDisk(updated, complete ? 'skip' : 'copy');
+    })();
     go({ name: 'detail', id: updated.id });
     return updated;
   }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics]);
