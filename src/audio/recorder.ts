@@ -1,6 +1,12 @@
 import { chunkFileName, pickSupportedMimeType } from './formats';
+import { settleWithin } from '../domain/settle';
 import { appendChunk, assertDurableStorage, writeMeta } from '../storage/recordings';
 import { CHUNK_MS } from '../domain/meeting';
+
+/** Longest wait for MediaRecorder's final `stop` event. */
+export const RECORDER_STOP_TIMEOUT_MS = 5000;
+/** Longest wait for a capture source to release its device. */
+export const SOURCE_STOP_TIMEOUT_MS = 5000;
 
 export interface AudioSource {
   start(): Promise<MediaStream>;
@@ -417,8 +423,15 @@ export class MediaRecorderAudioRecorder {
         (t) =>
           new Promise<void>((resolve) => {
             // Flush the final slice, then resolve on the next tick so
-            // ondataavailable lands first.
-            const finish = () => setTimeout(resolve, 50);
+            // ondataavailable lands first. If the engine never fires onstop,
+            // stop waiting: everything delivered so far is saved below.
+            let done = false;
+            const finish = () => {
+              if (done) return;
+              done = true;
+              setTimeout(resolve, 50);
+            };
+            setTimeout(finish, RECORDER_STOP_TIMEOUT_MS);
             t.recorder.onstop = finish;
             try {
               if (t.recorder.state !== 'inactive') t.recorder.stop();
@@ -429,7 +442,9 @@ export class MediaRecorderAudioRecorder {
           }),
       ),
     );
-    await Promise.all(tracks.map((t) => t.source.stop().catch(() => undefined)));
+    // Releasing a capture device can stall in the OS / GStreamer; it must
+    // not hold the recording (or the UI) hostage.
+    await Promise.all(tracks.map((t) => settleWithin(t.source.stop(), SOURCE_STOP_TIMEOUT_MS, undefined)));
     this.detachLifecycle?.();
     // Every write must settle before the recording is reported: a slow disk
     // (e.g. antivirus scanning each file) must not turn into silent loss.

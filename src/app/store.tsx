@@ -69,6 +69,10 @@ import { createLlmClient, DEFAULT_LLM_CONFIG } from '../integrations/llm';
 import type { LlmConfig, MeetingSummary } from '../integrations/llm';
 import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
 import { normalizeAgendaItems, type AgendaItem } from '../domain/agenda';
+import { settleWithin } from '../domain/settle';
+
+/** Longest wait for one best-effort teardown step when a recording stops. */
+const STOP_STEP_TIMEOUT_MS = 3000;
 
 export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'app';
 const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'app'];
@@ -85,7 +89,11 @@ export type Route =
 export interface AudioTrackView {
   track: string;
   label: string;
-  blob: Blob;
+  /**
+   * Reads the recording. Called on first play, not when Meeting Detail opens:
+   * a long recording is tens of MB, and Stop → Meeting Detail must stay light.
+   */
+  load: () => Promise<Blob | null>;
 }
 
 interface AppState {
@@ -99,7 +107,6 @@ interface AppState {
   /** 'source' = a capture source was lost (Retry cannot help); 'storage' = writes failed. */
   recordingErrorKind: RecorderErrorKind | null;
   activeMeeting: Meeting | null;
-  elapsedMs: number;
   /** Audio problems detected so far in the running recording (live). */
   recordingIssues: AudioIssue[];
   storageWarning: string | null;
@@ -213,6 +220,21 @@ interface AppState {
 }
 
 const Ctx = createContext<AppState | null>(null);
+/**
+ * The recording clock ticks every 500 ms. It lives in its own context so only
+ * the components that show it re-render, not every `useApp()` consumer.
+ */
+const ElapsedCtx = createContext(0);
+
+/** Recorded time of the live recording (excludes pauses). */
+export function useElapsedMs(): number {
+  return useContext(ElapsedCtx);
+}
+
+/** The live recording time as text; re-renders alone on every tick. */
+export function ElapsedClock(): React.JSX.Element {
+  return <>{formatDuration(useElapsedMs())}</>;
+}
 
 export function useApp(): AppState {
   const v = useContext(Ctx);
@@ -468,7 +490,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setRecordingIssues([]);
     if (!diag) return undefined;
     clearInterval(diag.timer);
-    return diag.collector.stop().catch(() => undefined);
+    // Best-effort and bounded: a stuck sound-server log never holds Stop.
+    const report = await settleWithin(diag.collector.stop(), STOP_STEP_TIMEOUT_MS, undefined);
+    return report ?? diag.collector.report();
   }, []);
 
   /**
@@ -515,7 +539,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setLive(null);
     if (!current) return null;
     clearInterval(current.timer);
-    await current.tap.stop().catch(() => undefined);
+    await settleWithin(current.tap.stop(), STOP_STEP_TIMEOUT_MS, undefined);
     return current.transcriber;
   }, []);
 
@@ -888,7 +912,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     recorderRef.current = null;
     const liveMirror = liveMirrorRef.current;
     liveMirrorRef.current = null;
-    await refresh();
+    // The recording is saved: open it right away. Everything else (meeting
+    // list, disk mirror, live transcript) finishes in the background.
+    go({ name: 'detail', id: updated.id });
+    void refresh().catch(() => undefined);
     // The audio is already on disk when the live mirror kept up; otherwise
     // copy it (in slices) from storage.
     void (async () => {
@@ -896,7 +923,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await mirrorToDisk(updated, complete ? 'skip' : 'copy');
     })();
     if (liveRun) drainLive(updated.id, liveRun);
-    go({ name: 'detail', id: updated.id });
     return updated;
   }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics, stopLive, drainLive]);
 
@@ -912,17 +938,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setDetailSegments(await getSegments(id));
     // One player per track; two-way recordings expose "Me" and "Others".
     const tracks = await listTracks(id).catch(() => [] as string[]);
-    const views: AudioTrackView[] = [];
-    for (const track of tracks) {
-      const blob = await readRecordingBlob(id, meeting.mimeType, track).catch(() => null);
-      if (!blob) continue;
-      views.push({
+    setDetailTracks(
+      tracks.map((track) => ({
         track,
         label: trackSpeakerLabel(track) ?? (track || 'Recording'),
-        blob,
-      });
-    }
-    setDetailTracks(views);
+        load: () => readRecordingBlob(id, meeting.mimeType, track),
+      })),
+    );
   }, []);
 
   const transcribe = useCallback(
@@ -1176,7 +1198,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       recordingError,
       recordingErrorKind,
       activeMeeting,
-      elapsedMs,
       recordingIssues,
       storageWarning,
       startRecording,
@@ -1244,7 +1265,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
-      elapsedMs, recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
+      recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
       stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
@@ -1259,7 +1280,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     ],
   );
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={value}>
+      <ElapsedCtx.Provider value={elapsedMs}>{children}</ElapsedCtx.Provider>
+    </Ctx.Provider>
+  );
 }
 
 export { formatDuration };

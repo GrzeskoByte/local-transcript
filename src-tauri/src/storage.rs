@@ -60,8 +60,12 @@ pub fn native_storage_dir(app: AppHandle) -> Result<String, String> {
 
 /// Write a base64 payload to `<storage>/<relativePath>`, creating folders.
 #[tauri::command]
-pub fn native_save_file(app: AppHandle, request: SaveFileRequest) -> Result<String, String> {
+pub async fn native_save_file(app: AppHandle, request: SaveFileRequest) -> Result<String, String> {
     let root = storage_root(&app)?;
+    crate::recordings::off_main(move || save_file(&root, &request)).await
+}
+
+fn save_file(root: &std::path::Path, request: &SaveFileRequest) -> Result<String, String> {
     let target = root.join(safe_relative(&request.relative_path)?);
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
@@ -86,9 +90,10 @@ pub fn native_save_file(app: AppHandle, request: SaveFileRequest) -> Result<Stri
 
 /// Size of `<storage>/<relativePath>` in bytes, or `None` when it is missing.
 #[tauri::command]
-pub fn native_storage_file_size(app: AppHandle, relative_path: String) -> Result<Option<u64>, String> {
+pub async fn native_storage_file_size(app: AppHandle, relative_path: String) -> Result<Option<u64>, String> {
     let target = storage_root(&app)?.join(safe_relative(&relative_path)?);
-    Ok(std::fs::metadata(&target).ok().filter(|m| m.is_file()).map(|m| m.len()))
+    crate::recordings::off_main(move || Ok(std::fs::metadata(&target).ok().filter(|m| m.is_file()).map(|m| m.len())))
+        .await
 }
 
 /// Reveal the storage folder in the system file manager.

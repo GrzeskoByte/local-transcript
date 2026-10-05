@@ -70,34 +70,47 @@ export class Mp4StreamRepair {
   private passthrough = false;
 
   push(chunk: Uint8Array): Uint8Array {
-    if (this.passthrough) return chunk;
-    this.buffer = concat([this.buffer, chunk]);
+    return concat(this.pushParts(chunk));
+  }
+
+  /**
+   * Like `push`, but returns the kept boxes as views (no copy): build a Blob
+   * from them to repair a whole recording with a single copy.
+   */
+  pushParts(chunk: Uint8Array): Uint8Array[] {
+    if (this.passthrough) return [chunk];
+    const buf = this.buffer.length ? concat([this.buffer, chunk]) : chunk;
     const out: Uint8Array[] = [];
     if (!this.started) {
-      if (this.buffer.length < 8) return new Uint8Array(0);
-      this.started = true;
-      if (fourcc(this.buffer, 4) !== 'ftyp') return this.giveUp(out);
-    }
-    for (;;) {
-      if (this.buffer.length < 8) break;
-      const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength);
-      let size = view.getUint32(0);
-      if (size === 1) {
-        if (this.buffer.length < 16) break;
-        size = Number(view.getBigUint64(8));
-      } else if (size === 0) {
-        return this.giveUp(out);
+      if (buf.length < 8) {
+        this.buffer = buf.slice();
+        return out;
       }
-      if (size < 8) return this.giveUp(out);
-      if (size > this.buffer.length) {
-        if (this.buffer.length > MAX_PENDING_BYTES) return this.giveUp(out);
+      this.started = true;
+      if (fourcc(buf, 4) !== 'ftyp') return this.giveUp(buf, out);
+    }
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let pos = 0;
+    while (buf.length - pos >= 8) {
+      let size = view.getUint32(pos);
+      if (size === 1) {
+        if (buf.length - pos < 16) break;
+        size = Number(view.getBigUint64(pos + 8));
+      } else if (size === 0) {
+        return this.giveUp(buf.subarray(pos), out);
+      }
+      if (size < 8) return this.giveUp(buf.subarray(pos), out);
+      if (pos + size > buf.length) {
+        if (buf.length - pos > MAX_PENDING_BYTES) return this.giveUp(buf.subarray(pos), out);
         break;
       }
-      const box = this.buffer.slice(0, size);
-      this.buffer = this.buffer.slice(size);
+      const box = buf.subarray(pos, pos + size);
+      pos += size;
       this.accept(fourcc(box, 4), box, out);
     }
-    return concat(out);
+    // Only the incomplete tail is copied (at most one box).
+    this.buffer = pos === buf.length ? new Uint8Array(0) : buf.slice(pos);
+    return out;
   }
 
   /** Remaining bytes: a trailing incomplete box is kept as-is. */
@@ -113,7 +126,7 @@ export class Mp4StreamRepair {
 
   private accept(type: string, box: Uint8Array, out: Uint8Array[]): void {
     if (this.heldMoof) {
-      if (type === 'mdat') out.push(this.heldMoof);
+      if (type === 'mdat') emit(out, this.heldMoof);
       this.heldMoof = null;
     }
     if (type === 'ftyp') {
@@ -124,21 +137,35 @@ export class Mp4StreamRepair {
       this.heldMoof = box;
       return;
     }
-    out.push(box);
+    emit(out, box);
   }
 
-  private giveUp(out: Uint8Array[]): Uint8Array {
+  private giveUp(rest: Uint8Array, out: Uint8Array[]): Uint8Array[] {
     this.passthrough = true;
     if (this.heldMoof) out.push(this.heldMoof);
-    out.push(this.buffer);
+    out.push(rest);
     this.heldMoof = null;
     this.buffer = new Uint8Array(0);
-    return concat(out);
+    return out;
+  }
+}
+
+/**
+ * Append `box`, merging it into the previous view when they are adjacent in
+ * the same buffer (the usual case: a clean run of boxes stays one view).
+ */
+function emit(out: Uint8Array[], box: Uint8Array): void {
+  const last = out[out.length - 1];
+  if (last && last.buffer === box.buffer && last.byteOffset + last.byteLength === box.byteOffset) {
+    out[out.length - 1] = new Uint8Array(last.buffer, last.byteOffset, last.byteLength + box.byteLength);
+  } else {
+    out.push(box);
   }
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {
   if (parts.length === 1) return parts[0]!;
+  if (parts.length === 0) return new Uint8Array(0);
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;
   for (const p of parts) {

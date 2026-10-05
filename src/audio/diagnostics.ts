@@ -8,6 +8,7 @@ import {
   type ProbeRole,
   type RecordingDiagnostics,
 } from '../domain/audio-diagnostics';
+import { acquireCaptureContext, releaseCaptureContext } from './capture-context';
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
 
 /**
@@ -218,7 +219,7 @@ export class RecordingDiagnosticsCollector {
   /**
    * Start measuring. `ctx`: an AudioContext already reading these streams
    * (the Mic + Device mixer) — reused so no second capture graph is built;
-   * otherwise one is created and closed again by `stop()`.
+   * otherwise the shared capture context is borrowed and released by `stop()`.
    */
   async start(inputs: DiagnosticsInput[], ctx?: AudioContext | null): Promise<void> {
     void this.startNative();
@@ -261,7 +262,7 @@ export class RecordingDiagnosticsCollector {
     }
 
     try {
-      const context = ctx ?? new AudioContext();
+      const context = ctx ?? acquireCaptureContext();
       if (!ctx) this.ownCtx = context;
       this.ctx = context;
       // Analysers are only rendered when connected to the destination: route
@@ -402,7 +403,7 @@ export class RecordingDiagnosticsCollector {
 
   /**
    * Stop measuring BEFORE the sources are stopped: the analysers are
-   * disconnected (and our own context closed) while the inputs still run.
+   * disconnected (and the shared context released) while the inputs still run.
    */
   async stop(): Promise<RecordingDiagnostics> {
     if (this.stopped) return this.report();
@@ -427,7 +428,8 @@ export class RecordingDiagnosticsCollector {
     }
     const own = this.ownCtx;
     this.ownCtx = null;
-    if (own && own.state !== 'closed') await own.close().catch(() => undefined);
+    // Released, never closed (see capture-context.ts).
+    if (own) releaseCaptureContext(own);
     if (this.nativeStarted) {
       try {
         this.native = (await invokeDesktop<NativeAudioLog | null>('native_audio_diag_stop')) ?? this.native;

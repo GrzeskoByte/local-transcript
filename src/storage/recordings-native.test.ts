@@ -5,6 +5,7 @@ import {
   deleteRecording,
   listChunkNames,
   listTracks,
+  nativeBytes,
   readMeta,
   readRecordingBlob,
   writeMeta,
@@ -101,5 +102,24 @@ describe('recording storage on a desktop shell without OPFS', () => {
     expect(await listTracks('m3')).toEqual([]);
     expect(await readRecordingBlob('m3', 'audio/mp4')).toBeNull();
     expect(shell.calls).toContain('native_recording_delete');
+  });
+});
+
+describe('nativeBytes (native_recording_read reply)', () => {
+  const bytes = [1, 2, 250];
+  it('accepts the raw ArrayBuffer from the binary IPC without copying', () => {
+    const buf = Uint8Array.from(bytes).buffer;
+    const out = nativeBytes(buf)!;
+    expect(out.buffer).toBe(buf);
+    expect([...out]).toEqual(bytes);
+  });
+  it('accepts a number array (JSON fallback) and base64 (older shells, mocks)', () => {
+    expect([...nativeBytes(bytes)!]).toEqual(bytes);
+    expect([...nativeBytes(btoa(String.fromCharCode(...bytes)))!]).toEqual(bytes);
+  });
+  it('treats empty or unknown replies as no recording', () => {
+    expect(nativeBytes(new ArrayBuffer(0))).toBeNull();
+    expect(nativeBytes('')).toBeNull();
+    expect(nativeBytes(null)).toBeNull();
   });
 });

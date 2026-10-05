@@ -84,3 +84,28 @@ describe('Mp4StreamRepair', () => {
     expect(streamed(cut, 6)).toEqual(cut);
   });
 });
+
+describe('Mp4StreamRepair.pushParts', () => {
+  it('returns views: a clean recording pushed at once is a single view, no copy', () => {
+    const rec = join(box('ftyp'), box('moov'), box('moof'), box('mdat', 30), box('moof'), box('mdat', 30));
+    const parts = new Mp4StreamRepair().pushParts(rec);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]!.buffer).toBe(rec.buffer);
+    expect(parts[0]).toEqual(rec);
+  });
+
+  it('handles thousands of fragments in one push in linear time', () => {
+    const frags: Uint8Array[] = [box('ftyp'), box('moov')];
+    for (let i = 0; i < 20000; i++) frags.push(box('moof'), box('mdat', 60));
+    frags.push(box('moof')); // pause: empty fragment
+    for (let i = 0; i < 20000; i++) frags.push(box('moof'), box('mdat', 60));
+    const rec = join(...frags);
+    const t0 = performance.now();
+    const repair = new Mp4StreamRepair();
+    const out = join(...repair.pushParts(rec), repair.end());
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(out.length).toBe(rec.length - 12);
+    // Byte compare without vitest's (slow) element-wise deep equality.
+    expect(Buffer.compare(out, repairFragmentedMp4(rec))).toBe(0);
+  });
+});

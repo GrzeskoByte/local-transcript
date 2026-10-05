@@ -8,7 +8,8 @@ export interface AudioPlayerHandle {
 }
 
 interface Props {
-  blob: Blob;
+  /** Reads the recording; called once, on the first interaction. */
+  load: () => Promise<Blob | null>;
   /** Shown before the audio is decoded. */
   durationHintMs?: number;
   label?: string;
@@ -23,7 +24,7 @@ const SKIP_S = 15;
  * meeting stays instant and nothing runs right after Stop.
  */
 export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
-  { blob, durationHintMs = 0, label },
+  { load, durationHintMs = 0, label },
   ref,
 ) {
   const playerRef = useRef<PcmPlayer | null>(null);
@@ -49,7 +50,11 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
     if (loadingRef.current) return loadingRef.current;
     setStatus('loading');
     setError(null);
-    const loading = decodeForPlayback(blob)
+    const loading = load()
+      .then((blob) => {
+        if (!blob) throw new Error('Recording audio not found.');
+        return decodeForPlayback(blob);
+      })
       .then((audio) => {
         const ctx = playbackContext();
         void applyPlaybackOutput(ctx);
@@ -75,7 +80,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
       });
     loadingRef.current = loading;
     return loading;
-  }, [blob]);
+  }, [load]);
 
   const withPlayer = useCallback(
     (fn: (p: PcmPlayer) => void | Promise<void>) => {

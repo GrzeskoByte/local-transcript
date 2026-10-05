@@ -134,45 +134,69 @@ fn read_track(root: &Path, meeting_id: &str, track: &str) -> Result<Vec<u8>, Str
 }
 
 /// Save one recorder chunk.
+///
+/// Every recording command is async and does its file work on a blocking
+/// worker: a synchronous Tauri command runs on the main (GTK) thread, so a
+/// slow disk would freeze the whole window — during recording and at Stop.
 #[tauri::command]
-pub fn native_recording_write(app: AppHandle, request: WriteChunkRequest) -> Result<(), String> {
-    write_chunk(&root(&app)?, &request)
+pub async fn native_recording_write(app: AppHandle, request: WriteChunkRequest) -> Result<(), String> {
+    let root = root(&app)?;
+    off_main(move || write_chunk(&root, &request)).await
 }
 
 #[tauri::command]
-pub fn native_recording_write_meta(app: AppHandle, meeting_id: String, meta: String) -> Result<(), String> {
-    write_atomic(&meeting_dir(&root(&app)?, &meeting_id)?.join(META), meta.as_bytes())
+pub async fn native_recording_write_meta(app: AppHandle, meeting_id: String, meta: String) -> Result<(), String> {
+    let root = root(&app)?;
+    off_main(move || write_atomic(&meeting_dir(&root, &meeting_id)?.join(META), meta.as_bytes())).await
 }
 
 #[tauri::command]
-pub fn native_recording_read_meta(app: AppHandle, meeting_id: String) -> Result<Option<String>, String> {
-    let path = meeting_dir(&root(&app)?, &meeting_id)?.join(META);
-    Ok(fs::read_to_string(path).ok())
+pub async fn native_recording_read_meta(app: AppHandle, meeting_id: String) -> Result<Option<String>, String> {
+    let root = root(&app)?;
+    off_main(move || Ok(fs::read_to_string(meeting_dir(&root, &meeting_id)?.join(META)).ok())).await
 }
 
 /// Tracks and their chunk names; [] when nothing is stored.
 #[tauri::command]
-pub fn native_recording_list(app: AppHandle, meeting_id: String) -> Result<Vec<TrackChunks>, String> {
-    list(&root(&app)?, &meeting_id)
+pub async fn native_recording_list(app: AppHandle, meeting_id: String) -> Result<Vec<TrackChunks>, String> {
+    let root = root(&app)?;
+    off_main(move || list(&root, &meeting_id)).await
 }
 
-/// All chunks of a track, concatenated in order, as base64.
+/// All chunks of a track, concatenated in order, as raw bytes: Tauri's binary
+/// IPC hands the webview an ArrayBuffer, so an hour-long recording never
+/// becomes a ~30 MB base64 string to build, send, parse and decode.
 #[tauri::command]
-pub async fn native_recording_read(app: AppHandle, meeting_id: String, track: String) -> Result<String, String> {
+pub async fn native_recording_read(
+    app: AppHandle,
+    meeting_id: String,
+    track: String,
+) -> Result<tauri::ipc::Response, String> {
     let root = root(&app)?;
-    tauri::async_runtime::spawn_blocking(move || read_track(&root, &meeting_id, &track).map(|b| STANDARD.encode(b)))
+    tauri::async_runtime::spawn_blocking(move || read_track(&root, &meeting_id, &track))
         .await
         .map_err(|e| format!("Read task failed: {e}"))?
+        .map(tauri::ipc::Response::new)
 }
 
 #[tauri::command]
-pub fn native_recording_delete(app: AppHandle, meeting_id: String) -> Result<(), String> {
+pub async fn native_recording_delete(app: AppHandle, meeting_id: String) -> Result<(), String> {
     let dir = meeting_dir(&root(&app)?, &meeting_id)?;
-    match fs::remove_dir_all(&dir) {
+    off_main(move || match fs::remove_dir_all(&dir) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("Could not delete {}: {e}", dir.display())),
-    }
+    })
+    .await
+}
+
+/// Run blocking file work on a worker thread (never the GTK main thread).
+pub(crate) async fn off_main<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("Background task failed: {e}"))?
 }
 
 #[cfg(test)]
