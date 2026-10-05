@@ -24,7 +24,7 @@ pub fn storage_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Reject absolute paths and `..` so the renderer cannot escape the root.
-fn safe_relative(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn safe_relative(path: &str) -> Result<PathBuf, String> {
     if path.trim().is_empty() {
         return Err("Empty file path".into());
     }

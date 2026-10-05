@@ -4,6 +4,7 @@ mod models;
 mod native_asr;
 mod opencode;
 mod proc;
+mod recorder;
 mod recordings;
 mod relaunch;
 mod settings;
@@ -74,6 +75,15 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             native_log,
+            recorder::native_recorder_devices,
+            recorder::native_recorder_start,
+            recorder::native_recorder_pause,
+            recorder::native_recorder_resume,
+            recorder::native_recorder_retry,
+            recorder::native_recorder_poll,
+            recorder::native_recorder_live_take,
+            recorder::native_recorder_stop,
+            recorder::native_audio_decode,
             audio_diag::native_audio_diag_start,
             audio_diag::native_audio_diag_peek,
             audio_diag::native_audio_diag_stop,
@@ -121,6 +131,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
+                recorder::shutdown();
                 system_audio::remove_sources();
                 audio_diag::shutdown();
             }

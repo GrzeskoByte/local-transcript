@@ -50,8 +50,24 @@ describe('privacy: network access is limited to user-initiated features', () => 
     expect(Object.keys(pkg.dependencies).sort()).toEqual(['@fontsource/archivo-black', 'react', 'react-dom']);
     const cargo = readFileSync(join(ROOT, 'src-tauri/Cargo.toml'), 'utf8');
     const deps = cargo.split('[dependencies]')[1]!.split('\n[')[0]!;
-    const names = deps.split('\n').map((l) => l.split('=')[0]!.trim()).filter(Boolean).sort();
-    expect(names).toEqual(['base64', 'serde', 'serde_json', 'tauri', 'tauri-plugin-updater']);
+    const names = deps
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('#'))
+      .map((l) => l.split('=')[0]!.trim())
+      .filter(Boolean)
+      .sort();
+    // cpal (audio capture: WASAPI / CoreAudio / PulseAudio over its local
+    // socket) and opus (libopus, built in) are offline audio libraries.
+    expect(names).toEqual(['base64', 'cpal', 'opus', 'serde', 'serde_json', 'tauri', 'tauri-plugin-updater']);
+  });
+
+  it('the native recorder keeps audio on this machine', () => {
+    const files = readdirSync(join(ROOT, 'src-tauri/src/recorder')).map((f) =>
+      readFileSync(join(ROOT, 'src-tauri/src/recorder', f), 'utf8'),
+    );
+    for (const source of files) {
+      expect(source).not.toMatch(/TcpStream|UdpSocket|reqwest|http:\/\/|https:\/\/|proc::command/);
+    }
   });
 
   it('does not check for updates on its own unless the user turned it on', () => {

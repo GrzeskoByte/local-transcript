@@ -6,5 +6,9 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>Local Transcriber records your meetings. Audio is stored and transcribed only on this Mac.</string>
+  <!-- Device Audio: the native recorder taps the sound the Mac plays
+       (CoreAudio process tap, macOS 14.2+); macOS asks once. -->
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Local Transcriber records the sound your Mac plays (Device Audio), e.g. the other side of a call. Audio is stored and transcribed only on this Mac.</string>
 </dict>
 </plist>

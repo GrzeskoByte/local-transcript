@@ -16,3 +16,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 tauri-plugin-updater = "2"
+# Native recording (src/recorder): capture + system audio on every OS, Opus encoding.
+cpal = { version = "0.18", features = ["pulseaudio"] }
+opus = "0.4"

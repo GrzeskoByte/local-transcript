@@ -1,5 +1,6 @@
 import type { AudioSource } from './recorder';
 import { MediaAccessError } from './permissions';
+import { nativeRecorderDevices } from './native-recorder';
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
 
 /**
@@ -48,7 +49,12 @@ export async function systemAudioStatus(): Promise<SystemAudioStatus> {
 export async function systemAudioOutputs(): Promise<SystemAudioOutput[]> {
   if (!isDesktopApp()) return [];
   const list = await invokeDesktop<SystemAudioOutput[] | null>('native_system_audio_outputs').catch(() => null);
-  return Array.isArray(list) ? list.filter((o) => o && typeof o.name === 'string') : [];
+  const sinks = Array.isArray(list) ? list.filter((o) => o && typeof o.name === 'string') : [];
+  if (sinks.length > 0) return sinks;
+  // Windows/macOS: the outputs the native recorder can record (loopback / tap).
+  const native = await nativeRecorderDevices();
+  if (!native?.systemAudio) return [];
+  return native.outputs.map((o) => ({ name: o.id, description: o.name || o.id, isDefault: o.isDefault }));
 }
 
 /** Raw system sound: no echo cancellation/noise suppression/AGC. */

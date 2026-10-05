@@ -36,6 +36,7 @@ import {
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { LiveTranscriptionSettings } from '../components/LiveTranscription.tsx';
+import { nativeRecordingEnabled, setNativeRecordingEnabled } from '../../audio/native-recorder';
 import {
   getAutoCheck,
   getUpdateProgress,
@@ -83,7 +84,10 @@ export function Settings(): React.JSX.Element {
     updateInfo,
     checkUpdates,
     systemAudio,
+    nativeRecording,
   } = useApp();
+  const [nativeRec, setNativeRec] = useState(nativeRecordingEnabled);
+  const directSystemAudio = systemAudio?.available === true || (nativeRecording?.systemAudio === true && nativeRec);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [gpuBusy, setGpuBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -439,11 +443,31 @@ export function Settings(): React.JSX.Element {
           <strong>Audio devices</strong>
         </div>
         <div className="muted">
-          Which microphone records you{systemAudio?.available ? ', which output Device Audio records,' : ''} and
+          Which microphone records you{directSystemAudio ? ', which output Device Audio records,' : ''} and
           where recordings play. New Meeting uses the same choices; anything not connected falls back to the
           system default.
         </div>
-        <AudioDevicePickers microphone systemOutput={systemAudio?.available === true} playback />
+        <AudioDevicePickers microphone systemOutput={directSystemAudio} playback />
+        {nativeRecording && (
+          <>
+            <label className="check-row mt-3">
+              <input
+                type="checkbox"
+                checked={nativeRec}
+                onChange={(e) => {
+                  setNativeRecordingEnabled(e.target.checked);
+                  setNativeRec(e.target.checked);
+                }}
+              />
+              Record with the app’s own audio engine (recommended)
+            </label>
+            <small className="muted">
+              Captures and saves audio outside the app window, so stopping a long recording never freezes it, and
+              records system sound without screen sharing. Turn off only if a device is not picked up; the app then
+              records through its window as before.
+            </small>
+          </>
+        )}
       </section>
 
       <section className="card" aria-label="Local files">

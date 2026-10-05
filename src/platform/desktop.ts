@@ -6,7 +6,11 @@
  * `__TAURI_INTERNALS__` is absent and every helper degrades safely.
  */
 interface TauriInternals {
-  invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+  invoke: <T>(
+    cmd: string,
+    args?: Record<string, unknown> | Uint8Array,
+    options?: { headers?: Record<string, string> },
+  ) => Promise<T>;
 }
 
 function internals(): TauriInternals | null {
@@ -29,6 +33,20 @@ export async function invokeDesktop<T>(
   const t = internals();
   if (!t) throw new Error('Not running in the desktop app');
   return t.invoke<T>(cmd, args);
+}
+
+/**
+ * Call a Rust command with a binary payload (sent as the raw request body,
+ * no JSON/base64), plus string `headers` for its parameters.
+ */
+export async function invokeDesktopRaw<T>(
+  cmd: string,
+  body: Uint8Array,
+  headers: Record<string, string> = {},
+): Promise<T> {
+  const t = internals();
+  if (!t) throw new Error('Not running in the desktop app');
+  return t.invoke<T>(cmd, body, { headers });
 }
 
 /**

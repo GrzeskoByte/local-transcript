@@ -52,10 +52,22 @@ import {
   type LiveSnapshot,
 } from '../asr/live';
 import { LivePcmTap } from '../audio/live-tap';
+import {
+  NATIVE_MIME_TYPE,
+  NativeLiveFeed,
+  NativeRecorder,
+  type LiveFeed,
+  nativeRecorderDevices,
+  nativeRecordingEnabled,
+  nativeSupportsMode,
+  type NativeDiagnostics,
+  type NativeRecorderDevices,
+} from '../audio/native-recorder';
+import { getMicrophoneDevice } from '../audio/devices';
 import { nativeDownloadModel, nativeDownloadProgress, nativeEnableGpu, nativeStatus as fetchNativeStatus } from '../asr/native-engine';
 import type { NativeAsrStatus, NativeModelInfo } from '../asr/native-types';
 import { desktopStorageDir, openDesktopStorageDir } from '../platform/desktop-storage';
-import { LiveAudioMirror, mirrorMeetingToDisk, type MirrorAudio } from '../features/meetings/disk-sync';
+import { LiveAudioMirror, audioMirrorPath, mirrorMeetingToDisk, type MirrorAudio } from '../features/meetings/disk-sync';
 import { importAudioFile } from '../features/meetings/import-audio';
 import { createGitlabClient, DEFAULT_GITLAB_CONFIG } from '../integrations/gitlab';
 import type { GitlabConfig, GitlabUploadResult } from '../integrations/gitlab';
@@ -132,6 +144,8 @@ interface AppState {
   stopRecording: () => Promise<Meeting | null>;
   /** True from the Stop click until the recording is saved (Active Meeting shows a loader). */
   stopping: boolean;
+  /** Desktop: what the shell can record natively (null: webview recording only). */
+  nativeRecording: NativeRecorderDevices | null;
   // detail
   detailMeeting: Meeting | null;
   detailSegments: TranscriptSegment[];
@@ -309,16 +323,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [liveDownload, setLiveDownload] = useState<{ name: string; received: number; total: number } | null>(null);
   const [live, setLive] = useState<LiveSnapshot | null>(null);
   /** Live transcription of the recording in progress. */
-  const liveRef = useRef<{ transcriber: LiveTranscriber; tap: LivePcmTap; timer: ReturnType<typeof setInterval> } | null>(null);
+  const liveRef = useRef<{ transcriber: LiveTranscriber; tap: LiveFeed; timer: ReturnType<typeof setInterval> } | null>(null);
   /** Model live transcription uses (computed further down, read when a recording starts). */
   const liveChoiceRef = useRef<LiveModelOption | null>(null);
   /** Meeting Detail currently shown (late async results must not land on another one). */
   const detailIdRef = useRef<string | null>(null);
   /** Live transcripts still finishing after Stop, by meeting id. */
   const liveDrainRef = useRef(new Map<string, { transcriber: LiveTranscriber; done: Promise<void> }>());
-  const recorderRef = useRef<MediaRecorderAudioRecorder | null>(null);
+  const recorderRef = useRef<MediaRecorderAudioRecorder | NativeRecorder | null>(null);
+  /** Desktop: what the native recorder can capture (null: webview recording only). */
+  const [nativeDevices, setNativeDevices] = useState<NativeRecorderDevices | null>(null);
+  const nativeDevicesRef = useRef<NativeRecorderDevices | null>(null);
   /** Desktop: writes the live recording into the local folder chunk by chunk. */
   const liveMirrorRef = useRef<LiveAudioMirror | null>(null);
+  /** The native recorder appends the audio to the local folder itself. */
+  const nativeMirrorRef = useRef(false);
   const diagRef = useRef<{ collector: RecordingDiagnosticsCollector; timer: ReturnType<typeof setInterval> } | null>(null);
   const [recordingIssues, setRecordingIssues] = useState<AudioIssue[]>([]);
   const timerRef = useRef<number | null>(null);
@@ -380,6 +399,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   useEffect(() => {
     if (!isDesktopApp()) return;
     void systemAudioStatus().then(setSystemAudio);
+  }, []);
+
+  // Desktop: recording runs in the shell when it can capture the inputs.
+  useEffect(() => {
+    if (!isDesktopApp()) return;
+    void nativeRecorderDevices().then((d) => {
+      nativeDevicesRef.current = d;
+      setNativeDevices(d);
+    });
   }, []);
 
   // Detect the desktop backend on mount.
@@ -461,11 +489,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * Saved on the meeting every 30 s so a crash keeps what was measured.
    */
   const startDiagnostics = useCallback(
-    (id: string, mode: RecordingMode, startedAt: number, source: TrackSpec['source']) => {
+    (id: string, mode: RecordingMode, startedAt: number, source: TrackSpec['source'] | NativeRecorder) => {
       const collector = new RecordingDiagnosticsCollector(mode, startedAt);
       let inputs: DiagnosticsInput[] = [];
       let ctx: AudioContext | null = null;
-      if (source instanceof MixedAudioSource) {
+      // Native recording: measured in the shell; the collector only adds the
+      // sound-server log and the device events.
+      const native = source instanceof NativeRecorder ? source : null;
+      if (source instanceof NativeRecorder) {
+        inputs = [];
+      } else if (source instanceof MixedAudioSource) {
         const graph = source.graph();
         ctx = graph?.ctx ?? null;
         const [micStream, deviceStream] = graph?.inputs ?? [];
@@ -480,6 +513,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       let ticks = 0;
       const timer = setInterval(() => {
         ticks++;
+        if (native) collector.setNativeMeasurements(native.diagnostics());
         setRecordingIssues(collector.report().issues.filter((i) => i.severity === 'problem'));
         if (ticks % 15 === 0) {
           void collector
@@ -496,12 +530,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   );
 
   /** Stop measuring (before the sources stop) and return the final report. */
-  const stopDiagnostics = useCallback(async () => {
+  const stopDiagnostics = useCallback(async (native?: NativeDiagnostics | null) => {
     const diag = diagRef.current;
     diagRef.current = null;
     setRecordingIssues([]);
     if (!diag) return undefined;
     clearInterval(diag.timer);
+    if (native) diag.collector.setNativeMeasurements(native);
     // Best-effort and bounded: a stuck sound-server log never holds Stop.
     const report = await settleWithin(diag.collector.stop(), STOP_STEP_TIMEOUT_MS, undefined);
     return report ?? diag.collector.report();
@@ -513,11 +548,19 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * only shows on Active Meeting and never affects the recording.
    */
   const startLive = useCallback(
-    async (id: string, source: TrackSpec['source']) => {
+    async (id: string, source: TrackSpec['source'] | NativeRecorder) => {
       const choice = liveChoiceRef.current;
       if (!isDesktopApp() || !getLiveEnabled() || !choice) return;
       const transcriber = new LiveTranscriber(id, choice.id, language);
       transcriber.onUpdate(setLive);
+      if (source instanceof NativeRecorder) {
+        // The shell collects 16 kHz audio of the mix; pull it.
+        const feed = new NativeLiveFeed(source, (samples) => transcriber.push(samples));
+        feed.start();
+        liveRef.current = { transcriber, tap: feed, timer: setInterval(() => transcriber.tick(), 700) };
+        setLive(transcriber.snapshot());
+        return;
+      }
       const tap = new LivePcmTap((samples) => transcriber.push(samples));
       const timer = setInterval(() => transcriber.tick(), 700);
       liveRef.current = { transcriber, tap, timer };
@@ -580,6 +623,55 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       };
       const agendaItems = normalizeAgendaItems(agenda);
       if (agendaItems.length > 0) meeting.agenda = { items: agendaItems, updatedAt: now };
+      const watch = (recorder: MediaRecorderAudioRecorder | NativeRecorder) =>
+        recorder.onState((s) => {
+          setRecordingState(s);
+          // Surface storage failures instead of implying audio is safe (§19).
+          if (s === 'ERROR') {
+            setRecordingError(recorder.getError()?.message ?? 'Recording error');
+            setRecordingErrorKind(recorder.getErrorKind());
+          } else if (s === 'RECORDING' || s === 'PAUSED') {
+            setRecordingError(null);
+            setRecordingErrorKind(null);
+          }
+        });
+
+      // Desktop: record in the shell (capture, mix, encode, write — nothing in
+      // the webview to tear down at Stop). Falls back to the webview recorder
+      // when the shell cannot open the inputs (e.g. system sound on macOS < 14.2).
+      if (isDesktopApp() && nativeRecordingEnabled() && nativeSupportsMode(nativeDevicesRef.current, mode)) {
+        const recorder = new NativeRecorder();
+        const saveDisk = getPref('desktop-save-to-disk') !== 'false';
+        const native: Meeting = { ...meeting, mimeType: NATIVE_MIME_TYPE };
+        watch(recorder);
+        activeIdRef.current = id;
+        await saveMeeting(native);
+        try {
+          await recorder.start({
+            meetingId: id,
+            mode,
+            startedAt: now,
+            microphone: mode === 'device' ? undefined : getMicrophoneDevice()?.label,
+            output: mode === 'speaker' ? undefined : getSystemOutput() || undefined,
+            mirrorPath: saveDisk ? audioMirrorPath(native, NATIVE_MIME_TYPE) : undefined,
+            live: getLiveEnabled() && !!liveChoiceRef.current,
+          });
+          recorderRef.current = recorder;
+          liveMirrorRef.current = null;
+          nativeMirrorRef.current = saveDisk;
+          setActiveMeeting(native);
+          setElapsedMs(0);
+          startDiagnostics(id, mode, now, recorder);
+          void startLive(id, recorder);
+          go({ name: 'active' });
+          await refresh();
+          return;
+        } catch (err) {
+          console.warn('Native recording unavailable; recording in the webview instead.', err);
+          activeIdRef.current = null;
+          await deleteRecording(id).catch(() => undefined);
+        }
+      }
       // Mic + Device: the microphone and the device/system audio are mixed into
       // one track (one file, no Me/Others split). Every mode records flat.
       // Linux desktop records system sound via the sound server; elsewhere
@@ -594,23 +686,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const specs: TrackSpec[] = [{ track: '', source }];
       const recorder = new MediaRecorderAudioRecorder();
       recorderRef.current = recorder;
+      nativeMirrorRef.current = false;
       // Desktop: append each chunk to the local folder as it is recorded, so
       // Stop does not copy the whole recording at once.
       const liveMirror =
         isDesktopApp() && getPref('desktop-save-to-disk') !== 'false' ? new LiveAudioMirror(meeting) : null;
       liveMirrorRef.current = liveMirror;
       if (liveMirror) recorder.onChunk((c) => liveMirror.push(c.track, c.mimeType, c.data));
-      recorder.onState((s) => {
-        setRecordingState(s);
-        // Surface storage failures instead of implying audio is safe (§19).
-        if (s === 'ERROR') {
-          setRecordingError(recorder.getError()?.message ?? 'Recording error');
-          setRecordingErrorKind(recorder.getErrorKind());
-        } else if (s === 'RECORDING' || s === 'PAUSED') {
-          setRecordingError(null);
-          setRecordingErrorKind(null);
-        }
-      });
+      watch(recorder);
       activeIdRef.current = id;
       await saveMeeting(meeting);
       setActiveMeeting(meeting);
@@ -910,15 +993,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }
   }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics, stopLive, drainLive]);
 
-  async function finishStop(recorder: MediaRecorderAudioRecorder, meeting: Meeting): Promise<Meeting> {
+  async function finishStop(recorder: MediaRecorderAudioRecorder | NativeRecorder, meeting: Meeting): Promise<Meeting> {
     const trace = new StopTrace();
-    const diagnostics = await trace.time('diagnostics', stopDiagnostics);
-    await nextPaint();
-    // Detach the live tap before the capture sources stop (WebKitGTK).
-    const liveTranscriber = await trace.time('live tap', stopLive);
+    let diagnostics: Meeting['diagnostics'];
+    let liveTranscriber: LiveTranscriber | null;
+    let result: Awaited<ReturnType<MediaRecorderAudioRecorder['stop']>>;
+    if (recorder instanceof NativeRecorder) {
+      // Native: take the last live audio, then the shell stops and saves.
+      liveTranscriber = await trace.time('live tap', stopLive);
+      const stopped = await recorder.stop(trace);
+      result = stopped;
+      diagnostics = await trace.time('diagnostics', () => stopDiagnostics(stopped.diagnostics));
+    } else {
+      diagnostics = await trace.time('diagnostics', () => stopDiagnostics());
+      await nextPaint();
+      // Detach the live tap before the capture sources stop (WebKitGTK).
+      liveTranscriber = await trace.time('live tap', stopLive);
+      await nextPaint();
+      result = await recorder.stop(trace);
+    }
     const liveRun = liveTranscriber && liveTranscriber.snapshot().status !== 'failed' ? liveTranscriber : null;
-    await nextPaint();
-    const result = await recorder.stop(trace);
     const endedAt = Date.now();
     const recordedTracks = result.tracks.filter(Boolean);
     const updated: Meeting = {
@@ -944,6 +1038,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     recorderRef.current = null;
     const liveMirror = liveMirrorRef.current;
     liveMirrorRef.current = null;
+    const nativeMirror = recorder instanceof NativeRecorder && nativeMirrorRef.current && recorder.mirrorComplete();
+    nativeMirrorRef.current = false;
     // The recording is saved: open it right away. Everything else (meeting
     // list, disk mirror, live transcript) finishes in the background.
     go({ name: 'detail', id: updated.id });
@@ -951,7 +1047,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     // The audio is already on disk when the live mirror kept up; otherwise
     // copy it (in slices) from storage.
     void (async () => {
-      const complete = liveMirror ? await liveMirror.finish().catch(() => false) : false;
+      const complete = nativeMirror || (liveMirror ? await liveMirror.finish().catch(() => false) : false);
       await mirrorToDisk(updated, complete ? 'skip' : 'copy');
     })();
     if (liveRun) drainLive(updated.id, liveRun);
@@ -1239,6 +1335,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       deleteMeeting,
       stopRecording,
       stopping,
+      nativeRecording: nativeDevices,
       detailMeeting,
       detailSegments,
       detailTracks,
@@ -1299,7 +1396,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
       recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
-      stopRecording, stopping, detailMeeting, detailSegments, detailTracks, loadDetail,
+      stopRecording, stopping, nativeDevices, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,

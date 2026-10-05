@@ -1,0 +1,52 @@
+name: Rust
+
+# The desktop shell records natively (src-tauri/src/recorder: cpal + libopus)
+# with per-OS code paths (WASAPI, CoreAudio, PulseAudio/ALSA). Build and unit
+# test it on every OS on each change, not only when a release is cut.
+on:
+  push:
+    branches: ['**']
+    paths: ['src-tauri/**', '.github/workflows/rust.yml']
+  pull_request:
+    paths: ['src-tauri/**', '.github/workflows/rust.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # tauri::generate_context! embeds the frontend: an empty dist is enough.
+      - name: Placeholder frontend
+        run: mkdir -p dist && echo '<!doctype html>' > dist/index.html
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --lib
