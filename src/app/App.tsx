@@ -1,4 +1,4 @@
-import { useApp, formatDuration } from './store.tsx';
+import { useApp, ElapsedClock } from './store.tsx';
 import { modelChipLabel } from '../asr/model-manager';
 import { Dashboard } from './screens/Dashboard.tsx';
 import { NewMeeting } from './screens/NewMeeting.tsx';
@@ -11,7 +11,7 @@ import { GearIcon, CalendarIcon, ListIcon, LogoMark } from './components/icons.t
 // Layout per DESIGN.md: black page frame → top banner (wordmark, phone-callout,
 // sticker) → white icon-label rail + content column → footer band.
 function Shell(): React.JSX.Element {
-  const { route, go, recordingState, elapsedMs, modelMeta, updateInfo } = useApp();
+  const { route, go, recordingState, modelMeta, updateInfo } = useApp();
   const recording = recordingState === 'RECORDING' || recordingState === 'PAUSED';
   const modelDot = modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'downloading' ? 'working' : '';
 
@@ -36,7 +36,7 @@ function Shell(): React.JSX.Element {
               onClick={() => go({ name: 'active' })}
             >
               <span className="rec-lamp" aria-hidden="true" />
-              {recordingState === 'PAUSED' ? 'PAUSED' : 'REC'} {formatDuration(elapsedMs)}
+              {recordingState === 'PAUSED' ? 'PAUSED' : 'REC'} <ElapsedClock />
             </button>
           ) : (
             <span className="phone-callout">ON-DEVICE</span>

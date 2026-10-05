@@ -10,7 +10,7 @@
  * in-memory map below serves Node unit tests.
  */
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
-import { repairFragmentedMp4 } from '../audio/mp4-repair';
+import { Mp4StreamRepair } from '../audio/mp4-repair';
 import { bytesToBase64 } from '../asr/wav';
 
 export interface RecordingMeta {
@@ -51,6 +51,21 @@ function base64ToBytes(b64: string): Uint8Array {
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
   return out;
+}
+
+/**
+ * `native_recording_read` returns raw bytes (an ArrayBuffer over Tauri's
+ * binary IPC; a number array over the JSON fallback). Older shells and the
+ * e2e mocks return base64.
+ */
+export function nativeBytes(reply: unknown): Uint8Array | null {
+  if (reply instanceof ArrayBuffer) return reply.byteLength ? new Uint8Array(reply) : null;
+  if (ArrayBuffer.isView(reply)) {
+    return reply.byteLength ? new Uint8Array(reply.buffer, reply.byteOffset, reply.byteLength) : null;
+  }
+  if (Array.isArray(reply)) return reply.length ? Uint8Array.from(reply as number[]) : null;
+  if (typeof reply === 'string') return reply ? base64ToBytes(reply) : null;
+  return null;
 }
 
 /**
@@ -274,8 +289,8 @@ export async function readRecordingBlob(
   track = '',
 ): Promise<Blob | null> {
   if (useNative()) {
-    const b64 = await invokeDesktop<string>('native_recording_read', { meetingId: id, track });
-    return b64 ? assembled([base64ToBytes(b64)], mimeType) : null;
+    const bytes = nativeBytes(await invokeDesktop<unknown>('native_recording_read', { meetingId: id, track }));
+    return bytes ? assembled([bytes], mimeType) : null;
   }
   const names = await listChunkNames(id, track);
   if (names.length === 0) return null;
@@ -297,13 +312,21 @@ export async function readRecordingBlob(
   return assembled(parts, mimeType);
 }
 
-/** Joins stored chunks; MP4 recordings are repaired (see repairFragmentedMp4). */
-async function assembled(parts: BlobPart[], mimeType: string): Promise<Blob> {
-  const blob = new Blob(parts, { type: mimeType });
-  if (!mimeType.includes('mp4')) return blob;
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  const repaired = repairFragmentedMp4(bytes);
-  return repaired === bytes ? blob : new Blob([repaired], { type: mimeType });
+/**
+ * Joins stored chunks; MP4 recordings are repaired (see Mp4StreamRepair) part
+ * by part, so the recording is held in memory once (as the Blob) instead of
+ * three times (joined, repaired, re-wrapped).
+ */
+async function assembled(parts: (Blob | Uint8Array)[], mimeType: string): Promise<Blob> {
+  if (!mimeType.includes('mp4')) return new Blob(parts as BlobPart[], { type: mimeType });
+  const repair = new Mp4StreamRepair();
+  const out: BlobPart[] = [];
+  for (const part of parts) {
+    const bytes = part instanceof Uint8Array ? part : new Uint8Array(await part.arrayBuffer());
+    out.push(...(repair.pushParts(bytes) as BlobPart[]));
+  }
+  out.push(repair.end() as BlobPart);
+  return new Blob(out, { type: mimeType });
 }
 
 export async function deleteRecording(id: string): Promise<void> {

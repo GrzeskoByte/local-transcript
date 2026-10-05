@@ -129,7 +129,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
                     if (h) players.current.set(t.track, h);
                     else players.current.delete(t.track);
                   }}
-                  blob={t.blob}
+                  load={t.load}
                   label={detailTracks.length > 1 ? t.label : 'Recording'}
                   durationHintMs={m.durationMs}
                 />

@@ -73,7 +73,11 @@ export type Route =
 export interface AudioTrackView {
   track: string;
   label: string;
-  blob: Blob;
+  /**
+   * Reads the recording. Called on first play, not when Meeting Detail opens:
+   * a long recording is tens of MB, and Stop → Meeting Detail must stay light.
+   */
+  load: () => Promise<Blob | null>;
 }
 
 interface AppState {
@@ -87,7 +91,6 @@ interface AppState {
   /** 'source' = a capture source was lost (Retry cannot help); 'storage' = writes failed. */
   recordingErrorKind: RecorderErrorKind | null;
   activeMeeting: Meeting | null;
-  elapsedMs: number;
   /** Audio problems detected so far in the running recording (live). */
   recordingIssues: AudioIssue[];
   storageWarning: string | null;
@@ -184,6 +187,21 @@ interface AppState {
 }
 
 const Ctx = createContext<AppState | null>(null);
+/**
+ * The recording clock ticks every 500 ms. It lives in its own context so only
+ * the components that show it re-render, not every `useApp()` consumer.
+ */
+const ElapsedCtx = createContext(0);
+
+/** Recorded time of the live recording (excludes pauses). */
+export function useElapsedMs(): number {
+  return useContext(ElapsedCtx);
+}
+
+/** The live recording time as text; re-renders alone on every tick. */
+export function ElapsedClock(): React.JSX.Element {
+  return <>{formatDuration(useElapsedMs())}</>;
+}
 
 export function useApp(): AppState {
   const v = useContext(Ctx);
@@ -766,17 +784,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setDetailSegments(await getSegments(id));
     // One player per track; two-way recordings expose "Me" and "Others".
     const tracks = await listTracks(id).catch(() => [] as string[]);
-    const views: AudioTrackView[] = [];
-    for (const track of tracks) {
-      const blob = await readRecordingBlob(id, meeting.mimeType, track).catch(() => null);
-      if (!blob) continue;
-      views.push({
+    setDetailTracks(
+      tracks.map((track) => ({
         track,
         label: trackSpeakerLabel(track) ?? (track || 'Recording'),
-        blob,
-      });
-    }
-    setDetailTracks(views);
+        load: () => readRecordingBlob(id, meeting.mimeType, track),
+      })),
+    );
   }, []);
 
   const transcribe = useCallback(
@@ -988,7 +1002,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       recordingError,
       recordingErrorKind,
       activeMeeting,
-      elapsedMs,
       recordingIssues,
       storageWarning,
       startRecording,
@@ -1047,7 +1060,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
-      elapsedMs, recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
+      recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
       stopRecording, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
@@ -1060,7 +1073,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     ],
   );
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={value}>
+      <ElapsedCtx.Provider value={elapsedMs}>{children}</ElapsedCtx.Provider>
+    </Ctx.Provider>
+  );
 }
 
 export { formatDuration };
