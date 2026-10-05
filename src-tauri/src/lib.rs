@@ -1,4 +1,5 @@
 mod audio_diag;
+mod live_asr;
 mod models;
 mod native_asr;
 mod opencode;
@@ -44,6 +45,7 @@ pub fn run() {
     std::thread::spawn(system_audio::remove_sources);
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(live_asr::LiveState::default())
         .manage(settings::SettingsLock::default())
         .manage(updater::UpdateState::default())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -69,6 +71,11 @@ pub fn run() {
             native_asr::native_asr_enable_gpu,
             native_asr::native_asr_transcribe,
             native_asr::native_asr_cancel,
+            live_asr::native_whistle_status,
+            live_asr::native_whistle_download,
+            live_asr::native_whistle_download_progress,
+            live_asr::native_live_transcribe,
+            live_asr::native_live_cancel,
             opencode::native_opencode_status,
             opencode::native_opencode_summarize,
             claude_code::native_claude_status,

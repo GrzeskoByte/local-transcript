@@ -12,6 +12,7 @@ import {
 } from '../../audio/permissions.ts';
 import { macDeviceAudioLimit } from '../../audio/device-audio.ts';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
+import { LiveTranscriptionToggle } from '../components/LiveTranscription.tsx';
 
 export function NewMeeting(): React.JSX.Element {
   const { startRecording, importMeeting, storageWarning, go, systemAudio } = useApp();
@@ -183,6 +184,8 @@ export function NewMeeting(): React.JSX.Element {
             </button>
           </>
         )}
+
+        <LiveTranscriptionToggle />
 
         {!secure && (
           <p className="warn mb-0" role="alert">

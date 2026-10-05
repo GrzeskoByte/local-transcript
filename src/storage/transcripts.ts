@@ -13,6 +13,7 @@ const STORE = 'segments';
 export async function commitTranscript(
   meetingId: string,
   segments: TranscriptSegment[],
+  patch: Partial<Meeting> = {},
 ): Promise<boolean> {
   let committed = false;
   await db.transaction(['meetings', STORE], 'readwrite', (t) => {
@@ -26,7 +27,7 @@ export async function commitTranscript(
       keys.onsuccess = () => {
         for (const k of keys.result) segs.delete(k);
         for (const s of segments) segs.put(s);
-        meetings.put({ ...meeting, transcriptionStatus: 'completed' });
+        meetings.put({ ...meeting, ...patch, transcriptionStatus: 'completed' });
         committed = true;
       };
     };

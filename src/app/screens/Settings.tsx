@@ -35,6 +35,7 @@ import {
 } from '../../integrations/calendar-detect';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
+import { LiveTranscriptionSettings } from '../components/LiveTranscription.tsx';
 import {
   getAutoCheck,
   getUpdateProgress,
@@ -301,6 +302,7 @@ export function Settings(): React.JSX.Element {
           models appear in the transcription options.
         </p>
       </section>
+      {isDesktopApp() && <LiveTranscriptionSettings />}
       </>
       )}
 

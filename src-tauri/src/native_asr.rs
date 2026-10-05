@@ -13,7 +13,7 @@ use tauri::State;
 
 use crate::models::{self, Backend, NativeAsrStatus, NativeModel};
 
-const TARGET_SAMPLE_RATE: u32 = 16_000;
+pub(crate) const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MAX_TRANSCRIBE_SECS: u64 = 30 * 60;
 
 #[derive(Default)]
@@ -169,7 +169,7 @@ fn model_download_url(name: &str) -> String {
 }
 
 /// Reject anything that is not a plain model name (no paths, no flags).
-fn valid_model_name(name: &str) -> bool {
+pub(crate) fn valid_model_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && !name.starts_with('.')
@@ -198,7 +198,7 @@ fn download_sizes() -> &'static Mutex<std::collections::HashMap<String, u64>> {
 }
 
 /// Final Content-Length after redirects (Hugging Face → CDN), via `curl -I`.
-fn remote_size(url: &str) -> Option<u64> {
+pub(crate) fn remote_size(url: &str) -> Option<u64> {
     let out = crate::proc::command("curl").args(["-sIL", "--max-time", "20", url]).output().ok()?;
     if !out.status.success() {
         return None;
@@ -242,7 +242,7 @@ pub fn native_asr_download_progress(name: String) -> Result<DownloadProgress, St
 
 /// Download a `ggml-*.bin` weight file with curl (ships with macOS, Windows
 /// 10+ and most Linux distros), falling back to PowerShell on Windows.
-fn download_with_system_tools(url: &str, dest_tmp: &std::path::Path) -> Result<(), String> {
+pub(crate) fn download_with_system_tools(url: &str, dest_tmp: &std::path::Path) -> Result<(), String> {
     let dest_str = dest_tmp.to_string_lossy().to_string();
     let curl_err = match crate::proc::command("curl")
         .args([
@@ -406,7 +406,7 @@ pub fn native_asr_cancel(state: State<'_, AppState>) -> Result<(), String> {
 // Transcription core
 // ---------------------------------------------------------------------------
 
-fn transcribe_blocking(
+pub(crate) fn transcribe_blocking(
     slot: &Arc<Mutex<Option<Child>>>,
     request: TranscribeRequest,
 ) -> Result<Vec<NativeSegment>, String> {
@@ -685,7 +685,7 @@ fn extract_voxtype_transcript(stdout: &str) -> String {
     last
 }
 
-fn strip_ansi(input: &str) -> String {
+pub(crate) fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
@@ -710,20 +710,31 @@ fn strip_ansi(input: &str) -> String {
 // Child process runner (killable, with timeout)
 // ---------------------------------------------------------------------------
 
-struct ChildOutput {
-    #[allow(dead_code)]
-    success: bool,
-    stdout: String,
+pub(crate) struct ChildOutput {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
 }
 
-fn run_child(
+pub(crate) fn run_child(
     slot: &Arc<Mutex<Option<Child>>>,
     program: &str,
     args: &[String],
 ) -> Result<ChildOutput, String> {
+    run_child_with_env(slot, program, args, &[])
+}
+
+/// `run_child` with extra environment variables for the child.
+pub(crate) fn run_child_with_env(
+    slot: &Arc<Mutex<Option<Child>>>,
+    program: &str,
+    args: &[String],
+    envs: &[(&str, &str)],
+) -> Result<ChildOutput, String> {
     let mut command = crate::proc::command(program);
     command
         .args(args)
+        .envs(envs.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -802,25 +813,25 @@ fn run_child(
     let stdout = stdout_handle
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
-    let _stderr = stderr_handle
+    let stderr = stderr_handle
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
     let success = status.map(|s| s.success()).unwrap_or(false);
 
-    Ok(ChildOutput { success, stdout })
+    Ok(ChildOutput { success, stdout, stderr })
 }
 
 // ---------------------------------------------------------------------------
 // Audio helpers
 // ---------------------------------------------------------------------------
 
-struct TempArtifacts {
-    wav: PathBuf,
-    base: PathBuf,
+pub(crate) struct TempArtifacts {
+    pub wav: PathBuf,
+    pub base: PathBuf,
 }
 
 impl TempArtifacts {
-    fn create() -> Self {
+    pub(crate) fn create() -> Self {
         let dir = std::env::temp_dir();
         let pid = std::process::id();
         let nanos = SystemTime::now()
@@ -858,7 +869,7 @@ impl Drop for TempArtifacts {
 /// Decode the IPC audio payload. Prefers a RIFF/WAVE container (what the
 /// desktop bridge actually sends); otherwise treats the bytes as a bare
 /// little-endian f32 mono PCM stream.
-fn decode_audio(raw: &[u8], declared_rate: u32) -> Result<(Vec<f32>, u32), String> {
+pub(crate) fn decode_audio(raw: &[u8], declared_rate: u32) -> Result<(Vec<f32>, u32), String> {
     if raw.len() >= 12 && &raw[0..4] == b"RIFF" && &raw[8..12] == b"WAVE" {
         return parse_wav(raw);
     }
@@ -948,7 +959,7 @@ fn parse_wav(raw: &[u8]) -> Result<(Vec<f32>, u32), String> {
     Ok((samples, rate))
 }
 
-fn resample_linear(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
+pub(crate) fn resample_linear(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || samples.is_empty() {
         return samples.to_vec();
     }
@@ -966,7 +977,7 @@ fn resample_linear(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
     out
 }
 
-fn write_wav(path: &Path, samples: &[f32]) -> Result<(), String> {
+pub(crate) fn write_wav(path: &Path, samples: &[f32]) -> Result<(), String> {
     let mut pcm: Vec<u8> = Vec::with_capacity(samples.len() * 2);
     for &sample in samples {
         let clamped = sample.clamp(-1.0, 1.0);

@@ -62,6 +62,9 @@ export interface Meeting {
   /** Track ids when recorded two-way; undefined for single-track recordings. */
   tracks?: string[];
   transcriptionStatus: TranscriptionStatus;
+  /** How the current transcript was made: live while recording (a preview
+   * from a small/fast model) or from the whole recording. Absent on older meetings. */
+  transcriptSource?: { kind: 'live' | 'file'; model: string; createdAt: number };
   /** Set when a crash/interrupt leaves endedAt undefined. */
   unfinished?: boolean;
   /** Audio chunks that could not be written to storage (§19): the saved
