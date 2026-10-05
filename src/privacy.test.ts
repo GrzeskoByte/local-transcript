@@ -5,7 +5,7 @@
  * documented in README "Privacy: what goes online".
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = join(__dirname, '..');
@@ -21,7 +21,7 @@ function files(dir: string, ext: RegExp): string[] {
 function matching(dir: string, ext: RegExp, pattern: RegExp): string[] {
   return files(join(ROOT, dir), ext)
     .filter((f) => pattern.test(readFileSync(f, 'utf8')))
-    .map((f) => relative(ROOT, f))
+    .map((f) => relative(ROOT, f).split(sep).join('/'))
     .sort();
 }
 
