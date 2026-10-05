@@ -1,6 +1,6 @@
 ## Local Transcriber {{VERSION}} for Windows
 
-Private, on-device meeting recorder and transcriber. Your audio never leaves your PC.
+Private, on-device meeting recorder and transcriber. Your audio never leaves your PC. No telemetry or analytics: it goes online only when you click (model download, update check, integrations you set up).
 
 **Download → run → record.** Transcription is built in: the first time you click
 **Transcribe**, the app downloads its speech model once (~550 MB) and works offline after that.

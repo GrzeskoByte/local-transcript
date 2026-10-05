@@ -33,6 +33,9 @@ ARGS=(
   -DWHISPER_BUILD_TESTS=OFF
   -DWHISPER_BUILD_SERVER=OFF
   -DWHISPER_SDL2=OFF
+  # No network code in the shipped engine: no URL model downloads, no RPC backend.
+  -DWHISPER_CURL=OFF
+  -DGGML_RPC=OFF
   -DGGML_NATIVE=OFF
   -DGGML_OPENMP=OFF
 )

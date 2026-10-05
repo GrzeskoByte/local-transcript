@@ -147,6 +147,25 @@ Key invariants:
 - Single-source modes never mix streams; two-way keeps two separate tracks.
 - No accounts, backend, cloud, analytics, or telemetry on audio/transcripts.
 
+## Privacy: what goes online
+
+The app collects no data about you: no accounts, analytics, telemetry or crash
+reports, and recording, transcription (including live transcription) and storage
+all run on this computer. It goes online **only when you click something**:
+
+| What | When | Where |
+| --- | --- | --- |
+| Speech model download | You click Download / Set up transcription | Hugging Face (`ggerganov/whisper.cpp`) |
+| Update check | You click **Check for updates**, or turn on the launch check (off by default) | GitHub releases |
+| GitLab sharing | You click Upload / Test connection | Your GitLab server |
+| Company calendar | You open Calendar, test, detect or approve an event | Your calendar server |
+| LLM summary | You click Summarize (Ollama stays local; API/Open WebUI/OpenCode/Claude Code send the transcript to that provider) | The endpoint you configured |
+
+The bundled whisper.cpp engine is built without its network features
+(`WHISPER_CURL=OFF`, `GGML_RPC=OFF`, no server). `src/privacy.test.ts` fails if
+code gains a new way to reach the network. The OS web view (WebView2 / WebKit)
+follows your operating system's own diagnostic-data settings.
+
 ## Commands
 
 | Command | Purpose |
@@ -193,7 +212,7 @@ Every release includes `SHA256SUMS.txt`; files are named
 
 ### In-app updates
 
-Settings → App → **Updates** checks GitHub (on launch, opt-out, and on demand)
+Settings → App → **Updates** checks GitHub on demand (and on launch only if you turn that on)
 and, on a click, downloads, verifies, installs and restarts
 (`tauri-plugin-updater`, `src-tauri/src/updater.rs`). Windows (NSIS) and macOS
 update themselves; on Linux only the AppImage does — `.deb`/`.rpm` installs get a

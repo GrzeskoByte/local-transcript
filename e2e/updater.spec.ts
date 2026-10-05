@@ -34,8 +34,9 @@ async function mockDesktopWithUpdate(page: Page, canSelfUpdate = true): Promise<
   }, canSelfUpdate);
 }
 
-test('launch check surfaces an update; install needs a click and reports failures', async ({ page }) => {
+test('launch check (when turned on) surfaces an update; install needs a click and reports failures', async ({ page }) => {
   await mockDesktopWithUpdate(page);
+  await page.addInitScript(() => localStorage.setItem('update-auto-check', 'true'));
   await page.goto('/');
   const chip = page.getByRole('button', { name: 'Update available · v9.9.9' });
   await expect(chip).toBeVisible({ timeout: 10_000 });
@@ -60,9 +61,8 @@ test('deb/rpm installs get a download button instead of self-update', async ({ p
   await expect(card.getByRole('button', { name: 'Update & restart' })).toHaveCount(0);
 });
 
-test('launch check can be turned off', async ({ page }) => {
+test('the app does not check for updates on launch unless the user turned it on', async ({ page }) => {
   await mockDesktopWithUpdate(page);
-  await page.addInitScript(() => localStorage.setItem('update-auto-check', 'false'));
   await page.goto('/#/settings/app');
   await expect(page.getByLabel('Updates').getByRole('checkbox')).not.toBeChecked();
   await page.waitForTimeout(6_000);

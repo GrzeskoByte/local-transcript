@@ -1,6 +1,6 @@
 ## Local Transcriber {{VERSION}} for macOS
 
-Private, on-device meeting recorder and transcriber. Your audio never leaves your Mac.
+Private, on-device meeting recorder and transcriber. Your audio never leaves your Mac. No telemetry or analytics: it goes online only when you click (model download, update check, integrations you set up).
 
 **Download → drag to Applications → record.** Transcription is built in and GPU-accelerated
 (Metal): the first time you click **Transcribe**, the app downloads its speech model once

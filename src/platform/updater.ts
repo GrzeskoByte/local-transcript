@@ -42,8 +42,9 @@ export function getUpdateProgress(): Promise<UpdateProgress> {
 
 export const AUTO_CHECK_KEY = 'update-auto-check';
 export const LAST_CHECK_KEY = 'update-last-check';
+/** Opt-in: the app never goes online on its own unless the user turned this on. */
 export function getAutoCheck(): boolean {
-  return getPref(AUTO_CHECK_KEY) !== 'false';
+  return getPref(AUTO_CHECK_KEY) === 'true';
 }
 
 export function setAutoCheck(value: boolean): void {
