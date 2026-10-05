@@ -1,4 +1,5 @@
 import type { AudioSource } from './recorder';
+import { acquireCaptureContext, isCaptureContext, releaseCaptureContext } from './capture-context';
 
 /**
  * Mic + Device: several capture sources mixed into ONE mono stream, so the
@@ -15,10 +16,12 @@ export class MixedAudioSource implements AudioSource {
   private ctx: AudioContext | null = null;
   private output: MediaStream | null = null;
   private inputStreams: MediaStream[] = [];
+  /** Nodes this mix created, disconnected on stop (the shared context stays open). */
+  private nodes: AudioNode[] = [];
 
   constructor(
     private readonly inputs: AudioSource[],
-    private readonly createContext: () => AudioContext = defaultContext,
+    private readonly createContext: () => AudioContext = acquireCaptureContext,
   ) {}
 
   async start(): Promise<MediaStream> {
@@ -47,13 +50,19 @@ export class MixedAudioSource implements AudioSource {
       limiter.attack.value = 0.003;
       limiter.release.value = 0.25;
       limiter.connect(dest);
-      for (const stream of streams) ctx.createMediaStreamSource(stream).connect(limiter);
+      this.nodes = [dest, limiter];
+      for (const stream of streams) {
+        const node = ctx.createMediaStreamSource(stream);
+        node.connect(limiter);
+        this.nodes.push(node);
+      }
       // Keep the graph rendering on engines that only pull nodes reachable
       // from the hardware destination; gain 0 = nothing is played back.
       const silent = ctx.createGain();
       silent.gain.value = 0;
       limiter.connect(silent);
       silent.connect(ctx.destination);
+      this.nodes.push(silent);
       if (ctx.state === 'suspended') await ctx.resume().catch(() => undefined);
 
       const out = dest.stream.getAudioTracks()[0];
@@ -93,20 +102,20 @@ export class MixedAudioSource implements AudioSource {
     this.ctx = null;
     // Graph first, inputs second: the mix must stop pulling from the capture
     // pipelines before they are torn down (WebKitGTK/GStreamer).
-    if (ctx && ctx.state !== 'closed') await ctx.close().catch(() => undefined);
+    for (const node of this.nodes) {
+      try {
+        node.disconnect();
+      } catch {
+        // Already disconnected.
+      }
+    }
+    this.nodes = [];
+    if (ctx && isCaptureContext(ctx)) releaseCaptureContext(ctx);
+    else if (ctx && ctx.state !== 'closed') await ctx.close().catch(() => undefined);
     await this.stopInputs();
   }
 
   private async stopInputs(): Promise<void> {
     await Promise.all(this.inputs.map((s) => s.stop().catch(() => undefined)));
-  }
-}
-
-function defaultContext(): AudioContext {
-  // 48 kHz matches the capture rate (no extra resample before Opus).
-  try {
-    return new AudioContext({ sampleRate: 48000 });
-  } catch {
-    return new AudioContext();
   }
 }

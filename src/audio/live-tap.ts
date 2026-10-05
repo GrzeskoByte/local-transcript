@@ -4,12 +4,13 @@
  * A ScriptProcessorNode (deprecated, but available in every engine the app
  * ships on, WebKitGTK included, and needs no worklet module) copies each
  * block, which is decimated to 16 kHz and handed on. Like the diagnostics
- * tap it reuses the Mic + Device mixer's AudioContext when there is one
- * (no second capture graph); otherwise it owns a context and closes it on
- * stop — which must happen before the capture sources are stopped
- * (WebKitGTK/GStreamer). Best-effort: it never affects the recording.
+ * tap it reuses the Mic + Device mixer's AudioContext when there is one;
+ * otherwise it borrows the shared capture context (never closed). It must be
+ * stopped before the capture sources are (WebKitGTK/GStreamer).
+ * Best-effort: it never affects the recording.
  */
 import { Downsampler, LIVE_SAMPLE_RATE } from '../asr/live-segmenter';
+import { acquireCaptureContext, releaseCaptureContext } from './capture-context';
 
 const BLOCK = 4096;
 
@@ -24,7 +25,7 @@ export class LivePcmTap {
   constructor(private readonly onAudio: (samples16k: Float32Array) => void) {}
 
   async start(stream: MediaStream, ctx?: AudioContext | null): Promise<void> {
-    const context = ctx ?? new AudioContext();
+    const context = ctx ?? acquireCaptureContext();
     this.ownCtx = !ctx;
     this.ctx = context;
     const source = context.createMediaStreamSource(stream);
@@ -68,6 +69,7 @@ export class LivePcmTap {
     this.nodes = [];
     const ctx = this.ctx;
     this.ctx = null;
-    if (ctx && this.ownCtx && ctx.state !== 'closed') await ctx.close().catch(() => undefined);
+    // Released, never closed (see capture-context.ts).
+    if (ctx && this.ownCtx) releaseCaptureContext(ctx);
   }
 }

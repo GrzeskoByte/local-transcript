@@ -136,8 +136,15 @@ pub fn remove_sources() {
     }
 }
 
+/// Async: it runs `pactl`, which must not block the GTK main thread.
 #[tauri::command]
-pub fn native_system_audio_status() -> SystemAudioStatus {
+pub async fn native_system_audio_status() -> SystemAudioStatus {
+    tauri::async_runtime::spawn_blocking(system_audio_status)
+        .await
+        .unwrap_or(SystemAudioStatus { available: false, hint: None })
+}
+
+fn system_audio_status() -> SystemAudioStatus {
     if !cfg!(target_os = "linux") {
         return SystemAudioStatus { available: false, hint: None };
     }

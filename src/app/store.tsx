@@ -69,6 +69,10 @@ import { createLlmClient, DEFAULT_LLM_CONFIG } from '../integrations/llm';
 import type { LlmConfig, MeetingSummary } from '../integrations/llm';
 import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
 import { normalizeAgendaItems, type AgendaItem } from '../domain/agenda';
+import { settleWithin } from '../domain/settle';
+
+/** Longest wait for one best-effort teardown step when a recording stops. */
+const STOP_STEP_TIMEOUT_MS = 3000;
 
 export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'app';
 const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'app'];
@@ -486,7 +490,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setRecordingIssues([]);
     if (!diag) return undefined;
     clearInterval(diag.timer);
-    return diag.collector.stop().catch(() => undefined);
+    // Best-effort and bounded: a stuck sound-server log never holds Stop.
+    const report = await settleWithin(diag.collector.stop(), STOP_STEP_TIMEOUT_MS, undefined);
+    return report ?? diag.collector.report();
   }, []);
 
   /**
@@ -533,7 +539,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setLive(null);
     if (!current) return null;
     clearInterval(current.timer);
-    await current.tap.stop().catch(() => undefined);
+    await settleWithin(current.tap.stop(), STOP_STEP_TIMEOUT_MS, undefined);
     return current.transcriber;
   }, []);
 
@@ -906,7 +912,10 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     recorderRef.current = null;
     const liveMirror = liveMirrorRef.current;
     liveMirrorRef.current = null;
-    await refresh();
+    // The recording is saved: open it right away. Everything else (meeting
+    // list, disk mirror, live transcript) finishes in the background.
+    go({ name: 'detail', id: updated.id });
+    void refresh().catch(() => undefined);
     // The audio is already on disk when the live mirror kept up; otherwise
     // copy it (in slices) from storage.
     void (async () => {
@@ -914,7 +923,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await mirrorToDisk(updated, complete ? 'skip' : 'copy');
     })();
     if (liveRun) drainLive(updated.id, liveRun);
-    go({ name: 'detail', id: updated.id });
     return updated;
   }, [activeMeeting, go, refresh, mirrorToDisk, stopDiagnostics, stopLive, drainLive]);
 

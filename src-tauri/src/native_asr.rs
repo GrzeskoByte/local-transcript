@@ -50,9 +50,13 @@ pub struct NativeSegment {
 // Commands
 // ---------------------------------------------------------------------------
 
+/// Async: discovery runs the CLIs (`--version`, `voxtype info …`), which must
+/// not block the GTK main thread.
 #[tauri::command]
-pub fn native_asr_status() -> NativeAsrStatus {
-    build_status()
+pub async fn native_asr_status() -> Result<NativeAsrStatus, String> {
+    tauri::async_runtime::spawn_blocking(build_status)
+        .await
+        .map_err(|e| format!("Status task failed: {e}"))
 }
 
 fn build_status() -> NativeAsrStatus {
@@ -97,9 +101,13 @@ fn build_status() -> NativeAsrStatus {
 }
 
 #[tauri::command]
-pub fn native_asr_models() -> Vec<NativeModel> {
-    let backend = models::discover_backend();
-    models::collect_models(backend.as_ref()).1
+pub async fn native_asr_models() -> Result<Vec<NativeModel>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let backend = models::discover_backend();
+        models::collect_models(backend.as_ref()).1
+    })
+    .await
+    .map_err(|e| format!("Models task failed: {e}"))
 }
 
 /// Enable GPU acceleration through Voxtype. This needs root, so we try polkit
