@@ -144,7 +144,9 @@ test('records in the shell: no webview capture, instant Stop, playback via the s
 
   const stoppedAt = Date.now();
   await page.getByRole('button', { name: '■ Stop & save' }).click();
-  await expect(page.getByRole('heading', { name: 'Native Test' })).toBeVisible();
+  // Meeting Detail (Active Meeting shows the same title): the player is there.
+  await expect(page).toHaveURL(/#\/meeting\//);
+  await expect(page.getByRole('region', { name: 'Recording playback' })).toBeVisible();
   expect(Date.now() - stoppedAt).toBeLessThan(3_000);
   expect(await page.evaluate(() => (window as unknown as { __webviewCapture: number }).__webviewCapture)).toBe(0);
 
@@ -152,7 +154,9 @@ test('records in the shell: no webview capture, instant Stop, playback via the s
   const start = log.find((c) => c.cmd === 'native_recorder_start')!.args as { request: Record<string, unknown> };
   expect(start.request).toMatchObject({ mode: 'dual' });
   expect(String(start.request.mirrorPath)).toMatch(/^Native-Test-.+\/audio\.ogg$/);
-  expect(log.map((c) => c.cmd)).toEqual(expect.arrayContaining(['native_recorder_pause', 'native_recorder_resume', 'native_recorder_stop']));
+  for (const cmd of ['native_recorder_pause', 'native_recorder_resume', 'native_recorder_stop']) {
+    expect(log.map((c) => c.cmd), cmd).toContain(cmd);
+  }
 
   // Measurements came from the shell (both inputs, before the mix).
   const check = page.getByRole('region', { name: 'Audio check' });
@@ -180,6 +184,6 @@ test('falls back to webview recording when the shell cannot open the devices', a
   expect(await page.evaluate(() => (window as unknown as { __webviewCapture: number }).__webviewCapture)).toBeGreaterThan(0);
   await page.waitForTimeout(1_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
-  await expect(page.getByRole('heading', { name: 'Fallback Test' })).toBeVisible();
+  await expect(page).toHaveURL(/#\/meeting\//);
   expect((await calls(page)).some((c) => c.cmd === 'native_recorder_stop')).toBe(false);
 });
