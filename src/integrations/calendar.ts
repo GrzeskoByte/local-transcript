@@ -8,6 +8,7 @@
  * - EWS (on-prem Exchange): POST a CreateItem SOAP envelope (basic/NTLM).
  */
 
+import { invokeDesktop } from '../platform/desktop';
 import { decodeXmlText, parseIcs, type IcsRange } from './ics';
 
 export type CalendarProvider = 'caldav' | 'graph' | 'ews';
@@ -359,7 +360,6 @@ export function sogoCalendarUrl(host: string, username: string, calendar = 'pers
 export async function testCalendarConnection(config: CalendarConfig): Promise<string> {
   const err = validateCalendarConfig(config);
   if (err) throw new Error(err);
-  const { invokeDesktop } = await import('../platform/desktop');
   return invokeDesktop<string>('native_calendar_test', { request: buildTestTransport(config) });
 }
 
@@ -530,7 +530,6 @@ export async function fetchServerEvents(
 ): Promise<ServerEvent[]> {
   const err = validateCalendarConfig(config);
   if (err) throw new Error(err);
-  const { invokeDesktop } = await import('../platform/desktop');
   const raw = await invokeDesktop<string>('native_calendar_fetch', {
     request: buildFetchTransport(config, start, end),
   });

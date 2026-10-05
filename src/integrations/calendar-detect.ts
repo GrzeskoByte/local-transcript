@@ -8,6 +8,7 @@
  *    current-user-principal → calendar-home-set → PROPFIND Depth 1.
  * Nothing is created; passwords are never read from Thunderbird.
  */
+import { invokeDesktop } from '../platform/desktop';
 import type { CalendarProvider } from './calendar';
 import { sogoCalendarUrl } from './calendar';
 
@@ -152,7 +153,6 @@ export function parseThunderbird(profiles: ThunderbirdProfile[]): {
 }
 
 export async function scanThunderbird(): Promise<{ calendars: DetectedCalendar[]; mailAccounts: MailAccount[] }> {
-  const { invokeDesktop } = await import('../platform/desktop');
   const profiles = await invokeDesktop<ThunderbirdProfile[]>('native_calendar_thunderbird');
   return parseThunderbird(profiles);
 }
@@ -180,7 +180,6 @@ export interface ProbeResponse {
 export type Prober = (req: ProbeRequest) => Promise<ProbeResponse>;
 
 export const nativeProber: Prober = async (request) => {
-  const { invokeDesktop } = await import('../platform/desktop');
   return invokeDesktop<ProbeResponse>('native_calendar_probe', { request });
 };
 
