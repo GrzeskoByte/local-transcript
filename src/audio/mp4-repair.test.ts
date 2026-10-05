@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { repairFragmentedMp4 } from './mp4-repair';
+import { Mp4StreamRepair, repairFragmentedMp4 } from './mp4-repair';
 
 function box(type: string, payload = 4): Uint8Array {
   const b = new Uint8Array(8 + payload);
@@ -45,5 +45,42 @@ describe('repairFragmentedMp4', () => {
     expect(repairFragmentedMp4(webm)).toBe(webm);
     const truncated = join(box('ftyp'), box('moof')).subarray(0, 20);
     expect(repairFragmentedMp4(truncated)).toBe(truncated);
+  });
+});
+
+/** Feed `bytes` in pieces of `step` bytes through the streaming repair. */
+function streamed(bytes: Uint8Array, step: number): Uint8Array {
+  const repair = new Mp4StreamRepair();
+  const out: Uint8Array[] = [];
+  for (let at = 0; at < bytes.length; at += step) out.push(repair.push(bytes.subarray(at, at + step)));
+  out.push(repair.end());
+  return join(...out);
+}
+
+describe('Mp4StreamRepair', () => {
+  const paused = join(box('ftyp'), box('ftyp'), box('moov'), box('moof'), box('mdat', 40), box('moof'), box('moof'), box('mdat', 40), box('moof'));
+
+  it('matches the batch repair however the recording is chunked', () => {
+    const batch = repairFragmentedMp4(paused);
+    for (const step of [1, 3, 7, 12, 25, paused.length]) {
+      expect(streamed(paused, step)).toEqual(batch);
+    }
+  });
+
+  it('passes valid recordings through unchanged', () => {
+    const rec = join(box('ftyp'), box('moov'), box('moof'), box('mdat', 30));
+    expect(streamed(rec, 5)).toEqual(rec);
+  });
+
+  it('passes non-MP4 data through unchanged', () => {
+    const webm = new Uint8Array(50).map((_, i) => (i * 37) & 0xff);
+    webm.set([0x1a, 0x45, 0xdf, 0xa3]);
+    expect(streamed(webm, 4)).toEqual(webm);
+  });
+
+  it('keeps a trailing incomplete box (recording cut short)', () => {
+    const rec = join(box('ftyp'), box('moov'), box('moof'), box('mdat', 30));
+    const cut = rec.subarray(0, rec.length - 10);
+    expect(streamed(cut, 6)).toEqual(cut);
   });
 });

@@ -81,6 +81,7 @@ pub fn run() {
             recordings::native_recording_delete,
             storage::native_storage_dir,
             storage::native_save_file,
+            storage::native_storage_file_size,
             storage::native_open_storage_dir,
             storage::native_open_url,
             storage::native_reset_webview_database,

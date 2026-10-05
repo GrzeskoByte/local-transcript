@@ -108,6 +108,20 @@ describe('MediaRecorderAudioRecorder', () => {
     expect(rec.getState()).toBe('COMPLETED');
   });
 
+  it('hands every chunk to the chunk listener in order, even when saving fails', async () => {
+    const rec = new MediaRecorderAudioRecorder();
+    const seen: number[] = [];
+    rec.onChunk((c) => seen.push(c.data.size));
+    await rec.start(source(), 'm1', Date.now());
+    writeImpl = async () => {
+      throw new Error('disk full');
+    };
+    FakeMediaRecorder.instances[0]!.emit(3);
+    FakeMediaRecorder.instances[0]!.emit(4);
+    await rec.stop();
+    expect(seen).toEqual([3, 4, 10]);
+  });
+
   it('reports a final chunk that could not be written as unsaved', async () => {
     const rec = new MediaRecorderAudioRecorder();
     await rec.start(source(), 'm1', Date.now());

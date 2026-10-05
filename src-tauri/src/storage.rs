@@ -47,6 +47,9 @@ fn safe_relative(path: &str) -> Result<PathBuf, String> {
 pub struct SaveFileRequest {
     pub relative_path: String,
     pub data_base64: String,
+    /// Append to the file instead of replacing it (live recording mirror).
+    #[serde(default)]
+    pub append: bool,
 }
 
 /// Absolute path of the storage folder (created on demand).
@@ -67,9 +70,25 @@ pub fn native_save_file(app: AppHandle, request: SaveFileRequest) -> Result<Stri
     let bytes = STANDARD
         .decode(request.data_base64.as_bytes())
         .map_err(|e| format!("Invalid file payload: {e}"))?;
-    std::fs::write(&target, bytes)
-        .map_err(|e| format!("Could not write {}: {e}", target.display()))?;
+    let written = if request.append {
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&target)
+            .and_then(|mut file| file.write_all(&bytes))
+    } else {
+        std::fs::write(&target, bytes)
+    };
+    written.map_err(|e| format!("Could not write {}: {e}", target.display()))?;
     Ok(target.to_string_lossy().to_string())
+}
+
+/// Size of `<storage>/<relativePath>` in bytes, or `None` when it is missing.
+#[tauri::command]
+pub fn native_storage_file_size(app: AppHandle, relative_path: String) -> Result<Option<u64>, String> {
+    let target = storage_root(&app)?.join(safe_relative(&relative_path)?);
+    Ok(std::fs::metadata(&target).ok().filter(|m| m.is_file()).map(|m| m.len()))
 }
 
 /// Reveal the storage folder in the system file manager.

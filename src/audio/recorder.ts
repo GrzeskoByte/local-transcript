@@ -26,6 +26,13 @@ export interface Recording {
   unsavedChunks: number;
 }
 
+/** A chunk as it comes out of MediaRecorder. */
+export interface RecordedChunk {
+  track: string;
+  mimeType: string;
+  data: Blob;
+}
+
 interface PendingChunk {
   track: string;
   name: string;
@@ -88,6 +95,7 @@ export class MediaRecorderAudioRecorder {
   private inflight = new Set<Promise<void>>();
   private detachLifecycle: (() => void) | null = null;
   private onStateChange: ((s: RecorderState) => void) | null = null;
+  private onChunkData: ((chunk: RecordedChunk) => void) | null = null;
   /** Chunks whose write failed; kept in memory so Retry / Stop can save them. */
   private pending: PendingChunk[] = [];
   /** Recorded time bookkeeping: accumulated ms + start of the running stretch. */
@@ -124,6 +132,14 @@ export class MediaRecorderAudioRecorder {
 
   onState(fn: (s: RecorderState) => void): void {
     this.onStateChange = fn;
+  }
+
+  /**
+   * Called for every chunk as it is recorded, in order per track (before it
+   * is saved). Lets the desktop mirror append it to disk in real time.
+   */
+  onChunk(fn: ((chunk: RecordedChunk) => void) | null): void {
+    this.onChunkData = fn;
   }
 
   private setState(s: RecorderState): void {
@@ -200,6 +216,11 @@ export class MediaRecorderAudioRecorder {
               .catch((err) => this.onWriteFailed(chunk, err))
               .finally(() => this.inflight.delete(write));
             this.inflight.add(write);
+            try {
+              this.onChunkData?.({ track: active.track, mimeType: active.mimeType, data: ev.data });
+            } catch {
+              // A listener must never affect the recording.
+            }
           }
         };
         recorder.onerror = (ev: Event) => {
