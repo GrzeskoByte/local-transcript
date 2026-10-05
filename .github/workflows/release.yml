@@ -51,7 +51,7 @@ jobs:
       build-matrix: ${{ steps.matrix.outputs.build }}
       publish-matrix: ${{ steps.matrix.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: version
         name: Versions must agree (and match the tag)
         run: |
@@ -99,7 +99,7 @@ jobs:
       # AppImage tooling runs without FUSE on CI.
       APPIMAGE_EXTRACT_AND_RUN: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Linux build dependencies
         if: matrix.platform == 'ubuntu'
@@ -113,7 +113,7 @@ jobs:
           # curated plugin set into the AppImage (see the script).
           scripts/gst-plugins.sh "$RUNNER_TEMP/gst-plugins" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -132,7 +132,7 @@ jobs:
 
       - name: Cache built-in speech engine
         id: engine-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: src-tauri/binaries
           key: lt-whisper-${{ env.WHISPER_CPP_VERSION }}-${{ matrix.target }}-${{ hashFiles('scripts/build-engine.sh') }}
@@ -198,7 +198,7 @@ jobs:
             "src-tauri/target/${{ matrix.target }}/release/bundle" release \
             "${{ needs.prepare.outputs.version }}" "$os_name" "${{ matrix.arch }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.platform }}-${{ matrix.arch }}
           path: release/*
@@ -215,9 +215,9 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.publish-matrix) }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: release-${{ matrix.platform }}-*
           merge-multiple: true
@@ -237,7 +237,7 @@ jobs:
             ".github/release-notes/${{ matrix.platform }}.md" > notes.md
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         if: steps.files.outputs.skip == 'false'
         with:
           tag_name: v${{ needs.prepare.outputs.version }}-${{ matrix.platform }}

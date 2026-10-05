@@ -24,13 +24,13 @@ import {
 import type { ModelMeta } from '../asr/model-manager';
 import { nativeCatalog } from '../asr/model-tiers';
 import type { CatalogModel } from '../asr/model-tiers';
-import { findUnfinishedMeetings, getMeeting, listMeetings, saveMeeting, updateMeeting } from '../storage/meetings';
+import { deleteMeetingRecord, findUnfinishedMeetings, getMeeting, listMeetings, saveMeeting, updateMeeting } from '../storage/meetings';
 import { deleteMeetingEverywhere } from '../features/meetings/exports';
 import { commitTranscript, getSegments } from '../storage/transcripts';
 import { DatabaseOpenError } from '../storage/database';
-import type { TranscriptSegment } from '../domain/transcript';
+import { segmentsToMarkdown, type TranscriptSegment } from '../domain/transcript';
 import type { TranscriptionStage } from '../asr/engine';
-import { deleteRecording, estimateStorage, isStorageLow, listChunkNames, listTracks, readRecordingBlob } from '../storage/recordings';
+import { deleteRecording, estimateStorage, isStorageLow, listChunkNames, listTracks, readMeta, readRecordingBlob } from '../storage/recordings';
 import { trackSpeakerLabel } from '../domain/meeting';
 import { invokeDesktop, isDesktopApp } from '../platform/desktop';
 import { getPref, setPref } from '../platform/prefs';
@@ -585,7 +585,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         void startLive(id, source);
         const meta = await getMeeting(id);
         if (meta) {
-          const { readMeta } = await import('../storage/recordings');
           const stored = await readMeta(id).catch(() => null);
           if (stored) {
             const withMime = {
@@ -606,7 +605,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         await deleteRecording(id).catch(() => undefined);
         const existing = await getMeeting(id).catch(() => undefined);
         if (existing) {
-          const { deleteMeetingRecord } = await import('../storage/meetings');
           await deleteMeetingRecord(id).catch(() => undefined);
         }
         setActiveMeeting(null);
@@ -791,7 +789,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         throw new Error('Transcribe the meeting before summarizing it');
       }
       const segments = await getSegments(meetingId);
-      const { segmentsToMarkdown } = await import('../domain/transcript');
       const markdown = segmentsToMarkdown(meeting.title, meeting.startedAt, segments);
       const client = createLlmClient(llmConfig);
       const result = await client.summarize(meeting.title, markdown);
@@ -1045,7 +1042,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const counts = await Promise.all(tracks.map((t) => listChunkNames(id, t)));
       if (!counts.some((names) => names.length > 0)) {
         await deleteRecording(id).catch(() => undefined);
-        const { deleteMeetingRecord } = await import('../storage/meetings');
         await deleteMeetingRecord(id).catch(() => undefined);
       } else {
         const durationMs = estimateDurationFromChunks(counts.map((n) => n.length));
@@ -1068,7 +1064,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const discardUnfinished = useCallback(
     async (id: string) => {
-      const { deleteMeetingRecord } = await import('../storage/meetings');
       await deleteRecording(id).catch(() => undefined);
       await deleteMeetingRecord(id).catch(() => undefined);
       await refresh();
