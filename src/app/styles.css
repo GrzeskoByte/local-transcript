@@ -317,6 +317,7 @@ input[type="checkbox"] { accent-color: var(--ink); width: 14px; height: 14px; ma
 /* actions after a field group sit a step further away than a hint */
 :is(.input, select, textarea, .row-selects) + .btn-row { margin-top: var(--sp-lg); }
 .card > .field-label:first-child { margin-top: 0; }
+.issue-pick { display: flex; align-items: flex-start; gap: var(--sp-sm); cursor: pointer; }
 .check-row { display: flex; align-items: center; gap: var(--sp-sm); margin-top: var(--group-gap); }
 .search-wrap { position: relative; margin: var(--sp-lg) 0 var(--sp-xs); }
 .search-wrap .icon { position: absolute; left: var(--sp-sm); top: 50%; transform: translateY(-50%); display: flex; }

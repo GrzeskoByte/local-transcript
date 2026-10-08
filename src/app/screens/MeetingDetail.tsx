@@ -15,6 +15,7 @@ import {
   revealExport,
   type ExportResult,
 } from '../../features/meetings/exports';
+import { actionItemsOf } from '../../integrations/gitlab';
 import { AgendaEditor, AgendaList } from '../components/Agenda.tsx';
 import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
@@ -34,7 +35,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
     txProgress, txStage, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta,
     selectModel, language, setLanguage, nativeStatus, installedModels,
     uploadToGitlab, uploadSummaryToGitlab, summarizeMeeting, createCalendarEvent,
-    saveAgenda, uploadAgendaToGitlab,
+    saveAgenda, uploadAgendaToGitlab, gitlabConfig, createGitlabActionIssues,
   } = useApp();
   const [error, setError] = useState<string | null>(null);
   const [gitlabBusy, setGitlabBusy] = useState(false);
@@ -47,6 +48,10 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   /** Agenda being edited (null = viewing). */
   const [agendaDraft, setAgendaDraft] = useState<AgendaItem[] | null>(null);
   const [agendaBusy, setAgendaBusy] = useState(false);
+  /** Action items picked for GitLab issues (their text); null = default selection. */
+  const [issuePick, setIssuePick] = useState<string[] | null>(null);
+  const [issueBusy, setIssueBusy] = useState(false);
+  const [issueMessage, setIssueMessage] = useState<string | null>(null);
   /** Files the last export wrote (desktop: in Downloads). */
   const [exported, setExported] = useState<string[]>([]);
   const [exportBusy, setExportBusy] = useState(false);
@@ -86,6 +91,12 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
 
   if (!detailMeeting) return <p className="muted">Loading…</p>;
   const m = detailMeeting;
+  // GitLab issues from action items: offered once a project + token are set up.
+  const gitlabConnected = !!(gitlabConfig.url.trim() && gitlabConfig.project.trim() && gitlabConfig.token.trim());
+  const actionItems = actionItemsOf(m);
+  const issueFor = (text: string) => m.gitlabActionIssues?.find((i) => i.item === text);
+  const pending = actionItems.filter((a) => !issueFor(a.text));
+  const picked = (issuePick ?? pending.map((a) => a.text)).filter((t) => pending.some((a) => a.text === t));
   const progress = txProgress[m.id];
   const stage: TranscriptionStage = txStage[m.id] ?? 'transcribing';
   // Primary signal is the meeting status; the stage fallback covers the gap
@@ -393,11 +404,85 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           {(m.summary.actionItems?.length ?? 0) > 0 && (
             <>
               <strong>Action items</strong>
-              <ul className="transcript" aria-label="Action items">
-                {m.summary.actionItems!.map((a, i) => (
-                  <li key={i}>☐ {a}</li>
-                ))}
-              </ul>
+              {gitlabConnected && actionItems.length > 0 ? (
+                <>
+                  <ul className="transcript" aria-label="Action items">
+                    {actionItems.map((a) => {
+                      const issue = issueFor(a.text);
+                      return (
+                        <li key={a.text}>
+                          {issue ? (
+                            <>
+                              ✓ {a.text} —{' '}
+                              <a href={issue.url} target="_blank" rel="noreferrer" onClick={(e) => openGitlabLink(e, issue.url)}>
+                                {issue.iid !== undefined ? `Issue #${issue.iid}` : 'Issue'}
+                              </a>
+                              {issue.assignee ? ` · @${issue.assignee}` : ''}
+                            </>
+                          ) : (
+                            <label className="issue-pick">
+                              <input
+                                type="checkbox"
+                                checked={picked.includes(a.text)}
+                                disabled={issueBusy}
+                                onChange={(e) =>
+                                  setIssuePick(e.target.checked ? [...picked, a.text] : picked.filter((t) => t !== a.text))
+                                }
+                              />
+                              {a.text}
+                            </label>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {pending.length > 0 && (
+                    <div className="btn-row">
+                      <button
+                        className="btn"
+                        disabled={issueBusy || picked.length === 0}
+                        title={`Create one issue per selected action item in ${gitlabConfig.project}`}
+                        onClick={() => {
+                          setIssueBusy(true);
+                          setIssueMessage(null);
+                          setError(null);
+                          createGitlabActionIssues(m.id, picked)
+                            .then((created) => {
+                              setIssuePick(null);
+                              setIssueMessage(
+                                `Created ${created.length} GitLab issue${created.length === 1 ? '' : 's'} in ${gitlabConfig.project}.`,
+                              );
+                            })
+                            .catch((e: unknown) => {
+                              const created = (e as { created?: unknown[] }).created?.length ?? 0;
+                              setError(
+                                `${created ? `Created ${created} issue${created === 1 ? '' : 's'}, then: ` : ''}${
+                                  e instanceof Error ? e.message : String(e)
+                                }`,
+                              );
+                            })
+                            .finally(() => setIssueBusy(false));
+                        }}
+                      >
+                        {issueBusy
+                          ? 'Creating issues…'
+                          : `Create GitLab issue${picked.length === 1 ? '' : 's'} (${picked.length})`}
+                      </button>
+                    </div>
+                  )}
+                  {issueMessage && (
+                    <p className="muted small mb-0" role="status">
+                      {issueMessage}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <ul className="transcript" aria-label="Action items">
+                  {m.summary.actionItems!.map((a, i) => (
+                    <li key={i}>☐ {a}</li>
+                  ))}
+                </ul>
+              )}
             </>
           )}
           {m.summary.sessionId && <ClaudeSessionHint sessionId={m.summary.sessionId} />}

@@ -81,6 +81,8 @@ export interface Meeting {
   agenda?: MeetingAgenda;
   /** Last GitLab agenda upload of this meeting, if any. */
   gitlabAgenda?: { url: string; target: string; uploadedAt: number };
+  /** GitLab issues created from the summary's action items (newest last). */
+  gitlabActionIssues?: { item: string; url: string; iid?: number; assignee?: string; createdAt: number }[];
   /** LLM summary; `sessionId` = Claude Code session that produced it. */
   summary?: {
     text: string;

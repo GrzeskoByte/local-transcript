@@ -134,6 +134,101 @@ export function agendaMarkdown(meeting: Meeting): string {
   return agendaDocument(meeting.title, meeting.startedAt, items);
 }
 
+/** One summary action item ("Owner: task (due)"), split into its parts. */
+export interface ActionItem {
+  /** The line as the summary has it. */
+  text: string;
+  task: string;
+  /** Named owner; absent for "Unassigned". */
+  owner?: string;
+  /** Due as written ("Friday", "2026-10-20"). */
+  due?: string;
+  /** `due` as YYYY-MM-DD when it is a calendar date (GitLab's `due_date`). */
+  dueDate?: string;
+}
+
+const UNASSIGNED = /^(unassigned|none|nobody|tbd|n\/a|-)$/i;
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/** A written due date as YYYY-MM-DD, when it names a calendar day. */
+export function parseDueDate(due: string, now = new Date()): string | undefined {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const iso = due.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) return `${iso[1]}-${pad(Number(iso[2]))}-${pad(Number(iso[3]))}`;
+  const eu = due.match(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/);
+  if (eu) return `${eu[3]}-${pad(Number(eu[2]))}-${pad(Number(eu[1]))}`;
+  const named = due.toLowerCase().match(/\b(\d{1,2})\s+([a-z]{3})[a-z]*\.?(?:\s+(\d{4}))?|\b([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?(?:\s+(\d{4}))?/);
+  if (named) {
+    const day = Number(named[1] ?? named[5]);
+    const month = MONTHS.indexOf((named[2] ?? named[4])!);
+    if (month < 0 || day < 1 || day > 31) return undefined;
+    let year = Number(named[3] ?? named[6] ?? now.getFullYear());
+    // "Oct 3" said in December means next year.
+    if (!(named[3] ?? named[6]) && new Date(year, month, day) < new Date(now.getFullYear(), now.getMonth(), now.getDate()))
+      year += 1;
+    return `${year}-${pad(month + 1)}-${pad(day)}`;
+  }
+  return undefined;
+}
+
+/** Split "Owner: task (due)" (the summary prompt's format); tolerant of plain tasks. */
+export function parseActionItem(text: string, now = new Date()): ActionItem {
+  let rest = text.trim().replace(/^[-*•☐]\s*/, '').replace(/^\[ ?\]\s*/, '');
+  let owner: string | undefined;
+  const colon = rest.match(/^([^:]{1,60}):\s+(.+)$/);
+  if (colon) {
+    owner = colon[1]!.replace(/\*\*/g, '').trim();
+    rest = colon[2]!.trim();
+  }
+  let due: string | undefined;
+  const paren = rest.match(/^(.*\S)\s*\(([^()]+)\)\s*\.?$/);
+  if (paren) {
+    rest = paren[1]!;
+    due = paren[2]!.replace(/^due:?\s*/i, '').trim();
+  }
+  const task = rest.replace(/\.$/, '').trim() || text.trim();
+  return {
+    text,
+    task,
+    ...(owner && !UNASSIGNED.test(owner) ? { owner } : {}),
+    ...(due ? { due } : {}),
+    ...(due && parseDueDate(due, now) ? { dueDate: parseDueDate(due, now) } : {}),
+  };
+}
+
+/** Action items worth an issue (the summary may say "None"). */
+export function actionItemsOf(meeting: Meeting): ActionItem[] {
+  return (meeting.summary?.actionItems ?? [])
+    .filter((a) => a.trim() && !/^(none|n\/a|-)\.?$/i.test(a.trim()))
+    .map((a) => parseActionItem(a));
+}
+
+/** Issue title + description for one action item. */
+export function actionItemIssue(meeting: Meeting, item: ActionItem): { title: string; description: string } {
+  const date = new Date(meeting.startedAt).toISOString().slice(0, 10);
+  const title = item.task.length > 250 ? `${item.task.slice(0, 247)}…` : item.task;
+  const description = [
+    item.task,
+    '',
+    ...(item.owner ? [`**Owner:** ${item.owner}`] : []),
+    ...(item.due ? [`**Due:** ${item.due}`] : []),
+    ...(item.owner || item.due ? [''] : []),
+    `From the meeting **${meeting.title || 'Untitled'}** (${date}).`,
+    ...(meeting.summary?.text ? ['', '> ' + meeting.summary.text.replace(/\n+/g, ' ')] : []),
+    '',
+    '_Created by Local Transcribe from the meeting summary._',
+  ].join('\n');
+  return { title, description };
+}
+
+export interface ActionIssueResult {
+  item: string;
+  url: string;
+  iid?: number;
+  /** GitLab username the issue was assigned to. */
+  assignee?: string;
+}
+
 export function meetingPageTitle(meeting: Meeting): string {
   const date = new Date(meeting.startedAt).toISOString().slice(0, 10);
   return `Meeting: ${meeting.title || 'Untitled'} (${date})`;
@@ -236,6 +331,62 @@ export class GitlabClient {
   }
 
   /** Wiki page URL — the API never returns one, so build it from the slug. */
+  /**
+   * One issue per action item. The owner is assigned when exactly one
+   * project member matches the name; the due date is set when it is a
+   * calendar date. Items are created in order; the first failure stops the
+   * run and is thrown with what was created so far (`created`).
+   */
+  async createActionItemIssues(meeting: Meeting, items: ActionItem[]): Promise<ActionIssueResult[]> {
+    const project = encodeProject(this.config.project);
+    const created: ActionIssueResult[] = [];
+    for (const item of items) {
+      try {
+        const assignee = item.owner ? await this.findMember(item.owner) : null;
+        const { title, description } = actionItemIssue(meeting, item);
+        const issue = await this.request<{ web_url?: string; iid?: number }>(`/projects/${project}/issues`, {
+          method: 'POST',
+          body: JSON.stringify({
+            title,
+            description,
+            labels: 'local-transcribe,action-item',
+            ...(item.dueDate ? { due_date: item.dueDate } : {}),
+            ...(assignee ? { assignee_ids: [assignee.id] } : {}),
+          }),
+        });
+        const path = this.config.project.trim().replace(/^\/+|\/+$/g, '');
+        created.push({
+          item: item.text,
+          url: issue.web_url ?? `${instanceRoot(this.config.url)}/${path}/-/issues/${issue.iid}`,
+          ...(issue.iid !== undefined ? { iid: issue.iid } : {}),
+          ...(assignee ? { assignee: assignee.username } : {}),
+        });
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        throw Object.assign(error, { created });
+      }
+    }
+    return created;
+  }
+
+  /** The project member an owner name means, when exactly one matches. */
+  private async findMember(owner: string): Promise<{ id: number; username: string } | null> {
+    const name = owner.replace(/^@/, '').trim();
+    if (!name) return null;
+    try {
+      const members = await this.request<{ id: number; username: string; name: string }[]>(
+        `/projects/${encodeProject(this.config.project)}/members/all?query=${encodeURIComponent(name)}&per_page=20`,
+      );
+      const norm = (v: string) => v.trim().toLowerCase();
+      const exact = members.filter((m) => norm(m.username) === norm(name) || norm(m.name) === norm(name));
+      const pick = exact.length === 1 ? exact : members.length === 1 ? members : [];
+      return pick[0] ? { id: pick[0].id, username: pick[0].username } : null;
+    } catch {
+      // Assigning is a nicety: an unreadable member list never blocks the issue.
+      return null;
+    }
+  }
+
   private wikiUrl(slug: string): string {
     const project = this.config.project.trim().replace(/^\/+|\/+$/g, '');
     return `${instanceRoot(this.config.url)}/${project}/-/wikis/${encodeURIComponent(slug)}`;

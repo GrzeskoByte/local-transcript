@@ -69,8 +69,8 @@ import type { NativeAsrStatus, NativeModelInfo } from '../asr/native-types';
 import { desktopStorageDir, openDesktopStorageDir } from '../platform/desktop-storage';
 import { LiveAudioMirror, audioMirrorPath, mirrorMeetingToDisk, type MirrorAudio } from '../features/meetings/disk-sync';
 import { importAudioFile } from '../features/meetings/import-audio';
-import { createGitlabClient, DEFAULT_GITLAB_CONFIG } from '../integrations/gitlab';
-import type { GitlabConfig, GitlabUploadResult } from '../integrations/gitlab';
+import { actionItemsOf, createGitlabClient, DEFAULT_GITLAB_CONFIG } from '../integrations/gitlab';
+import type { ActionIssueResult, GitlabConfig, GitlabUploadResult } from '../integrations/gitlab';
 import { getGitlabConfig, setGitlabConfig } from '../integrations/gitlab-store';
 import { buildTransport, DEFAULT_CALENDAR_CONFIG, eventUid } from '../integrations/calendar';
 import type { CalendarConfig, CalendarCreateResult, CalendarEventDraft, CalendarProvider, ServerEvent } from '../integrations/calendar';
@@ -191,6 +191,8 @@ interface AppState {
   uploadToGitlab: (meetingId: string) => Promise<GitlabUploadResult>;
 
   uploadSummaryToGitlab: (meetingId: string) => Promise<GitlabUploadResult>;
+  /** One GitLab issue per selected summary action item (their text). */
+  createGitlabActionIssues: (meetingId: string, items: string[]) => Promise<ActionIssueResult[]>;
 
   calendarConfig: CalendarConfig;
   saveCalendarConfig: (config: CalendarConfig) => Promise<void>;
@@ -819,6 +821,38 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [gitlabConfig],
   );
 
+  /**
+   * One GitLab issue per selected action item of the summary (`items` = the
+   * action item lines). Created issues are kept on the meeting, also when a
+   * later one fails (the error carries them as `created`).
+   */
+  const createGitlabActionIssues = useCallback(
+    async (meetingId: string, items: string[]): Promise<ActionIssueResult[]> => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error('Meeting not found');
+      const wanted = actionItemsOf(meeting).filter((a) => items.includes(a.text));
+      if (wanted.length === 0) throw new Error('Select at least one action item');
+      const record = async (created: ActionIssueResult[]) => {
+        if (created.length === 0) return;
+        const now = Date.now();
+        const updated = await updateMeeting(meetingId, (cur) => ({
+          ...cur,
+          gitlabActionIssues: [...(cur.gitlabActionIssues ?? []), ...created.map((c) => ({ ...c, createdAt: now }))],
+        }));
+        if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      };
+      try {
+        const created = await createGitlabClient(gitlabConfig).createActionItemIssues(meeting, wanted);
+        await record(created);
+        return created;
+      } catch (err) {
+        await record((err as { created?: ActionIssueResult[] }).created ?? []);
+        throw err;
+      }
+    },
+    [gitlabConfig],
+  );
+
   const saveAgenda = useCallback(
     async (meetingId: string, items: AgendaItem[]): Promise<Meeting | undefined> => {
       const clean = normalizeAgendaItems(items);
@@ -1363,6 +1397,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       openStorageDir,
       importMeeting,
       gitlabConfig,
+      createGitlabActionIssues,
       saveGitlabConfig,
       uploadToGitlab,
       uploadSummaryToGitlab,
@@ -1402,7 +1437,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,
       liveDownload, downloadLiveModel, live,
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
-      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, saveAgenda, uploadAgendaToGitlab,
+      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, createGitlabActionIssues, saveAgenda, uploadAgendaToGitlab,
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
       updateInfo, checkUpdates,
       llmConfig, saveLlmConfig, summarizeMeeting,

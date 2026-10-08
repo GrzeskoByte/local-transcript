@@ -160,7 +160,7 @@ all run on this computer. It goes online **only when you click something**:
 | --- | --- | --- |
 | Speech model download | You click Download / Set up transcription | Hugging Face (`ggerganov/whisper.cpp`) |
 | Update check | You click **Check for updates**, or turn on the launch check (off by default) | GitHub releases |
-| GitLab sharing | You click Upload / Test connection | Your GitLab server |
+| GitLab sharing | You click Upload / Test connection / Create GitLab issues (from summary action items) | Your GitLab server |
 | Company calendar | You open Calendar, test, detect or approve an event | Your calendar server |
 | LLM summary | You click Summarize (Ollama stays local; API/Open WebUI/OpenCode/Claude Code send the transcript to that provider) | The endpoint you configured |
 
