@@ -307,6 +307,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     updatedAt: Date.now(),
   });
   const [language, setLanguageState] = useState<string>(DEFAULT_NATIVE_LANGUAGE);
+  /** The user picked a language: the (slower) startup load must not overwrite it. */
+  const languageChosenRef = useRef(false);
   const [nativeStatus, setNativeStatusState] = useState<NativeAsrStatus | null>(null);
   // Desktop-only: mirror finished meetings to a user-visible folder.
   const [saveToDisk, setSaveToDiskState] = useState<boolean>(
@@ -443,7 +445,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   // Native model + language selection.
   useEffect(() => {
     void getModelMeta().then(setModelMetaState).catch(() => undefined);
-    void getTranscriptionLanguage().then(setLanguageState).catch(() => undefined);
+    void getTranscriptionLanguage()
+      .then((stored) => {
+        if (!languageChosenRef.current) setLanguageState(stored);
+      })
+      .catch(() => undefined);
     void getGitlabConfig().then(setGitlabConfigState).catch(() => undefined);
     void getCalendarConfig().then(setCalendarConfigState).catch(() => undefined);
     void getLlmConfig().then(setLlmConfigState).catch(() => undefined);
@@ -1274,6 +1280,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const setLanguage = useCallback(
     async (id: string) => {
+      languageChosenRef.current = true;
+      setLanguageState(id);
       await setTranscriptionLanguage(id);
       setLanguageState(await getTranscriptionLanguage());
     },
