@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { getPref, setPref } from '../../platform/prefs';
 import { useApp, formatDuration } from '../store.tsx';
 import { CHUNK_MS, modeLabel } from '../../domain/meeting';
 import type { TranscriptionStage } from '../../asr/engine';
@@ -7,7 +8,7 @@ import {
   describeNativeRuntime,
   NATIVE_LANGUAGE_OPTIONS,
 } from '../../asr/model-manager';
-import { searchSegments, segmentsToText, type TranscriptSegment } from '../../domain/transcript';
+import { activeSegmentIndex, searchSegments, segmentsToText, type TranscriptSegment } from '../../domain/transcript';
 import {
   exportAgenda,
   exportAudio,
@@ -21,7 +22,7 @@ import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { actionItemEventDraft, extractEventDraft, validateCalendarConfig } from '../../integrations/calendar';
 import type { CalendarEventDraft } from '../../integrations/calendar';
-import { claudeResumeCommand } from '../../integrations/llm';
+import { claudeResumeCommand, llmConfigProblem } from '../../integrations/llm';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { applyPlaybackOutput } from '../../audio/devices';
@@ -37,7 +38,7 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
     txProgress, txStage, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta,
     selectModel, language, setLanguage, nativeStatus, installedModels,
     uploadToGitlab, uploadSummaryToGitlab, summarizeMeeting, createCalendarEvent,
-    saveAgenda, uploadAgendaToGitlab, gitlabConfig, createGitlabActionIssues, calendarConfig,
+    saveAgenda, uploadAgendaToGitlab, gitlabConfig, createGitlabActionIssues, calendarConfig, summarizing, llmConfig, returnTo,
   } = useApp();
   const [error, setError] = useState<string | null>(null);
   const collapsedSections = useCollapsedSections();
@@ -45,23 +46,23 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
   const [showTxSettings, setShowTxSettings] = useState(false);
   /** Title being edited (null = not renaming). */
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  /** Transcript follows the player (highlight + scroll). */
+  const [follow, setFollow] = useState(() => getPref(FOLLOW_PREF) !== 'false');
   /** Which GitLab upload is running (one at a time). */
   const [gitlabBusy, setGitlabBusy] = useState<'transcript' | 'summary' | 'agenda' | null>(null);
   const [gitlabMessage, setGitlabMessage] = useState<string | null>(null);
-  const [llmBusy, setLlmBusy] = useState(false);
   const [filter, setFilter] = useState('');
   const [calDraft, setCalDraft] = useState<CalendarEventDraft | null>(null);
   const [calBusy, setCalBusy] = useState(false);
   const [calMessage, setCalMessage] = useState<string | null>(null);
   /** Action items picked for calendar events (their text); null = default selection. */
-  const [calPick, setCalPick] = useState<string[] | null>(null);
   /** One editable draft per picked action item, before approval. */
   const [calDrafts, setCalDrafts] = useState<{ item: string; draft: CalendarEventDraft }[] | null>(null);
   /** Agenda being edited (null = viewing). */
   const [agendaDraft, setAgendaDraft] = useState<AgendaItem[] | null>(null);
   const [agendaBusy, setAgendaBusy] = useState(false);
   /** Action items picked for GitLab issues (their text); null = default selection. */
-  const [issuePick, setIssuePick] = useState<string[] | null>(null);
+  const [itemPick, setItemPick] = useState<string[] | null>(null);
   const [issueBusy, setIssueBusy] = useState(false);
   const [issueMessage, setIssueMessage] = useState<string | null>(null);
   /** Files the last export wrote (desktop: in Downloads). */
@@ -111,6 +112,17 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
   // Ctrl/Cmd+F jumps to the transcript search instead of the webview's find bar.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // Space / ← / → drive the player, unless the user is typing or on a control.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e.target)) {
+        const player = players.current.values().next().value as AudioPlayerHandle | undefined;
+        if (player && (e.key === ' ' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+          if (e.key === ' ' && (e.target as HTMLElement | null)?.closest?.('button, a, summary')) return;
+          e.preventDefault();
+          if (e.key === ' ') player.toggle();
+          else player.skip(e.key === 'ArrowLeft' ? -15 : 15);
+          return;
+        }
+      }
       if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f') return;
       const input = document.querySelector<HTMLInputElement>('input[aria-label="Search transcript"]');
       if (!input) return;
@@ -130,12 +142,22 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
   const actionItems = actionItemsOf(m);
   const issueFor = (text: string) => m.gitlabActionIssues?.find((i) => i.item === text);
   const pending = actionItems.filter((a) => !issueFor(a.text));
-  const picked = (issuePick ?? pending.map((a) => a.text)).filter((t) => pending.some((a) => a.text === t));
   // Calendar events from action items: one per item, never twice.
   const eventFor = (text: string) => m.calendarEvents?.find((e) => e.item === text);
   const calPending = actionItems.filter((a) => !eventFor(a.text));
-  const calPicked = (calPick ?? calPending.map((a) => a.text)).filter((t) => calPending.some((a) => a.text === t));
   const calendarReady = validateCalendarConfig(calendarConfig) === null;
+  const llmBusy = !!summarizing[m.id];
+  const llmProblem = llmConfigProblem(llmConfig);
+  // A summary older than the transcript describes an earlier version of it.
+  const summaryStale = !!(m.summary && m.transcriptSource && m.summary.createdAt < m.transcriptSource.createdAt);
+  // One action-item list for both targets: a row is open while it still
+  // lacks an issue (GitLab set up) or an event (calendar set up).
+  const openFor = (text: string): boolean =>
+    (gitlabConnected && !issueFor(text)) || (calendarReady && !eventFor(text));
+  const openItems = actionItems.filter((a) => openFor(a.text));
+  const selected = (itemPick ?? openItems.map((a) => a.text)).filter((t) => openItems.some((a) => a.text === t));
+  const issueTargets = pending.filter((a) => selected.includes(a.text));
+  const eventTargets = calPending.filter((a) => selected.includes(a.text));
   const editCalDraft = (i: number, patch: Partial<CalendarEventDraft>): void =>
     setCalDrafts((ds) => ds && ds.map((d, j) => (j === i ? { ...d, draft: { ...d.draft, ...patch } } : d)));
   const createActionEvents = async (drafts: { item: string; draft: CalendarEventDraft }[]): Promise<void> => {
@@ -148,7 +170,7 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
         created += 1;
       }
       setCalDrafts(null);
-      setCalPick(null);
+      setItemPick(null);
       setCalMessage(`Created ${created} calendar event${created === 1 ? '' : 's'}.`);
     } catch (e: unknown) {
       // Keep only the drafts that were not created, so a retry never duplicates.
@@ -180,8 +202,8 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
 
   return (
     <>
-      <button className="backlink" onClick={() => go({ name: 'dashboard' })}>
-        ← All meetings
+      <button className="backlink" onClick={() => go({ name: returnTo })}>
+        {returnTo === 'calendar' ? '← Calendar' : '← All meetings'}
       </button>
 
       <div className="page-head detail-head tint-peach">
@@ -273,6 +295,7 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
                   load={t.load}
                   label={detailTracks.length > 1 ? t.label : 'Recording'}
                   durationHintMs={m.durationMs}
+                  onTime={setPlayhead}
                 />
               </div>
             ))}
@@ -391,6 +414,11 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           <p className="mt-0">
             <strong>Transcription failed.</strong>
           </p>
+          {m.transcriptionError && (
+            <p className="muted small" aria-label="Failure reason">
+              Reason: {m.transcriptionError}
+            </p>
+          )}
           <p className="muted">Your original recording is still safe.</p>
           <button
             className="btn btn-primary"
@@ -416,6 +444,11 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           <button
             className="btn"
             onClick={() => {
+              if (
+                m.summary &&
+                !window.confirm('Re-transcribe this meeting? The summary stays, but it was made from the current transcript.')
+              )
+                return;
               setError(null);
               setupAndTranscribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}
@@ -432,18 +465,24 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           </button>
           <button
             className="btn"
-            disabled={llmBusy}
-            title="Summarize with your configured AI assistant (Settings → AI assistant)"
+            disabled={llmBusy || !!llmProblem}
+            title={
+              llmProblem
+                ? `Set up the AI assistant first (${llmProblem})`
+                : 'Summarize with your configured AI assistant (Settings → AI assistant)'
+            }
             onClick={() => {
-              setLlmBusy(true);
               setError(null);
-              summarizeMeeting(m.id)
-                .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                .finally(() => setLlmBusy(false));
+              summarizeMeeting(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}
           >
             {llmBusy ? 'Summarizing…' : m.summary ? 'Re-summarize' : 'Summarize with LLM'}
           </button>
+          {llmProblem && (
+            <button type="button" className="link-btn" onClick={() => go({ name: 'settings', tab: 'ai' })}>
+              Set up the AI assistant
+            </button>
+          )}
         </div>
       )}
 
@@ -456,6 +495,11 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           peek={m.summary.text}
           actions={<CopyButton label="Copy summary" text={() => summaryMarkdown(m)} />}
         >
+          {summaryStale && (
+            <p className="muted small" role="note">
+              Made from an earlier transcript — Re-summarize to match the current one.
+            </p>
+          )}
           {m.summary.text && <p className="pre-wrap">{m.summary.text}</p>}
           {m.summary.keyPoints.length > 0 && (
             <>
@@ -470,70 +514,111 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           {(m.summary.actionItems?.length ?? 0) > 0 && (
             <>
               <strong>Action items</strong>
-              {gitlabConnected && actionItems.length > 0 ? (
+              {(gitlabConnected || calendarReady) && actionItems.length > 0 ? (
                 <>
                   <ul className="transcript" aria-label="Action items">
                     {actionItems.map((a) => {
                       const issue = issueFor(a.text);
-                      return (
-                        <li key={a.text}>
-                          {issue ? (
+                      const ev = eventFor(a.text);
+                      const done = (
+                        <>
+                          {issue && (
                             <>
-                              ✓ {a.text} —{' '}
-                              <a href={issue.url} target="_blank" rel="noreferrer" onClick={(e) => openGitlabLink(e, issue.url)}>
+                              {' '}
+                              <a
+                                className="item-tag"
+                                href={issue.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => openGitlabLink(e, issue.url)}
+                              >
                                 {issue.iid !== undefined ? `Issue #${issue.iid}` : 'Issue'}
                               </a>
-                              {issue.assignee ? ` · @${issue.assignee}` : ''}
+                              {issue.assignee ? ` @${issue.assignee}` : ''}
                             </>
-                          ) : (
+                          )}
+                          {ev && <span className="item-tag">Event {ev.startIso.replace('T', ' ')}</span>}
+                        </>
+                      );
+                      return (
+                        <li key={a.text}>
+                          {openFor(a.text) ? (
                             <label className="issue-pick">
                               <input
                                 type="checkbox"
-                                checked={picked.includes(a.text)}
-                                disabled={issueBusy}
+                                checked={selected.includes(a.text)}
+                                disabled={issueBusy || calBusy}
                                 onChange={(e) =>
-                                  setIssuePick(e.target.checked ? [...picked, a.text] : picked.filter((t) => t !== a.text))
+                                  setItemPick(e.target.checked ? [...selected, a.text] : selected.filter((t) => t !== a.text))
                                 }
                               />
-                              {a.text}
+                              <span>
+                                {a.text}
+                                {done}
+                              </span>
                             </label>
+                          ) : (
+                            <>
+                              ✓ {a.text}
+                              {done}
+                            </>
                           )}
                         </li>
                       );
                     })}
                   </ul>
-                  {pending.length > 0 && (
+                  {openItems.length > 0 && (
                     <div className="btn-row">
-                      <button
-                        className="btn"
-                        disabled={issueBusy || picked.length === 0}
-                        title={`Create one issue per selected action item in ${gitlabConfig.project}`}
-                        onClick={() => {
-                          setIssueBusy(true);
-                          setIssueMessage(null);
-                          setError(null);
-                          createGitlabActionIssues(m.id, picked)
-                            .then((created) => {
-                              setIssuePick(null);
-                              setIssueMessage(
-                                `Created ${created.length} GitLab issue${created.length === 1 ? '' : 's'} in ${gitlabConfig.project}.`,
-                              );
-                            })
-                            .catch((e: unknown) => {
-                              const created = (e as { created?: unknown[] }).created?.length ?? 0;
-                              setError(
-                                `${created ? `Created ${created} issue${created === 1 ? '' : 's'}, then: ` : ''}${
-                                  e instanceof Error ? e.message : String(e)
-                                }`,
-                              );
-                            })
-                            .finally(() => setIssueBusy(false));
-                        }}
-                      >
-                        {issueBusy
-                          ? 'Creating issues…'
-                          : `Create GitLab issue${picked.length === 1 ? '' : 's'} (${picked.length})`}
-                      </button>
+                      {gitlabConnected && pending.length > 0 && (
+                        <button
+                          className="btn"
+                          disabled={issueBusy || issueTargets.length === 0}
+                          title={`Create one issue per selected action item in ${gitlabConfig.project}`}
+                          onClick={() => {
+                            setIssueBusy(true);
+                            setIssueMessage(null);
+                            setError(null);
+                            createGitlabActionIssues(m.id, issueTargets.map((a) => a.text))
+                              .then((created) => {
+                                setItemPick(null);
+                                setIssueMessage(
+                                  `Created ${created.length} GitLab issue${created.length === 1 ? '' : 's'} in ${gitlabConfig.project}.`,
+                                );
+                              })
+                              .catch((e: unknown) => {
+                                const created = (e as { created?: unknown[] }).created?.length ?? 0;
+                                setError(
+                                  `${created ? `Created ${created} issue${created === 1 ? '' : 's'}, then: ` : ''}${
+                                    e instanceof Error ? e.message : String(e)
+                                  }`,
+                                );
+                              })
+                              .finally(() => setIssueBusy(false));
+                          }}
+                        >
+                          {issueBusy
+                            ? 'Creating issues…'
+                            : `Create GitLab issue${issueTargets.length === 1 ? '' : 's'} (${issueTargets.length})`}
+                        </button>
+                      )}
+                      {calendarReady && calPending.length > 0 && (
+                        <button
+                          className="btn"
+                          disabled={calBusy || eventTargets.length === 0 || !!calDrafts}
+                          title="One editable calendar event per selected action item; nothing is sent until you approve"
+                          onClick={() => {
+                            setCalMessage(null);
+                            setCalDraft(null);
+                            setCalDrafts(eventTargets.map((a) => ({ item: a.text, draft: actionItemEventDraft(m, a) })));
+                            setSectionsOpen(['calendar'], true);
+                            requestAnimationFrame(() =>
+                              document.getElementById('sec-calendar')?.scrollIntoView({ block: 'start' }),
+                            );
+                          }}
+                        >
+                          {`Prepare calendar event${eventTargets.length === 1 ? '' : 's'} (${eventTargets.length})`}
+                        </button>
+                      )}
                     </div>
                   )}
                   {issueMessage && (
@@ -543,11 +628,24 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
                   )}
                 </>
               ) : (
-                <ul className="transcript" aria-label="Action items">
-                  {m.summary.actionItems!.map((a, i) => (
-                    <li key={i}>☐ {a}</li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="transcript" aria-label="Action items">
+                    {m.summary.actionItems!.map((a, i) => (
+                      <li key={i}>☐ {a}</li>
+                    ))}
+                  </ul>
+                  <p className="muted small mb-0">
+                    Turn action items into{' '}
+                    <button type="button" className="link-btn" onClick={() => go({ name: 'settings', tab: 'sharing' })}>
+                      GitLab issues
+                    </button>{' '}
+                    or{' '}
+                    <button type="button" className="link-btn" onClick={() => go({ name: 'settings', tab: 'calendar' })}>
+                      calendar events
+                    </button>
+                    .
+                  </p>
+                </>
               )}
             </>
           )}
@@ -570,7 +668,22 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           label="Transcript text"
           badge={<span className="badge">{detailSegments.length} {detailSegments.length === 1 ? 'line' : 'lines'}</span>}
           peek={detailSegments[0]?.text}
-          actions={<CopyButton label="Copy transcript" text={() => segmentsToText(detailSegments)} />}
+          actions={
+            <>
+              <label className="check-row follow-toggle" title="Highlight and scroll to the line being played">
+                <input
+                  type="checkbox"
+                  checked={follow}
+                  onChange={(e) => {
+                    setFollow(e.target.checked);
+                    setPref(FOLLOW_PREF, e.target.checked ? 'true' : 'false');
+                  }}
+                />
+                Follow playback
+              </label>
+              <CopyButton label="Copy transcript" text={() => segmentsToText(detailSegments)} />
+            </>
+          }
         >
           <div className="transcript-search">
             <input
@@ -591,6 +704,7 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
             query={filter}
             canSeek={detailTracks.length > 0}
             onSeek={playSegment}
+            follow={follow}
           />
           {filtered.length === 0 && <p className="muted">No matches in this transcript.</p>}
         </Section>
@@ -603,8 +717,8 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           badge={m.calendarEvents?.length ? <span className="badge">{m.calendarEvents.length} created</span> : undefined}
         >
           <div className="muted">
-            Put the summary&apos;s action items on your company calendar, one event each,
-            or prepare a custom event. Nothing is sent until you approve the drafts.
+            Pick action items in the summary and press <strong>Prepare calendar events</strong>, or prepare a
+            custom event. Nothing is sent until you approve the drafts.
           </div>
           {!calendarReady && (
             <p className="muted small mb-0">
@@ -616,32 +730,6 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           )}
           {calendarReady && (
           <>
-          {actionItems.length > 0 && !calDrafts && !calDraft && (
-              <ul className="transcript" aria-label="Items to schedule">
-                {actionItems.map((a) => {
-                  const ev = eventFor(a.text);
-                  return (
-                    <li key={a.text}>
-                      {ev ? (
-                        <>✓ {a.text} — {ev.startIso.replace('T', ' ')}</>
-                      ) : (
-                        <label className="issue-pick">
-                          <input
-                            type="checkbox"
-                            checked={calPicked.includes(a.text)}
-                            disabled={calBusy}
-                            onChange={(e) =>
-                              setCalPick(e.target.checked ? [...calPicked, a.text] : calPicked.filter((t) => t !== a.text))
-                            }
-                          />
-                          {a.text}
-                        </label>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-          )}
           {calDrafts ? (
             <>
               {calDrafts.map((d, i) => (
@@ -701,22 +789,6 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
             </>
           ) : !calDraft ? (
             <div className="btn-row">
-              {calPending.length > 0 && (
-                <button
-                  className="btn"
-                  disabled={calPicked.length === 0}
-                  onClick={() => {
-                    setCalMessage(null);
-                    setCalDrafts(
-                      calPending
-                        .filter((a) => calPicked.includes(a.text))
-                        .map((a) => ({ item: a.text, draft: actionItemEventDraft(m, a) })),
-                    );
-                  }}
-                >
-                  {`Prepare event${calPicked.length === 1 ? '' : 's'} from action items (${calPicked.length})`}
-                </button>
-              )}
               <button
                 className="btn"
                 onClick={() => {
@@ -1179,26 +1251,78 @@ function highlight(text: string, query: string): React.ReactNode {
   return parts;
 }
 
+const FOLLOW_PREF = 'transcript-follow';
+/** Rows rendered at first; more load as the end comes into view. */
+const PAGE = 400;
+
+/** Typing in a field (or on a select) keeps its keys. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el?.tagName) return false;
+  return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+}
+
+/** Playhead shared by the player and the transcript (outside React state: no page re-render per tick). */
+const playhead = { ms: -1, playing: false, listeners: new Set<() => void>() };
+function setPlayhead(seconds: number, playing: boolean): void {
+  playhead.ms = Math.round(seconds * 1000);
+  playhead.playing = playing;
+  playhead.listeners.forEach((l) => l());
+}
+function subscribePlayhead(listener: () => void): () => void {
+  playhead.listeners.add(listener);
+  return () => playhead.listeners.delete(listener);
+}
+
+
 /**
- * The transcript rows. Memoised: Meeting Detail re-renders on every store
- * tick (download/transcription progress), and a long meeting has thousands
- * of rows.
+ * The transcript rows. Memoised (Meeting Detail re-renders on every store
+ * tick), rendered in pages of 400 so a very long meeting opens instantly,
+ * and following the player: the line being played is highlighted and, with
+ * Follow on, scrolled into view.
  */
 const TranscriptList = memo(function TranscriptList({
   segments,
   query,
   canSeek,
   onSeek,
+  follow,
 }: {
   segments: TranscriptSegment[];
   query: string;
   canSeek: boolean;
   onSeek: (startMs: number, speaker?: string) => void;
+  follow: boolean;
 }): React.JSX.Element {
+  const ms = useSyncExternalStore(subscribePlayhead, () => playhead.ms);
+  const playing = useSyncExternalStore(subscribePlayhead, () => playhead.playing);
+  const active = activeSegmentIndex(segments, ms);
+  const [limit, setLimit] = useState(PAGE);
+  const shown = Math.min(segments.length, Math.max(limit, active + 50));
+  const listRef = useRef<HTMLUListElement>(null);
+  const moreRef = useRef<HTMLLIElement>(null);
+
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) setLimit((l) => l + PAGE);
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [shown, segments.length]);
+
+  useEffect(() => {
+    if (!follow || !playing || active < 0) return;
+    listRef.current
+      ?.querySelector<HTMLElement>(`li[data-index="${active}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [active, follow, playing]);
+
   return (
-    <ul className="transcript">
-      {segments.map((s) => (
-        <li key={s.id}>
+    <ul className="transcript" ref={listRef}>
+      {segments.slice(0, shown).map((s, i) => (
+        <li key={s.id} data-index={i} className={i === active ? 'active' : undefined} aria-current={i === active ? 'true' : undefined}>
           <button
             type="button"
             className="ts ts-seek"
@@ -1212,6 +1336,13 @@ const TranscriptList = memo(function TranscriptList({
           {highlight(s.text, query)}
         </li>
       ))}
+      {shown < segments.length && (
+        <li ref={moreRef} className="transcript-more">
+          <button type="button" className="link-btn" onClick={() => setLimit(segments.length)}>
+            Show all {segments.length} lines
+          </button>
+        </li>
+      )}
     </ul>
   );
 });

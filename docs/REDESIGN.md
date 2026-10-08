@@ -72,6 +72,11 @@ suite relies on (`.sidebar .model-chip`, `h1 + p.muted`, `.transcript li`,
 | `ribbon-card-title` as a toggle (`Section`) | every Meeting Detail card: ▾/▸ + caps title is one button; collapsed = title bar only, with a muted one-line peek and title-bar actions (`btn-sm` **Copy**) |
 | `.section-nav` (app-only) | sticky white strip under the Meeting Detail eyebrow: classic-blue `link-btn` jump links + `btn-sm` **Collapse all** |
 | `.error-toast` / `.notice-toast` (app-only) | fixed hard-bordered boxes (2 px red / 2 px black, no shadow) for errors and "Transcript ready" |
+| `.item-tag` (app-only) | hairline caps tag after an action item: `Issue #N` (link) / `Event <date>` |
+| `.start-bar` (app-only) | New Meeting: sticky white strip with a top hairline holding Start / Import / Cancel |
+| `.tabs` as filters | Dashboard status filter (`aria-pressed`), counts in the label; replaces the stats strip |
+| `.row-menu` (app-only) | **⋯** square per meeting row; opens a hairline box with Rename / Delete |
+| `.transcript li.active` | the line being played: yellow-tinted row with a 4 px black left rule (hard edge, no shadow blur) |
 | `.danger-zone` | Meeting Detail **Delete** card: salmon title bar, red border |
 | `.transcript` + `.issue-pick` + `.event-draft` | **Calendar event** card: **Items to schedule** checkbox list (✓ + start once scheduled), then one `.event-draft` fieldset per item (hairline rule on top, uppercase `field-label` legend "Event N of M", title/start/end/description inputs), `btn-primary` **Approve & create N events**; **Prepare custom event** stays a plain `btn` |
 | `ribbon-card-title` + `.transcript` | **Live transcript** card on Active Meeting (white body, ruled `.transcript` list capped at 320 px with its own scroll, lime/salmon status badge) and the **Live transcription** card in Settings → Models |

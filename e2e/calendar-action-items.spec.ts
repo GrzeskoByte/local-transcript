@@ -84,10 +84,10 @@ test('picked action items become one approved calendar event each, never twice',
   await summarizedMeeting(page, 'Release sync');
 
   const card = page.getByRole('region', { name: 'Calendar event' });
-  const items = card.getByRole('list', { name: 'Items to schedule' });
+  const items = page.getByRole('list', { name: 'Action items' });
   await expect(items.getByRole('checkbox')).toHaveCount(3);
   await items.getByRole('checkbox', { name: 'Unassigned: book the demo room' }).uncheck();
-  await card.getByRole('button', { name: 'Prepare events from action items (2)' }).click();
+  await page.getByRole('button', { name: 'Prepare calendar events (2)' }).click();
 
   // One editable draft per item; nothing is sent yet.
   const anna = card.getByRole('group', { name: 'Event for Anna: send the release notes (2026-10-20)' });
@@ -111,9 +111,9 @@ test('picked action items become one approved calendar event each, never twice',
 
   // After a reload the scheduled items are ticked; only the remaining one is offered.
   await page.reload();
-  await expect(items).toContainText('✓ Anna: send the release notes (2026-10-20) — 2026-10-20 09:00');
+  await expect(items).toContainText('✓ Anna: send the release notes (2026-10-20)Event 2026-10-20 09:00');
   await expect(items.getByRole('checkbox')).toHaveCount(1);
-  await expect(card.getByRole('button', { name: 'Prepare event from action items (1)' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Prepare calendar event (1)' })).toBeVisible();
   await expect(card.getByRole('list', { name: 'Created calendar events' })).toContainText('Changelog review with Bob');
 });
 
@@ -122,7 +122,7 @@ test('a failed event keeps only the drafts not yet created', async ({ page }) =>
   await mockDesktop(page, 2);
   await summarizedMeeting(page, 'Flaky calendar');
   const card = page.getByRole('region', { name: 'Calendar event' });
-  await card.getByRole('button', { name: 'Prepare events from action items (3)' }).click();
+  await page.getByRole('button', { name: 'Prepare calendar events (3)' }).click();
   await card.getByRole('button', { name: 'Approve & create 3 events' }).click();
   await expect(card.getByRole('status')).toContainText('Created 1 event, then: HTTP 503 from the calendar server');
   await expect(card.getByRole('group')).toHaveCount(2);

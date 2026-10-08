@@ -1,10 +1,15 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useReducer, useRef, useState } from 'react';
 import { applyPlaybackOutput } from '../../audio/devices';
 import { decodeForPlayback, formatClock, PcmPlayer, peaks, playbackContext } from '../../audio/player';
+import { getPref, setPref } from '../../platform/prefs';
 
 export interface AudioPlayerHandle {
   /** Seek to `seconds` and play (transcript segment clicks). */
   playFrom(seconds: number): void;
+  /** Play / pause (Space). */
+  toggle(): void;
+  /** Jump by `seconds` (← / →). */
+  skip(seconds: number): void;
 }
 
 interface Props {
@@ -13,10 +18,19 @@ interface Props {
   /** Shown before the audio is decoded. */
   durationHintMs?: number;
   label?: string;
+  /** Playhead updates (≈5/s while playing), for the transcript to follow. */
+  onTime?: (seconds: number, playing: boolean) => void;
 }
 
 const BINS = 240;
 const SKIP_S = 15;
+const SPEEDS = [1, 1.25, 1.5, 2];
+const SPEED_PREF = 'playback-speed';
+
+function savedSpeed(): number {
+  const v = Number(getPref(SPEED_PREF));
+  return SPEEDS.includes(v) ? v : 1;
+}
 
 /**
  * Web Audio player (see `src/audio/player.ts` for why not <audio>). The
@@ -24,9 +38,12 @@ const SKIP_S = 15;
  * meeting stays instant and nothing runs right after Stop.
  */
 export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
-  { load, durationHintMs = 0, label },
+  { load, durationHintMs = 0, label, onTime },
   ref,
 ) {
+  const onTimeRef = useRef(onTime);
+  onTimeRef.current = onTime;
+  const [speed, setSpeed] = useState(savedSpeed);
   const playerRef = useRef<PcmPlayer | null>(null);
   const loadingRef = useRef<Promise<PcmPlayer> | null>(null);
   const mounted = useRef(true);
@@ -59,8 +76,11 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
         const ctx = playbackContext();
         void applyPlaybackOutput(ctx);
         const player = new PcmPlayer(audio, ctx, () => {
-          if (mounted.current) rerender();
+          if (!mounted.current) return;
+          rerender();
+          onTimeRef.current?.(player.currentTime, player.playing);
         });
+        player.setRate(savedSpeed());
         if (!mounted.current) {
           player.dispose();
           throw new Error('unmounted');
@@ -99,6 +119,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
           p.seek(seconds);
           await p.play();
         }),
+      toggle: () => withPlayer((p) => (p.playing ? p.pause() : p.play())),
+      skip: (seconds: number) => withPlayer((p) => p.seek(p.currentTime + seconds)),
     }),
     [withPlayer],
   );
@@ -148,6 +170,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
           type="button"
           className="btn btn-primary player-play"
           aria-label={isPlaying ? 'Pause' : 'Play'}
+          title={`${isPlaying ? 'Pause' : 'Play'} (Space)`}
           disabled={status === 'loading'}
           onClick={() => withPlayer((p) => (p.playing ? p.pause() : p.play()))}
         >
@@ -157,6 +180,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
           type="button"
           className="btn player-skip"
           aria-label={`Back ${SKIP_S} seconds`}
+          title={`Back ${SKIP_S} seconds (←)`}
           disabled={status === 'loading'}
           onClick={() => withPlayer((p) => p.seek(p.currentTime - SKIP_S))}
         >
@@ -166,6 +190,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
           type="button"
           className="btn player-skip"
           aria-label={`Forward ${SKIP_S} seconds`}
+          title={`Forward ${SKIP_S} seconds (→)`}
           disabled={status === 'loading'}
           onClick={() => withPlayer((p) => p.seek(p.currentTime + SKIP_S))}
         >
@@ -185,6 +210,20 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
             withPlayer((p) => p.seek(t));
           }}
         />
+        <button
+          type="button"
+          className="btn player-speed"
+          aria-label={`Speed ${speed}×`}
+          title="Playback speed (pitch stays natural)"
+          onClick={() => {
+            const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]!;
+            setSpeed(next);
+            setPref(SPEED_PREF, String(next));
+            playerRef.current?.setRate(next);
+          }}
+        >
+          {speed}×
+        </button>
         <span className="player-time" aria-label="Playback position">
           {formatClock(current)} / {formatClock(duration)}
         </span>

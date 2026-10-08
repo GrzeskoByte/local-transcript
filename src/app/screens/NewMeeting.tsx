@@ -72,12 +72,13 @@ export function NewMeeting(): React.JSX.Element {
   };
 
   // Import an existing audio file as a meeting — no microphone involved.
+  const [importing, setImporting] = useState(false);
   const importFile = (file: File): void => {
-    setBusy(true);
+    setImporting(true);
     setError(null);
     importMeeting(file)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false));
+      .finally(() => setImporting(false));
   };
 
   return (
@@ -237,7 +238,11 @@ export function NewMeeting(): React.JSX.Element {
           </div>
         )}
 
-        <div className="btn-row">
+        {/* Always in reach: Start stays at the bottom of the window while the form scrolls. */}
+        <div className="start-bar">
+          <button className="btn btn-primary btn-lg" disabled={busy || importing || !secure} onClick={start}>
+            {busy ? 'Starting…' : '● Start Recording'}
+          </button>
           <input
             ref={fileInputRef}
             type="file"
@@ -252,16 +257,10 @@ export function NewMeeting(): React.JSX.Element {
           <button
             type="button"
             className="btn"
-            disabled={busy}
+            disabled={busy || importing}
             onClick={() => fileInputRef.current?.click()}
           >
-            ⬆ Import audio file
-          </button>
-        </div>
-
-        <div className="btn-row">
-          <button className="btn btn-primary btn-lg" disabled={busy || !secure} onClick={start}>
-            {busy ? 'Starting…' : '● Start Recording'}
+            {importing ? 'Importing…' : '⬆ Import audio file'}
           </button>
           <button className="btn" onClick={() => go({ name: 'dashboard' })}>
             Cancel

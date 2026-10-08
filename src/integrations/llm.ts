@@ -310,6 +310,17 @@ export async function getOpencodeStatus(): Promise<OpencodeStatus> {
 }
 
 /** Convenience factory that validates the config first. */
+/** What is missing before Summarize can run (null = ready). */
+export function llmConfigProblem(config: LlmConfig): string | null {
+  if (isLocalAgentPreset(config.preset)) {
+    if (!isDesktopApp()) return `${LLM_PRESET_LABELS[config.preset]} needs the desktop app`;
+    return config.model?.trim() ? null : 'no model chosen';
+  }
+  if (!config.baseUrl?.trim()) return 'no server address';
+  if (!config.model?.trim()) return 'no model chosen';
+  return null;
+}
+
 export function createLlmClient(config: LlmConfig): LlmClient {
   if (isLocalAgentPreset(config.preset)) {
     if (!config.model?.trim()) throw new Error('LLM settings incomplete: model');

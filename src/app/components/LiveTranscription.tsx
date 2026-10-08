@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../store.tsx';
+import { autoTranscribeEnabled, setAutoTranscribeEnabled } from '../auto-transcribe';
 
 const mb = (bytes: number) => `${Math.round(bytes / 1_048_576)} MB`;
 
@@ -131,5 +132,42 @@ export function LiveTranscriptionToggle(): React.JSX.Element | null {
         </p>
       )}
     </div>
+  );
+}
+
+/** Settings → Models: transcribe every recording right after Stop (opt-in). */
+export function AutoTranscribeSettings(): React.JSX.Element {
+  const { installedModels, go } = useApp();
+  const [on, setOn] = useState(autoTranscribeEnabled);
+  return (
+    <section className="card" aria-label="Transcribe after recording">
+      <div className="model-title">
+        <strong>Transcribe after recording</strong>
+        {on && <span className="badge badge-ok">On</span>}
+      </div>
+      <div className="muted">
+        Starts the transcription as soon as you press Stop, with your main model, so the transcript is ready when you
+        open the meeting. Recordings with a live transcript keep it. Off by default.
+      </div>
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            setAutoTranscribeEnabled(e.target.checked);
+            setOn(e.target.checked);
+          }}
+        />
+        Transcribe automatically after Stop
+      </label>
+      {on && installedModels.length === 0 && (
+        <p className="muted small mb-0">
+          No speech model is installed yet, so nothing will run.{' '}
+          <button type="button" className="link-btn" onClick={() => go({ name: 'dashboard' })}>
+            Set up transcription
+          </button>
+        </p>
+      )}
+    </section>
   );
 }

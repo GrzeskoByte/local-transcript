@@ -95,3 +95,22 @@ export function searchSegments(
   }
   return out;
 }
+
+/** Index of the segment playing at `ms` (segments sorted by start), or -1. */
+export function activeSegmentIndex(segments: TranscriptSegment[], ms: number): number {
+  if (ms < 0) return -1;
+  let lo = 0;
+  let hi = segments.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (segments[mid]!.startMs <= ms) {
+      found = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  if (found < 0) return -1;
+  const s = segments[found]!;
+  // Past this line's end and before the next one: nothing is "being said".
+  return ms <= Math.max(s.endMs, s.startMs + 1000) ? found : -1;
+}

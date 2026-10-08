@@ -54,7 +54,7 @@ test.beforeEach(async ({ page }) => {
 
 test('microphone chosen in Settings is used for recording and shown on New Meeting', async ({ page }) => {
   await page.goto('/#/settings');
-  await page.getByRole('tab', { name: 'App' }).click();
+  await page.getByRole('tab', { name: 'Audio' }).click();
   const card = page.getByRole('region', { name: 'Audio devices' });
   const mic = card.getByLabel('Microphone');
   await expect(mic.locator('option')).toHaveText(['System default', 'Built-in Mic', 'USB Podcast Mic']);

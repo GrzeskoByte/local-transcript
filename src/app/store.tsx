@@ -1,3 +1,4 @@
+import { autoTranscribeEnabled } from './auto-transcribe';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Meeting, RecordingMode, RecordingState } from '../domain/meeting';
 import { estimateDurationFromChunks, formatDuration, newMeetingId } from '../domain/meeting';
@@ -94,8 +95,8 @@ function reportStopTrace(trace: StopTrace): void {
   if (isDesktopApp()) void invokeDesktop('native_log', { message: line }).catch(() => undefined);
 }
 
-export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'app';
-const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'app'];
+export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'audio' | 'app';
+const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'audio', 'app'];
 
 export type Route =
   | { name: 'dashboard' }
@@ -208,6 +209,9 @@ interface AppState {
   saveLlmConfig: (config: LlmConfig) => Promise<void>;
   /** Summarize a transcribed meeting with the configured LLM provider. */
   summarizeMeeting: (meetingId: string) => Promise<MeetingSummary>;
+  summarizing: Record<string, true>;
+  /** The list Meeting Detail was opened from (its back link). */
+  returnTo: 'dashboard' | 'calendar';
   /** Result of the last update check (desktop only; null before any check). */
   updateInfo: UpdateInfo | null;
   /** Ask GitHub for a newer release (never installs anything). */
@@ -288,6 +292,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [detailTracks, setDetailTracks] = useState<AudioTrackView[]>([]);
   const [txProgress, setTxProgress] = useState<Record<string, number>>({});
   const [txStage, setTxStage] = useState<Record<string, TranscriptionStage>>({});
+  /** Meetings whose summary is being written (survives leaving the page). */
+  const [summarizing, setSummarizing] = useState<Record<string, true>>({});
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
   const checkUpdates = useCallback(async (): Promise<UpdateInfo> => {
@@ -337,6 +343,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   /** Meeting Detail currently shown (late async results must not land on another one). */
   const detailIdRef = useRef<string | null>(null);
   /** Live transcripts still finishing after Stop, by meeting id. */
+  /** Latest transcribe / installed-model count for the Stop flow (opt-in auto-transcribe). */
+  const transcribeRef = useRef<((id: string) => Promise<void>) | null>(null);
+  const installedCountRef = useRef(0);
   const liveDrainRef = useRef(new Map<string, { transcriber: LiveTranscriber; done: Promise<void> }>());
   const recorderRef = useRef<MediaRecorderAudioRecorder | NativeRecorder | null>(null);
   /** Desktop: what the native recorder can capture (null: webview recording only). */
@@ -463,7 +472,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     void getLlmConfig().then(setLlmConfigState).catch(() => undefined);
   }, []);
 
+  /** Where Meeting Detail's back link leads (the list the meeting was opened from). */
+  const [returnTo, setReturnTo] = useState<'dashboard' | 'calendar'>('dashboard');
+  const routeNameRef = useRef<Route['name']>('dashboard');
+  routeNameRef.current = route.name;
   const go = useCallback((r: Route) => {
+    if (r.name === 'detail' && (routeNameRef.current === 'calendar' || routeNameRef.current === 'dashboard')) {
+      setReturnTo(routeNameRef.current);
+    }
     if (r.name === 'dashboard') window.location.hash = '#/';
     else if (r.name === 'new') window.location.hash = '#/new';
     else if (r.name === 'active') window.location.hash = '#/active';
@@ -961,10 +977,20 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (meeting.transcriptionStatus !== 'completed') {
         throw new Error('Transcribe the meeting before summarizing it');
       }
-      const segments = await getSegments(meetingId);
-      const markdown = segmentsToMarkdown(meeting.title, meeting.startedAt, segments);
-      const client = createLlmClient(llmConfig);
-      const result = await client.summarize(meeting.title, markdown);
+      setSummarizing((cur) => ({ ...cur, [meetingId]: true }));
+      let result: Awaited<ReturnType<ReturnType<typeof createLlmClient>['summarize']>>;
+      try {
+        const segments = await getSegments(meetingId);
+        const markdown = segmentsToMarkdown(meeting.title, meeting.startedAt, segments);
+        const client = createLlmClient(llmConfig);
+        result = await client.summarize(meeting.title, markdown);
+      } finally {
+        setSummarizing((cur) => {
+          const next = { ...cur };
+          delete next[meetingId];
+          return next;
+        });
+      }
       const summary: MeetingSummary = {
         text: result.summary,
         keyPoints: result.keyPoints,
@@ -1105,6 +1131,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       await mirrorToDisk(updated, complete ? 'skip' : 'copy');
     })();
     if (liveRun) drainLive(updated.id, liveRun);
+    // Opt-in: start the whole-file transcription right away (never instead of
+    // a live transcript, and only with a model installed).
+    else if (autoTranscribeEnabled() && installedCountRef.current > 0) {
+      void transcribeRef.current?.(updated.id).catch(() => undefined);
+    }
     return updated;
   }
 
@@ -1377,6 +1408,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     void setModelMeta(next).catch(() => undefined);
   }, [nativeStatus, installedModels, modelMeta]);
 
+  transcribeRef.current = transcribe;
+  installedCountRef.current = installedModels.length;
+
   const setupAndTranscribe = useCallback(
     async (id: string) => {
       if (installedModels.length > 0) return transcribe(id);
@@ -1417,6 +1451,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       loadDetail,
       txProgress,
       txStage,
+      summarizing,
+      returnTo,
       transcribe,
       setupAndTranscribe,
       modelDownload,
@@ -1473,7 +1509,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
       recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting, renameMeeting,
       stopRecording, stopping, nativeDevices, detailMeeting, detailSegments, detailTracks, loadDetail,
-      txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
+      txProgress, txStage, summarizing, returnTo, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,
       liveDownload, downloadLiveModel, live,

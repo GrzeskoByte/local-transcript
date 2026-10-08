@@ -15,6 +15,7 @@
  */
 
 import { decodeOggNative } from './native-decode';
+import { resampleFloat, Wsola } from './time-stretch';
 
 /** Decode rate: plenty for speech, half the memory of 48 kHz (~170 MB/hour). */
 export const PLAYER_SAMPLE_RATE = 24000;
@@ -129,10 +130,14 @@ export class PcmPlayer {
   private timer: ReturnType<typeof setInterval> | null = null;
   private isPlaying = false;
   private position = 0;
-  /** ctx time at which output frame `anchorFrame` plays. */
+  /** ctx time at which source frame `anchorFrame` (output-rate units) plays. */
   private anchorTime = 0;
   private anchorFrame = 0;
-  private scheduledFrame = 0;
+  /** Output frames scheduled since the anchor. */
+  private scheduledOut = 0;
+  /** Playback speed; ≠ 1 plays through a pitch-keeping time-stretch. */
+  private speed = 1;
+  private stretcher: Wsola | null = null;
   private readonly totalFrames: number;
   private readonly outRate: number;
 
@@ -155,8 +160,27 @@ export class PcmPlayer {
 
   get currentTime(): number {
     if (!this.isPlaying) return this.position;
-    const t = this.anchorFrame / this.outRate + (this.ctx.currentTime - this.anchorTime);
+    const t = this.anchorFrame / this.outRate + (this.ctx.currentTime - this.anchorTime) * this.speed;
     return Math.max(0, Math.min(this.duration, t));
+  }
+
+  get rate(): number {
+    return this.speed;
+  }
+
+  /** Change the speed (0.5–3); keeps the position and keeps playing. */
+  setRate(rate: number): void {
+    const r = Math.max(0.5, Math.min(3, Number.isFinite(rate) ? rate : 1));
+    if (r === this.speed) return;
+    if (this.isPlaying) {
+      const t = this.currentTime;
+      this.stopSources();
+      this.speed = r;
+      this.anchor(t);
+    } else {
+      this.speed = r;
+    }
+    this.onChange();
   }
 
   get pcm(): Int16Array {
@@ -201,7 +225,11 @@ export class PcmPlayer {
   private anchor(seconds: number): void {
     this.anchorFrame = Math.min(this.totalFrames, Math.round(seconds * this.outRate));
     this.anchorTime = this.ctx.currentTime + START_LEAD_S;
-    this.scheduledFrame = this.anchorFrame;
+    this.scheduledOut = 0;
+    this.stretcher =
+      this.speed === 1
+        ? null
+        : new Wsola(this.audio.pcm, this.audio.sampleRate, this.speed, Math.round(seconds * this.audio.sampleRate));
     this.pump();
   }
 
@@ -218,24 +246,35 @@ export class PcmPlayer {
 
   /** Keep AHEAD_S of audio scheduled past the playhead. */
   private pump(): void {
-    const playhead = Math.round(this.currentTime * this.outRate);
-    const target = Math.min(this.totalFrames, playhead + Math.round(AHEAD_S * this.outRate));
+    const elapsedOut = Math.max(0, this.ctx.currentTime - this.anchorTime) * this.outRate;
+    const targetOut = elapsedOut + AHEAD_S * this.outRate;
     const sliceFrames = Math.round(SLICE_S * this.outRate);
-    while (this.scheduledFrame < target) {
-      const start = this.scheduledFrame;
-      const frames = Math.min(sliceFrames, this.totalFrames - start);
-      if (frames <= 0) break;
-      const buffer = this.ctx.createBuffer(1, frames, this.outRate);
-      resampleSlice(this.audio.pcm, this.audio.sampleRate, this.outRate, start, buffer.getChannelData(0));
+    while (this.scheduledOut < targetOut) {
+      let buffer: AudioBuffer;
+      let frames: number;
+      if (!this.stretcher) {
+        const start = this.anchorFrame + this.scheduledOut;
+        frames = Math.min(sliceFrames, this.totalFrames - start);
+        if (frames <= 0) break;
+        buffer = this.ctx.createBuffer(1, frames, this.outRate);
+        resampleSlice(this.audio.pcm, this.audio.sampleRate, this.outRate, start, buffer.getChannelData(0));
+      } else {
+        const chunk = this.stretcher.next(Math.round((sliceFrames * this.audio.sampleRate) / this.outRate));
+        if (chunk.length === 0) break;
+        frames = Math.max(1, Math.round((chunk.length * this.outRate) / this.audio.sampleRate));
+        buffer = this.ctx.createBuffer(1, frames, this.outRate);
+        resampleFloat(chunk, buffer.getChannelData(0));
+      }
+      const when = this.anchorTime + this.scheduledOut / this.outRate;
+      this.scheduledOut += frames;
       const node = this.ctx.createBufferSource();
       node.buffer = buffer;
       node.connect(this.ctx.destination);
-      const when = this.anchorTime + (start - this.anchorFrame) / this.outRate;
       const now = this.ctx.currentTime;
       if (when >= now) node.start(when);
       else if (now - when < frames / this.outRate) node.start(now, now - when);
       else {
-        this.scheduledFrame = start + frames;
+        node.disconnect();
         continue;
       }
       node.onended = () => {
@@ -243,7 +282,6 @@ export class PcmPlayer {
         node.disconnect();
       };
       this.sources.add(node);
-      this.scheduledFrame = start + frames;
     }
   }
 

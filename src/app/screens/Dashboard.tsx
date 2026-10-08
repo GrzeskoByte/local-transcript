@@ -12,6 +12,15 @@ import { isDesktopApp } from '../../platform/desktop.ts';
 const SEARCH_DEBOUNCE_MS = 200;
 const SEARCH_BATCH = 8;
 const MAX_HITS = 30;
+/** Meetings shown before "Show more". */
+const LIST_PAGE = 50;
+type StatusFilter = 'all' | 'not_started' | 'completed' | 'failed';
+const FILTERS: Array<[StatusFilter, string]> = [
+  ['all', 'All'],
+  ['not_started', 'Not transcribed'],
+  ['completed', 'Transcribed'],
+  ['failed', 'Failed'],
+];
 /** The search survives a trip to a meeting and back. */
 let lastQuery = '';
 
@@ -20,7 +29,13 @@ export function Dashboard(): React.JSX.Element {
   const {
     meetings, go, unfinished, recoverUnfinished, discardUnfinished, modelMeta, nativeStatus,
     installedModels, downloadModel, modelDownload, firstRunModel, databaseError, resetDatabase,
+    renameMeeting, deleteMeeting,
   } = useApp();
+  const [filterBy, setFilterBy] = useState<StatusFilter>('all');
+  const [limit, setLimit] = useState(LIST_PAGE);
+  /** Row being renamed: its id and the draft title. */
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
   const [resetState, setResetState] = useState<'idle' | 'confirm' | 'working'>('idle');
   const [resetError, setResetError] = useState<string | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -41,16 +56,35 @@ export function Dashboard(): React.JSX.Element {
       (m) => m.title.toLowerCase().includes(q) || (m.summary?.text ?? '').toLowerCase().includes(q),
     );
   }, [query, meetings]);
+  const visible = useMemo(
+    () =>
+      meetings.filter((m) =>
+        filterBy === 'all'
+          ? true
+          : filterBy === 'not_started'
+            ? m.transcriptionStatus === 'not_started' || m.transcriptionStatus === 'processing'
+            : m.transcriptionStatus === filterBy,
+      ),
+    [meetings, filterBy],
+  );
   const groups = useMemo(() => {
     const out: { label: string; items: typeof meetings }[] = [];
-    for (const m of meetings) {
+    for (const m of visible.slice(0, limit)) {
       const label = dayGroupLabel(m.createdAt);
       const last = out[out.length - 1];
       if (last && last.label === label) last.items.push(m);
       else out.push({ label, items: [m] });
     }
     return out;
-  }, [meetings]);
+  }, [visible, limit]);
+  const count = (f: StatusFilter): number =>
+    f === 'all'
+      ? meetings.length
+      : meetings.filter((m) =>
+          f === 'not_started'
+            ? m.transcriptionStatus === 'not_started' || m.transcriptionStatus === 'processing'
+            : m.transcriptionStatus === f,
+        ).length;
 
   useEffect(() => {
     let cancelled = false;
@@ -235,20 +269,6 @@ export function Dashboard(): React.JSX.Element {
         </section>
       )}
 
-      <div className="stats">
-        <div className="stat">
-          <div className="k">Meetings</div>
-          <div className="v">{meetings.length}</div>
-        </div>
-        <div className="stat">
-          <div className="k">Recorded</div>
-          <div className="v">{formatDuration(totalMs)}</div>
-        </div>
-        <div className="stat">
-          <div className="k">Transcribed</div>
-          <div className="v">{transcribed}</div>
-        </div>
-      </div>
 
       <div className="search-wrap">
         <span className="icon">
@@ -320,36 +340,119 @@ export function Dashboard(): React.JSX.Element {
         </div>
       ) : (
         <>
+          <div className="list-head">
+            <div className="tabs filter-tabs" role="group" aria-label="Filter meetings">
+              {FILTERS.filter(([f]) => f === 'all' || count(f) > 0).map(([f, label]) => (
+                <button
+                  key={f}
+                  type="button"
+                  className={`tab${filterBy === f ? ' active' : ''}`}
+                  aria-pressed={filterBy === f}
+                  onClick={() => {
+                    setFilterBy(f);
+                    setLimit(LIST_PAGE);
+                  }}
+                >
+                  {label} ({count(f)})
+                </button>
+              ))}
+            </div>
+            <span className="muted small">{formatDuration(totalMs)} recorded · {transcribed} transcribed</span>
+          </div>
+          {rowError && <p className="error">{rowError}</p>}
+          {visible.length === 0 && <p className="muted">No meetings match this filter.</p>}
           {groups.map((g) => (
             <section key={g.label} aria-label={g.label}>
               <h2>{g.label}</h2>
               <ul className="meeting-list">
                 {g.items.map((m) => (
-                  <li key={m.id}>
-                    <button className={`meeting-item mode-${m.mode}`} onClick={() => go({ name: 'detail', id: m.id })}>
-                      <span className="body">
-                        <span className="title">{m.title}</span>
-                        <span className="meta">
-                          {new Date(m.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} ·{' '}
-                          {formatDuration(m.durationMs)}
-                          {m.summary?.text ? ` · ${m.summary.text}` : ''}
+                  <li key={m.id} className="meeting-row">
+                    {renaming?.id === m.id ? (
+                      <form
+                        className="row-rename"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          setRowError(null);
+                          renameMeeting(m.id, renaming.title)
+                            .then(() => setRenaming(null))
+                            .catch((err: unknown) => setRowError(err instanceof Error ? err.message : String(err)));
+                        }}
+                      >
+                        <input
+                          className="input"
+                          aria-label="Meeting title"
+                          autoFocus
+                          value={renaming.title}
+                          onChange={(e) => setRenaming({ id: m.id, title: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') setRenaming(null);
+                          }}
+                        />
+                        <button type="submit" className="btn btn-primary btn-sm">Save</button>
+                        <button type="button" className="btn btn-sm" onClick={() => setRenaming(null)}>Cancel</button>
+                      </form>
+                    ) : (
+                      <button className={`meeting-item mode-${m.mode}`} onClick={() => go({ name: 'detail', id: m.id })}>
+                        <span className="body">
+                          <span className="title">{m.title}</span>
+                          <span className="meta">
+                            {new Date(m.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} ·{' '}
+                            {formatDuration(m.durationMs)}
+                            {m.summary?.text ? ` · ${m.summary.text}` : ''}
+                          </span>
                         </span>
-                      </span>
-                      <span className="pills">
-                        <span className={`pill pill-${m.mode}`}>
-                          {modeLabel(m.mode)}
+                        <span className="pills">
+                          <span className={`pill pill-${m.mode}`}>
+                            {modeLabel(m.mode)}
+                          </span>
+                          <span className={`pill pill-${m.transcriptionStatus === 'not_started' ? 'idle' : m.transcriptionStatus}`}>
+                            {m.transcriptionStatus === 'not_started' ? 'not transcribed' : m.transcriptionStatus}
+                          </span>
                         </span>
-                        <span className={`pill pill-${m.transcriptionStatus === 'not_started' ? 'idle' : m.transcriptionStatus}`}>
-                          {m.transcriptionStatus === 'not_started' ? 'not transcribed' : m.transcriptionStatus}
-                        </span>
-                      </span>
-                      <span className="chev">›</span>
-                    </button>
+                        <span className="chev">›</span>
+                      </button>
+                    )}
+                    <details className="row-menu">
+                      <summary aria-label={`Actions for ${m.title}`} title="Rename or delete">⋯</summary>
+                      <div className="row-menu-list">
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={(e) => {
+                            (e.currentTarget.closest('details') as HTMLDetailsElement).open = false;
+                            setRenaming({ id: m.id, title: m.title });
+                          }}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-danger"
+                          onClick={(e) => {
+                            (e.currentTarget.closest('details') as HTMLDetailsElement).open = false;
+                            if (!window.confirm(`Delete "${m.title}" and all its local data?`)) return;
+                            setRowError(null);
+                            deleteMeeting(m.id).catch((err: unknown) =>
+                              setRowError(err instanceof Error ? err.message : String(err)),
+                            );
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </details>
                   </li>
                 ))}
               </ul>
             </section>
           ))}
+          {visible.length > limit && (
+            <div className="btn-row">
+              <button type="button" className="btn" onClick={() => setLimit((l) => l + LIST_PAGE)}>
+                Show more ({visible.length - limit} older)
+              </button>
+            </div>
+          )}
         </>
       )}
     </>

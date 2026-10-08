@@ -35,6 +35,10 @@ audio.
   nothing is sent until you approve).
 - **Full-text search**, TXT/Markdown/JSON + audio export, per-meeting delete that
   removes every trace (OPFS chunks + IndexedDB).
+- **Built for long meetings** — collapsible sections with a jump bar, a transcript that
+  follows playback, 1×–2× speed without the chipmunk voice, copy buttons, keyboard keys
+  (Space, ←/→, Ctrl+F, Ctrl+N, P), meetings grouped by day with status filters, and an
+  optional **Transcribe after recording** setting (off by default).
 
 ## Requirements
 
@@ -96,13 +100,13 @@ npm run build         # frontend only (dist/)
 3. **Meeting Detail** — play back, then **Transcribe** (pick a downloaded model first
    in Settings). Search the transcript, export it, or delete everything.
 4. **Settings** — download/select models (tiered S–D), spoken language, microphone
-   access, GPU acceleration, local-files folder, GitLab credentials, and LLM provider.
-5. **Meeting Detail** — **Summarize with LLM** (needs Settings → LLM provider) writes
+   access, GPU acceleration, local-files folder, GitLab credentials, and AI assistant.
+5. **Meeting Detail** — **Summarize with LLM** (needs Settings → AI assistant) writes
    a summary + key points onto the meeting.
 
 ### LLM setup
 
-Settings → **LLM provider**: preset (OpenAI-compatible API, local Ollama, Open WebUI,
+Settings → **AI assistant**: preset (OpenAI-compatible API, local Ollama, Open WebUI,
 **OpenCode (local agent)**, custom), base URL, completions path, optional API key, model. **Test connection**
 sends a one-word probe. Note: this is the one feature that sends transcript text
 off-device unless you point it at local Ollama.

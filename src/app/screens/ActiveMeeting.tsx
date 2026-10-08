@@ -81,11 +81,11 @@ export function ActiveMeeting(): React.JSX.Element {
         ) : (
           <div className="btn-row">
             {paused ? (
-              <button className="btn-ghostlight btn" onClick={() => void resumeRecording()}>
+              <button className="btn-ghostlight btn" title="Resume (P)" onClick={() => void resumeRecording()}>
                 Resume
               </button>
             ) : (
-              <button className="btn-ghostlight btn" onClick={() => void pauseRecording()}>
+              <button className="btn-ghostlight btn" title="Pause (P)" onClick={() => void pauseRecording()}>
                 Pause
               </button>
             )}

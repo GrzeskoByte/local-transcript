@@ -66,6 +66,8 @@ export interface Meeting {
   /** How the current transcript was made: live while recording (a preview
    * from a small/fast model) or from the whole recording. Absent on older meetings. */
   transcriptSource?: { kind: 'live' | 'file'; model: string; createdAt: number };
+  /** Why the last transcription failed (cleared by a successful run). */
+  transcriptionError?: string;
   /** Set when a crash/interrupt leaves endedAt undefined. */
   unfinished?: boolean;
   /** Audio chunks that could not be written to storage (§19): the saved

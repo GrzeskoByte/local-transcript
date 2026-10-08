@@ -12,7 +12,28 @@ import { GearIcon, CalendarIcon, ListIcon, LogoMark } from './components/icons.t
 // Layout per DESIGN.md: black page frame → top banner (wordmark, phone-callout,
 // sticker) → white icon-label rail + content column → footer band.
 function Shell(): React.JSX.Element {
-  const { route, go, recordingState, modelMeta, updateInfo, txStage, txProgress, meetings } = useApp();
+  const {
+    route, go, recordingState, modelMeta, updateInfo, txStage, txProgress, meetings, pauseRecording, resumeRecording,
+  } = useApp();
+  // Global keys: Ctrl/Cmd+N = new meeting (or back to the running one); P = pause/resume while recording.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const el = e.target as HTMLElement | null;
+      const typing = !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+      const live = recordingState === 'RECORDING' || recordingState === 'PAUSED';
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        go({ name: live ? 'active' : 'new' });
+        return;
+      }
+      if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'p' && route.name === 'active') {
+        if (recordingState === 'RECORDING') void pauseRecording();
+        else if (recordingState === 'PAUSED') void resumeRecording();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [go, route.name, recordingState, pauseRecording, resumeRecording]);
   // Transcriptions run in the background: show them in the rail, and say
   // when one finishes while the user is elsewhere.
   const running = Object.keys(txStage);
@@ -66,8 +87,13 @@ function Shell(): React.JSX.Element {
           ) : (
             <span className="phone-callout">ON-DEVICE</span>
           )}
-          <button type="button" className="sticker sticker-cta" onClick={() => go({ name: 'new' })}>
-            New recording
+          <button
+            type="button"
+            className="sticker sticker-cta"
+            title="New meeting (Ctrl+N)"
+            onClick={() => go({ name: 'new' })}
+          >
+            New meeting
           </button>
         </div>
       </header>

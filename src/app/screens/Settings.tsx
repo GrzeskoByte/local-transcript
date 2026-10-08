@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useApp } from '../store.tsx';
+import { useApp, type SettingsTab } from '../store.tsx';
 import { groupByTier, type CatalogModel } from '../../asr/model-tiers';
 import {
   NATIVE_LANGUAGE_OPTIONS,
@@ -35,7 +35,7 @@ import {
 } from '../../integrations/calendar-detect';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
-import { LiveTranscriptionSettings } from '../components/LiveTranscription.tsx';
+import { LiveTranscriptionSettings, AutoTranscribeSettings } from '../components/LiveTranscription.tsx';
 import { nativeRecordingEnabled, setNativeRecordingEnabled } from '../../audio/native-recorder';
 import {
   getAutoCheck,
@@ -164,7 +164,7 @@ export function Settings(): React.JSX.Element {
       });
   }, [llmDraft.preset]);
 
-  const [tab, setTab] = useState<'models' | 'calendar' | 'sharing' | 'ai' | 'app'>(
+  const [tab, setTab] = useState<SettingsTab>(
     route.name === 'settings' && route.tab ? route.tab : 'models',
   );
   useEffect(() => {
@@ -271,6 +271,7 @@ export function Settings(): React.JSX.Element {
             ['calendar', 'Calendar'],
             ['sharing', 'Team sharing'],
             ['ai', 'AI assistant'],
+            ['audio', 'Audio'],
             ['app', 'App'],
           ] as const
         ).map(([id, label]) => (
@@ -306,6 +307,7 @@ export function Settings(): React.JSX.Element {
           models appear in the transcription options.
         </p>
       </section>
+      {isDesktopApp() && <AutoTranscribeSettings />}
       {isDesktopApp() && <LiveTranscriptionSettings />}
       </>
       )}
@@ -406,6 +408,11 @@ export function Settings(): React.JSX.Element {
           </>
         )}
       </section>
+      </>
+      )}
+
+      {tab === 'audio' && (
+      <>
       <section className="card" aria-label="Microphone access">
         <div className="model-title">
           <strong>Microphone access</strong>
@@ -469,7 +476,11 @@ export function Settings(): React.JSX.Element {
           </>
         )}
       </section>
+      </>
+      )}
 
+      {tab === 'app' && (
+      <>
       <section className="card" aria-label="Local files">
         <div className="model-title">
           <strong>Local files</strong>
@@ -923,9 +934,9 @@ export function Settings(): React.JSX.Element {
 
       {tab === 'ai' && (
       <>
-      <section className="card" aria-label="LLM provider">
+      <section className="card" aria-label="AI assistant">
         <div className="model-title">
-          <strong>LLM provider</strong>
+          <strong>AI assistant</strong>
         </div>
         <div className="muted">
           Optional summarization of transcripts. Local Ollama stays on this device;
@@ -1070,7 +1081,8 @@ export function Settings(): React.JSX.Element {
       </>
       )}
 
-      {tab === 'app' && (
+      {/* GPU belongs with the models it speeds up. */}
+      {tab === 'models' && (
       <>
       {(!nativeStatus || nativeStatus.backend === 'voxtype') && (
         <section className="card" aria-label="GPU acceleration">

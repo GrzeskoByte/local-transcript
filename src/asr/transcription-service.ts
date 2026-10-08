@@ -105,6 +105,7 @@ export class TranscriptionService {
       // Atomic, and a no-op if the meeting was deleted while we worked.
       await commitTranscript(meetingId, merged, {
         transcriptSource: { kind: 'file', model: modelId, createdAt: Date.now() },
+        transcriptionError: undefined,
       });
       this.callbacks.onProgress?.(meetingId, 1);
     } catch (err) {
@@ -113,7 +114,8 @@ export class TranscriptionService {
         const prev = (await getSegments(meetingId)).length > 0 ? 'completed' : 'not_started';
         await updateMeeting(meetingId, { transcriptionStatus: prev });
       } else {
-        await updateMeeting(meetingId, { transcriptionStatus: 'failed' });
+        // The reason is kept: Meeting Detail shows it (also after a restart).
+        await updateMeeting(meetingId, { transcriptionStatus: 'failed', transcriptionError: msg.slice(0, 500) });
       }
       throw err;
     } finally {
