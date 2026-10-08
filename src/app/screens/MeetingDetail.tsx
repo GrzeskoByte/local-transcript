@@ -19,7 +19,7 @@ import { actionItemsOf } from '../../integrations/gitlab';
 import { AgendaEditor, AgendaList } from '../components/Agenda.tsx';
 import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
-import { extractEventDraft } from '../../integrations/calendar';
+import { actionItemEventDraft, extractEventDraft, validateCalendarConfig } from '../../integrations/calendar';
 import type { CalendarEventDraft } from '../../integrations/calendar';
 import { claudeResumeCommand } from '../../integrations/llm';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
@@ -35,7 +35,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
     txProgress, txStage, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta,
     selectModel, language, setLanguage, nativeStatus, installedModels,
     uploadToGitlab, uploadSummaryToGitlab, summarizeMeeting, createCalendarEvent,
-    saveAgenda, uploadAgendaToGitlab, gitlabConfig, createGitlabActionIssues,
+    saveAgenda, uploadAgendaToGitlab, gitlabConfig, createGitlabActionIssues, calendarConfig,
   } = useApp();
   const [error, setError] = useState<string | null>(null);
   const [gitlabBusy, setGitlabBusy] = useState(false);
@@ -45,6 +45,10 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const [calDraft, setCalDraft] = useState<CalendarEventDraft | null>(null);
   const [calBusy, setCalBusy] = useState(false);
   const [calMessage, setCalMessage] = useState<string | null>(null);
+  /** Action items picked for calendar events (their text); null = default selection. */
+  const [calPick, setCalPick] = useState<string[] | null>(null);
+  /** One editable draft per picked action item, before approval. */
+  const [calDrafts, setCalDrafts] = useState<{ item: string; draft: CalendarEventDraft }[] | null>(null);
   /** Agenda being edited (null = viewing). */
   const [agendaDraft, setAgendaDraft] = useState<AgendaItem[] | null>(null);
   const [agendaBusy, setAgendaBusy] = useState(false);
@@ -97,6 +101,35 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const issueFor = (text: string) => m.gitlabActionIssues?.find((i) => i.item === text);
   const pending = actionItems.filter((a) => !issueFor(a.text));
   const picked = (issuePick ?? pending.map((a) => a.text)).filter((t) => pending.some((a) => a.text === t));
+  // Calendar events from action items: one per item, never twice.
+  const eventFor = (text: string) => m.calendarEvents?.find((e) => e.item === text);
+  const calPending = actionItems.filter((a) => !eventFor(a.text));
+  const calPicked = (calPick ?? calPending.map((a) => a.text)).filter((t) => calPending.some((a) => a.text === t));
+  const calendarReady = validateCalendarConfig(calendarConfig) === null;
+  const editCalDraft = (i: number, patch: Partial<CalendarEventDraft>): void =>
+    setCalDrafts((ds) => ds && ds.map((d, j) => (j === i ? { ...d, draft: { ...d.draft, ...patch } } : d)));
+  const createActionEvents = async (drafts: { item: string; draft: CalendarEventDraft }[]): Promise<void> => {
+    setCalBusy(true);
+    setCalMessage(null);
+    let created = 0;
+    try {
+      for (const d of drafts) {
+        await createCalendarEvent(m.id, d.draft, d.item);
+        created += 1;
+      }
+      setCalDrafts(null);
+      setCalPick(null);
+      setCalMessage(`Created ${created} calendar event${created === 1 ? '' : 's'}.`);
+    } catch (e: unknown) {
+      // Keep only the drafts that were not created, so a retry never duplicates.
+      setCalDrafts(drafts.slice(created));
+      setCalMessage(
+        `${created ? `Created ${created} event${created === 1 ? '' : 's'}, then: ` : ''}${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setCalBusy(false);
+    }
+  };
   const progress = txProgress[m.id];
   const stage: TranscriptionStage = txStage[m.id] ?? 'transcribing';
   // Primary signal is the meeting status; the stage fallback covers the gap
@@ -495,15 +528,117 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             <strong>Calendar event</strong>
           </div>
           <div className="muted">
-            Create follow-up events on your company calendar from this summary.
-            Nothing is sent until you approve the draft. Configure the server
-            under Settings → Calendar.
+            Put the summary&apos;s action items on your company calendar, one event each,
+            or prepare a custom event. Nothing is sent until you approve the drafts.
           </div>
-          {!calDraft ? (
+          {!calendarReady && (
+            <p className="muted small mb-0">Set up the calendar server under Settings → Calendar first.</p>
+          )}
+          {actionItems.length > 0 && !calDrafts && !calDraft && (
+              <ul className="transcript" aria-label="Items to schedule">
+                {actionItems.map((a) => {
+                  const ev = eventFor(a.text);
+                  return (
+                    <li key={a.text}>
+                      {ev ? (
+                        <>✓ {a.text} — {ev.startIso.replace('T', ' ')}</>
+                      ) : (
+                        <label className="issue-pick">
+                          <input
+                            type="checkbox"
+                            checked={calPicked.includes(a.text)}
+                            disabled={calBusy}
+                            onChange={(e) =>
+                              setCalPick(e.target.checked ? [...calPicked, a.text] : calPicked.filter((t) => t !== a.text))
+                            }
+                          />
+                          {a.text}
+                        </label>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+          )}
+          {calDrafts ? (
+            <>
+              {calDrafts.map((d, i) => (
+                <fieldset key={d.item} className="event-draft" aria-label={`Event for ${d.item}`}>
+                  <legend className="field-label">Event {i + 1} of {calDrafts.length}</legend>
+                  <input
+                    className="input"
+                    aria-label="Event title"
+                    value={d.draft.title}
+                    onChange={(e) => editCalDraft(i, { title: e.target.value })}
+                  />
+                  <div className="row-selects">
+                    <label>
+                      Starts
+                      <input
+                        className="input"
+                        type="datetime-local"
+                        aria-label="Event start"
+                        value={d.draft.startIso}
+                        onChange={(e) => editCalDraft(i, { startIso: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Ends
+                      <input
+                        className="input"
+                        type="datetime-local"
+                        aria-label="Event end"
+                        value={d.draft.endIso}
+                        onChange={(e) => editCalDraft(i, { endIso: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <textarea
+                    className="input"
+                    aria-label="Event description"
+                    rows={3}
+                    value={d.draft.description}
+                    onChange={(e) => editCalDraft(i, { description: e.target.value })}
+                  />
+                </fieldset>
+              ))}
+              <div className="btn-row">
+                <button
+                  className="btn btn-primary"
+                  disabled={calBusy || calDrafts.some((d) => !d.draft.title.trim())}
+                  onClick={() => void createActionEvents(calDrafts)}
+                >
+                  {calBusy
+                    ? 'Creating…'
+                    : `Approve & create ${calDrafts.length} event${calDrafts.length === 1 ? '' : 's'}`}
+                </button>
+                <button className="btn" disabled={calBusy} onClick={() => setCalDrafts(null)}>
+                  Discard
+                </button>
+              </div>
+            </>
+          ) : !calDraft ? (
             <div className="btn-row">
+              {calPending.length > 0 && (
+                <button
+                  className="btn"
+                  disabled={calPicked.length === 0}
+                  onClick={() => {
+                    setCalMessage(null);
+                    setCalDrafts(
+                      calPending
+                        .filter((a) => calPicked.includes(a.text))
+                        .map((a) => ({ item: a.text, draft: actionItemEventDraft(m, a) })),
+                    );
+                  }}
+                >
+                  {`Prepare event${calPicked.length === 1 ? '' : 's'} from action items (${calPicked.length})`}
+                </button>
+              )}
               <button
                 className="btn"
-                onClick={() =>
+                onClick={() => {
+                  setCalMessage(null);
                   setCalDraft(
                     extractEventDraft(
                       m.summary?.text ?? '',
@@ -511,10 +646,10 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
                       m.title,
                       m.startedAt,
                     ),
-                  )
-                }
+                  );
+                }}
               >
-                {m.calendarEvents?.length ? 'Prepare another event' : 'Prepare event from summary'}
+                Prepare custom event
               </button>
             </div>
           ) : (
@@ -564,7 +699,6 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
                 onChange={(e) => setCalDraft({ ...calDraft, location: e.target.value })}
                 placeholder="Room, link…"
               />
-              {calMessage && <p className="muted small mb-0">{calMessage}</p>}
               <div className="btn-row">
                 <button
                   className="btn btn-primary"
@@ -590,6 +724,11 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
                 </button>
               </div>
             </>
+          )}
+          {calMessage && (
+            <p className="muted small mb-0" role="status">
+              {calMessage}
+            </p>
           )}
           {m.calendarEvents && m.calendarEvents.length > 0 ? (
             <>

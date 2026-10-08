@@ -198,7 +198,8 @@ interface AppState {
   saveCalendarConfig: (config: CalendarConfig) => Promise<void>;
   switchCalendarProvider: (provider: CalendarProvider) => Promise<void>;
   fetchCalendarEvents: (start: Date, end: Date) => Promise<ServerEvent[]>;
-  createCalendarEvent: (meetingId: string, draft: CalendarEventDraft) => Promise<CalendarCreateResult>;
+  /** Create one approved event; `item` = the summary action item it is for. */
+  createCalendarEvent: (meetingId: string, draft: CalendarEventDraft, item?: string) => Promise<CalendarCreateResult>;
   /** Custom LLM provider settings (kept on-device in IndexedDB). */
   llmConfig: LlmConfig;
   saveLlmConfig: (config: LlmConfig) => Promise<void>;
@@ -914,11 +915,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [calendarConfig],
   );
 
+  const lastEventAtRef = useRef(0);
   const createCalendarEvent = useCallback(
-    async (meetingId: string, draft: CalendarEventDraft): Promise<CalendarCreateResult> => {
+    async (meetingId: string, draft: CalendarEventDraft, item?: string): Promise<CalendarCreateResult> => {
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw new Error('Meeting not found');
-      const createdAt = Date.now();
+      // Strictly increasing: events created back to back keep distinct UIDs.
+      const createdAt = Math.max(Date.now(), lastEventAtRef.current + 1);
+      lastEventAtRef.current = createdAt;
       const uid = eventUid(meetingId, createdAt);
       const transport = buildTransport(calendarConfig, draft, uid);
       await invokeDesktop<string>('native_calendar_create', { request: transport });
@@ -928,6 +932,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         title: draft.title,
         startIso: draft.startIso,
         createdAt,
+        ...(item ? { item } : {}),
       };
       const updated = await updateMeeting(meetingId, (cur) => ({
         ...cur,

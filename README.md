@@ -30,6 +30,9 @@ audio.
   `<Documents>/Local Transcribe/<title-id>/` (audio, transcript, manifest).
 - **GitLab team sharing** — publish transcripts to a project wiki, issue, or repo file;
   your team reads them through normal GitLab membership. No backend of ours.
+- **Action items → GitLab issues / calendar events** — after an LLM summary, pick action
+  items and turn each into a GitLab issue or a company-calendar event (editable drafts,
+  nothing is sent until you approve).
 - **Full-text search**, TXT/Markdown/JSON + audio export, per-meeting delete that
   removes every trace (OPFS chunks + IndexedDB).
 

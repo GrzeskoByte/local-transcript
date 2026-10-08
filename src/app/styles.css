@@ -317,6 +317,11 @@ input[type="checkbox"] { accent-color: var(--ink); width: 14px; height: 14px; ma
 /* actions after a field group sit a step further away than a hint */
 :is(.input, select, textarea, .row-selects) + .btn-row { margin-top: var(--sp-lg); }
 .card > .field-label:first-child { margin-top: 0; }
+/* one action-item event draft in the Calendar event card */
+.event-draft { border: 0; border-top: var(--hair); margin: var(--sp-lg) 0 0; padding: var(--sp-md) 0 0; min-width: 0; }
+.event-draft > legend { float: left; width: 100%; padding: 0; margin: 0 0 var(--field-gap); }
+.event-draft > legend + * { clear: both; }
+.event-draft textarea { margin-top: var(--group-gap); }
 .issue-pick { display: flex; align-items: flex-start; gap: var(--sp-sm); cursor: pointer; }
 .check-row { display: flex; align-items: center; gap: var(--sp-sm); margin-top: var(--group-gap); }
 .search-wrap { position: relative; margin: var(--sp-lg) 0 var(--sp-xs); }

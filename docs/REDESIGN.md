@@ -69,6 +69,7 @@ suite relies on (`.sidebar .model-chip`, `h1 + p.muted`, `.transcript li`,
 | `ex-data-table-cell` | transcript rows, model rows, calendar grid: 1 px black rules |
 | `.loader` (app-only) | **Saving recording…** in the Active Meeting hero while Stop runs (`.rec-saving`: white box, square `.spinner`, replaces the buttons) |
 | `.transcript` list + checkboxes (`.issue-pick`) | Summary card **Action items** when GitLab is set up: one checkbox row per pending item, `Issue #N` link (classic link blue) once created, plain `btn` **Create GitLab issues (N)** |
+| `.transcript` + `.issue-pick` + `.event-draft` | **Calendar event** card: **Items to schedule** checkbox list (✓ + start once scheduled), then one `.event-draft` fieldset per item (hairline rule on top, uppercase `field-label` legend "Event N of M", title/start/end/description inputs), `btn-primary` **Approve & create N events**; **Prepare custom event** stays a plain `btn` |
 | `ribbon-card-title` + `.transcript` | **Live transcript** card on Active Meeting (white body, ruled `.transcript` list capped at 320 px with its own scroll, lime/salmon status badge) and the **Live transcription** card in Settings → Models |
 
 ### Tint assignment (one family per "product line")

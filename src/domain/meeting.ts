@@ -109,6 +109,8 @@ export interface CalendarEventRecord {
   title: string;
   startIso: string;
   createdAt: number;
+  /** The summary action item this event was created for (absent = custom event). */
+  item?: string;
 }
 
 /** MediaRecorder timeslice: every stored chunk holds about this much audio. */

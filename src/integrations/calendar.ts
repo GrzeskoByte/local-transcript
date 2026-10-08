@@ -10,6 +10,8 @@
 
 import { invokeDesktop } from '../platform/desktop';
 import { decodeXmlText, parseIcs, type IcsRange } from './ics';
+import type { ActionItem } from '../domain/action-items';
+import type { Meeting } from '../domain/meeting';
 
 export type CalendarProvider = 'caldav' | 'graph' | 'ews';
 
@@ -176,6 +178,42 @@ export function extractEventDraft(
   const end = new Date(day.getTime() + 60 * 60 * 1000);
   const description = [title, ...keyPoints.map((k) => `• ${k}`)].join('\n');
   return { title, startIso: toLocalIso(day), endIso: toLocalIso(end), description, location: '' };
+}
+
+/** First working day (Mon–Fri) after `from`. */
+export function nextWorkingDay(from: Date): Date {
+  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  do d.setDate(d.getDate() + 1);
+  while (d.getDay() === 0 || d.getDay() === 6);
+  return d;
+}
+
+/**
+ * One event per action item: title = the task, on its due date at 09:00 when
+ * that is a calendar date, else the next working day after the meeting at
+ * 10:00; 30 minutes; description = owner, due and the meeting it came from.
+ */
+export function actionItemEventDraft(meeting: Meeting, item: ActionItem): CalendarEventDraft {
+  let start: Date;
+  if (item.dueDate) {
+    const [y, mo, d] = item.dueDate.split('-').map(Number);
+    start = new Date(y!, mo! - 1, d!, 9, 0);
+  } else {
+    start = nextWorkingDay(new Date(meeting.startedAt));
+    start.setHours(10, 0, 0, 0);
+  }
+  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  const title = item.task.length > 120 ? `${item.task.slice(0, 119)}…` : item.task;
+  const description = [
+    item.task,
+    ...(item.owner || item.due ? [''] : []),
+    ...(item.owner ? [`Owner: ${item.owner}`] : []),
+    ...(item.due ? [`Due: ${item.due}`] : []),
+    '',
+    `From the meeting "${meeting.title || 'Untitled'}" (${toLocalIso(new Date(meeting.startedAt)).slice(0, 10)}).`,
+    ...(meeting.summary?.text ? ['', meeting.summary.text.replace(/\n+/g, ' ')] : []),
+  ].join('\n');
+  return { title, startIso: toLocalIso(start), endIso: toLocalIso(end), description, location: '' };
 }
 
 function icsEscape(text: string): string {
