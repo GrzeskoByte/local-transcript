@@ -101,7 +101,8 @@ export type Route =
   | { name: 'dashboard' }
   | { name: 'new' }
   | { name: 'active' }
-  | { name: 'detail'; id: string }
+  /** `q`: a search to pre-fill the transcript filter with (Dashboard hits). */
+  | { name: 'detail'; id: string; q?: string }
   | { name: 'settings'; tab?: SettingsTab }
   | { name: 'calendar' };
 
@@ -141,6 +142,8 @@ interface AppState {
   retrySaving: () => Promise<boolean>;
   /** Delete a meeting everywhere, stopping its transcription first (§23). */
   deleteMeeting: (id: string) => Promise<void>;
+  /** Change a meeting's title (blank = "Untitled meeting"). */
+  renameMeeting: (id: string, title: string) => Promise<void>;
   stopRecording: () => Promise<Meeting | null>;
   /** True from the Stop click until the recording is saved (Active Meeting shows a loader). */
   stopping: boolean;
@@ -384,7 +387,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     // Hash routing so navigation survives reloads.
     const sync = () => {
       const h = window.location.hash;
-      if (h.startsWith('#/meeting/')) setRoute({ name: 'detail', id: decodeURIComponent(h.slice(10)) });
+      if (h.startsWith('#/meeting/')) {
+        const [rawId, rawQuery] = h.slice(10).split('?q=');
+        const q = rawQuery ? decodeURIComponent(rawQuery) : undefined;
+        setRoute({ name: 'detail', id: decodeURIComponent(rawId ?? ''), ...(q ? { q } : {}) });
+      }
       else if (h === '#/new') setRoute({ name: 'new' });
       else if (h === '#/active') setRoute({ name: 'active' });
       else if (h === '#/settings') setRoute({ name: 'settings' });
@@ -462,7 +469,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     else if (r.name === 'active') window.location.hash = '#/active';
     else if (r.name === 'settings') window.location.hash = r.tab ? `#/settings/${r.tab}` : '#/settings';
     else if (r.name === 'calendar') window.location.hash = '#/calendar';
-    else window.location.hash = `#/meeting/${encodeURIComponent(r.id)}`;
+    else window.location.hash = `#/meeting/${encodeURIComponent(r.id)}${r.q ? `?q=${encodeURIComponent(r.q)}` : ''}`;
     setRoute(r);
   }, []);
 
@@ -620,7 +627,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const now = Date.now();
       const meeting: Meeting = {
         id,
-        title: title.trim() || 'Untitled meeting',
+        title:
+          title.trim() ||
+          `Meeting ${new Date(now).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`,
         mode,
         createdAt: now,
         startedAt: now,
@@ -1102,13 +1111,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const loadDetail = useCallback(async (id: string) => {
     detailIdRef.current = id;
     const meeting = await getMeeting(id);
+    // A newer navigation won: never show this (slower) load's meeting.
+    if (detailIdRef.current !== id) return;
     setDetailMeeting(meeting ?? null);
     if (!meeting) {
       setDetailSegments([]);
       setDetailTracks([]);
       return;
     }
-    setDetailSegments(await getSegments(id));
+    const segments = await getSegments(id);
+    if (detailIdRef.current !== id) return;
+    setDetailSegments(segments);
     // One player per track; two-way recordings expose "Me" and "Others".
     const tracks = await listTracks(id).catch(() => [] as string[]);
     setDetailTracks(
@@ -1145,12 +1158,26 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         });
         await refresh();
         const m = await getMeeting(id);
-        if (m) setDetailMeeting(m);
-        setDetailSegments(await getSegments(id));
+        // Only the meeting on screen: a background run must not replace
+        // another meeting the user opened meanwhile.
+        if (m) setDetailMeeting((d) => (detailIdRef.current === id ? m : d));
+        const segs = await getSegments(id);
+        setDetailSegments((cur) => (detailIdRef.current === id ? segs : cur));
         void mirrorToDisk(m ?? null);
       }
     },
     [modelMeta.modelId, refresh, txService, mirrorToDisk],
+  );
+
+  const renameMeeting = useCallback(
+    async (meetingId: string, title: string) => {
+      const clean = title.trim() || 'Untitled meeting';
+      const updated = await updateMeeting(meetingId, (cur) => ({ ...cur, title: clean }));
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      // Not mirrored: the disk folder is named after the title at recording time.
+      await refresh();
+    },
+    [refresh],
   );
 
   const deleteMeeting = useCallback(
@@ -1380,6 +1407,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       resumeRecording,
       retrySaving,
       deleteMeeting,
+      renameMeeting,
       stopRecording,
       stopping,
       nativeRecording: nativeDevices,
@@ -1443,7 +1471,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
-      recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting,
+      recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting, renameMeeting,
       stopRecording, stopping, nativeDevices, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,

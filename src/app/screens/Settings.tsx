@@ -280,7 +280,7 @@ export function Settings(): React.JSX.Element {
             role="tab"
             aria-selected={tab === id}
             className={`tab${tab === id ? ' active' : ''}`}
-            onClick={() => setTab(id)}
+            onClick={() => go({ name: 'settings', tab: id })}
           >
             {label}
           </button>

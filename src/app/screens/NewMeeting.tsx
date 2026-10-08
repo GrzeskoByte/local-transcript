@@ -14,6 +14,9 @@ import { macDeviceAudioLimit } from '../../audio/device-audio.ts';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { LiveTranscriptionToggle } from '../components/LiveTranscription.tsx';
 import { nativeRecordingEnabled } from '../../audio/native-recorder';
+import { getPref, setPref } from '../../platform/prefs';
+
+const LAST_MODE_PREF = 'last-recording-mode';
 
 export function NewMeeting(): React.JSX.Element {
   const { startRecording, importMeeting, storageWarning, go, systemAudio, nativeRecording } = useApp();
@@ -23,7 +26,15 @@ export function NewMeeting(): React.JSX.Element {
     systemAudio?.available === true || (nativeRecording?.systemAudio === true && nativeRecordingEnabled());
   const macLimit = directSystemAudio ? null : macDeviceAudioLimit();
   const [title, setTitle] = useState('');
-  const [mode, setMode] = useState<RecordingMode>('speaker');
+  // The last source is remembered: someone recording calls picks Mic + Device once.
+  const [mode, setModeState] = useState<RecordingMode>(() => {
+    const saved = getPref(LAST_MODE_PREF);
+    return saved === 'device' || saved === 'dual' ? saved : 'speaker';
+  });
+  const setMode = (m: RecordingMode): void => {
+    setModeState(m);
+    setPref(LAST_MODE_PREF, m);
+  };
   const [agenda, setAgenda] = useState<AgendaItem[] | null>(null);
   const [error, setError] = useState<MediaAccessFailure | string | null>(null);
   const [busy, setBusy] = useState(false);

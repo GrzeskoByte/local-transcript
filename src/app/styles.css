@@ -281,6 +281,7 @@ button.phone-callout:hover { text-decoration: underline; }
 .btn-danger:hover:not(:disabled) { background: var(--primary); color: var(--on-primary); border-color: var(--ink); }
 .btn-lg { font-size: var(--fs-h3); padding: var(--sp-md) var(--sp-xxl); min-height: 42px; box-shadow: var(--bevel); }
 .btn-lg:active:not(:disabled) { box-shadow: none; transform: translate(2px, 2px); }
+.btn-sm { min-height: 22px; padding: var(--sp-xxs) var(--sp-sm); font-size: var(--fs-caption); }
 .btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-sm); margin-top: var(--sp-md); }
 .link-btn {
   background: none; border: 0; padding: 0; cursor: pointer;
@@ -610,6 +611,55 @@ details.tier-card[open] > summary { border-bottom: var(--hair); }
 .audio-warnings { border-color: var(--ink); }
 .audio-details summary { cursor: pointer; margin: var(--sp-s) 0; font-family: var(--font-ui); font-weight: 700; font-size: var(--fs-button); text-transform: uppercase; }
 .audio-details ul { padding-left: 18px; }
+
+/* background transcription in the rail + its "ready" notice */
+.busy-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-toast {
+  position: fixed; right: var(--sp-lg); bottom: var(--sp-lg); z-index: 20;
+  display: flex; align-items: center; gap: var(--sp-sm); max-width: min(520px, calc(100vw - 32px));
+  padding: var(--sp-sm) var(--sp-md); background: var(--canvas); border: 2px solid var(--ink);
+}
+/* errors stay on screen wherever the button that failed was */
+.error-toast {
+  position: fixed; left: 50%; bottom: var(--sp-lg); transform: translateX(-50%); z-index: 20;
+  display: flex; align-items: center; gap: var(--sp-md); max-width: min(720px, calc(100vw - 32px));
+  padding: var(--sp-sm) var(--sp-md); background: var(--canvas); border: 2px solid var(--primary);
+  color: var(--primary); font-size: var(--fs-body);
+}
+/* Meeting Detail title + Rename */
+.title-row { display: flex; align-items: center; gap: var(--sp-sm); flex-wrap: wrap; }
+.title-row h1 { margin: 0; }
+.title-input { flex: 1; min-width: 200px; font-family: var(--font-display); font-weight: 900; font-size: var(--fs-h1); }
+/* ---------- collapsible sections (Meeting Detail) ---------- */
+.collapse-toggle {
+  appearance: none; display: inline-flex; align-items: center; gap: var(--sp-sm);
+  background: none; border: 0; padding: 0; margin: 0; color: inherit; cursor: pointer;
+  font: inherit; text-transform: inherit; text-align: left;
+}
+.collapse-toggle:focus-visible { outline: 2px dotted var(--ink); outline-offset: 2px; }
+.collapse-mark { display: inline-block; width: 1em; font-family: var(--font-ui); }
+.collapse-peek {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-body); font-weight: 400; font-size: var(--fs-body-sm); text-transform: none; color: var(--muted);
+}
+.collapse-actions { margin-left: auto; display: inline-flex; gap: var(--sp-xs); }
+.collapsible > .model-title:first-child { cursor: default; }
+/* a collapsed card is just its title bar */
+.collapsible:has(> .collapse-body[hidden]) > .model-title:first-child { margin-bottom: calc(-1 * var(--sp-md)); border-bottom: 0; }
+.section-nav {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-xs) var(--sp-lg);
+  margin: 0 0 var(--sp-lg); padding: var(--sp-s) var(--sp-md); background: var(--canvas); border: var(--hair);
+  font-size: var(--fs-body-sm);
+}
+.section-nav-end { margin-left: auto; }
+.section-nav + * { scroll-margin-top: 48px; }
+.collapsible { scroll-margin-top: 48px; }
+.transcript-search {
+  position: sticky; top: 40px; z-index: 4; display: flex; align-items: center; gap: var(--sp-md);
+  padding: var(--sp-xs) 0; background: var(--canvas);
+}
+.transcript-search .input { flex: 1; }
+.transcript mark { background: var(--yellow); color: var(--ink); }
 
 /* ---------- utilities ---------- */
 .stack { display: flex; flex-direction: column; gap: var(--sp-md); }

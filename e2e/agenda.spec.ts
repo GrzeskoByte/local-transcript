@@ -79,7 +79,7 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await page.reload();
   await expect(page.getByRole('region', { name: 'Meeting agenda' })).toContainText('@anna · 15 min');
 
-  await page.getByRole('button', { name: 'Agenda', exact: true }).click();
+  await page.getByRole('button', { name: 'Agenda file', exact: true }).click();
   await expect(page.getByRole('status', { name: 'Export saved' })).toContainText(
     'Saved to /home/me/Downloads/Agenda-Meeting-agenda.md',
   );

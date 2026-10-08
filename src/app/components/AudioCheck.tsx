@@ -1,3 +1,4 @@
+import { Section } from './Section.tsx';
 import { useState } from 'react';
 import {
   formatAt,
@@ -62,13 +63,16 @@ export function AudioCheckCard({
   const bt = d.native?.start.cards.filter((c) => c.name.startsWith('bluez')) ?? [];
 
   return (
-    <section className="card" aria-label="Audio check">
-      <div className="model-title">
-        <strong>Audio check</strong>
+    <Section
+      id="audio-check"
+      title="Audio check"
+      badge={
         <span className={`badge${problems.length ? ' badge-warn' : ''}`}>
           {problems.length ? `${problems.length} problem${problems.length > 1 ? 's' : ''}` : 'OK'}
         </span>
-      </div>
+      }
+      peek={problems[0]?.title}
+    >
       {!d.complete && (
         <p className="muted small">Measured until the recording was interrupted.</p>
       )}
@@ -138,6 +142,6 @@ export function AudioCheckCard({
         </button>
         {copied && <p className="muted small mb-0">{copied}</p>}
       </details>
-    </section>
+    </Section>
   );
 }

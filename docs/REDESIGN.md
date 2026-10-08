@@ -69,6 +69,10 @@ suite relies on (`.sidebar .model-chip`, `h1 + p.muted`, `.transcript li`,
 | `ex-data-table-cell` | transcript rows, model rows, calendar grid: 1 px black rules |
 | `.loader` (app-only) | **Saving recording…** in the Active Meeting hero while Stop runs (`.rec-saving`: white box, square `.spinner`, replaces the buttons) |
 | `.transcript` list + checkboxes (`.issue-pick`) | Summary card **Action items** when GitLab is set up: one checkbox row per pending item, `Issue #N` link (classic link blue) once created, plain `btn` **Create GitLab issues (N)** |
+| `ribbon-card-title` as a toggle (`Section`) | every Meeting Detail card: ▾/▸ + caps title is one button; collapsed = title bar only, with a muted one-line peek and title-bar actions (`btn-sm` **Copy**) |
+| `.section-nav` (app-only) | sticky white strip under the Meeting Detail eyebrow: classic-blue `link-btn` jump links + `btn-sm` **Collapse all** |
+| `.error-toast` / `.notice-toast` (app-only) | fixed hard-bordered boxes (2 px red / 2 px black, no shadow) for errors and "Transcript ready" |
+| `.danger-zone` | Meeting Detail **Delete** card: salmon title bar, red border |
 | `.transcript` + `.issue-pick` + `.event-draft` | **Calendar event** card: **Items to schedule** checkbox list (✓ + start once scheduled), then one `.event-draft` fieldset per item (hairline rule on top, uppercase `field-label` legend "Event N of M", title/start/end/description inputs), `btn-primary` **Approve & create N events**; **Prepare custom event** stays a plain `btn` |
 | `ribbon-card-title` + `.transcript` | **Live transcript** card on Active Meeting (white body, ruled `.transcript` list capped at 320 px with its own scroll, lime/salmon status badge) and the **Live transcription** card in Settings → Models |
 

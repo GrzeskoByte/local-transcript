@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useApp, formatDuration } from '../store.tsx';
 import { CHUNK_MS, modeLabel } from '../../domain/meeting';
 import type { TranscriptionStage } from '../../asr/engine';
@@ -7,7 +7,7 @@ import {
   describeNativeRuntime,
   NATIVE_LANGUAGE_OPTIONS,
 } from '../../asr/model-manager';
-import { searchSegments } from '../../domain/transcript';
+import { searchSegments, segmentsToText, type TranscriptSegment } from '../../domain/transcript';
 import {
   exportAgenda,
   exportAudio,
@@ -15,7 +15,7 @@ import {
   revealExport,
   type ExportResult,
 } from '../../features/meetings/exports';
-import { actionItemsOf } from '../../integrations/gitlab';
+import { actionItemsOf, summaryMarkdown } from '../../integrations/gitlab';
 import { AgendaEditor, AgendaList } from '../components/Agenda.tsx';
 import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
@@ -25,20 +25,28 @@ import { claudeResumeCommand } from '../../integrations/llm';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { applyPlaybackOutput } from '../../audio/devices';
-import { playbackContext } from '../../audio/player';
+import { formatClock, playbackContext } from '../../audio/player';
 import { AudioPlayer, type AudioPlayerHandle } from '../components/AudioPlayer.tsx';
 import { AudioCheckCard } from '../components/AudioCheck.tsx';
+import { Section, setSectionsOpen, useCollapsedSections } from '../components/Section.tsx';
+import { CopyButton } from '../components/CopyButton.tsx';
 
-export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
+export function MeetingDetail({ id, query }: { id: string; query?: string }): React.JSX.Element {
   const {
-    detailMeeting, detailSegments, detailTracks, loadDetail, go, deleteMeeting,
+    detailMeeting, detailSegments, detailTracks, loadDetail, go, deleteMeeting, renameMeeting,
     txProgress, txStage, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta,
     selectModel, language, setLanguage, nativeStatus, installedModels,
     uploadToGitlab, uploadSummaryToGitlab, summarizeMeeting, createCalendarEvent,
     saveAgenda, uploadAgendaToGitlab, gitlabConfig, createGitlabActionIssues, calendarConfig,
   } = useApp();
   const [error, setError] = useState<string | null>(null);
-  const [gitlabBusy, setGitlabBusy] = useState(false);
+  const collapsedSections = useCollapsedSections();
+  /** Completed meetings hide the model/language pickers until asked. */
+  const [showTxSettings, setShowTxSettings] = useState(false);
+  /** Title being edited (null = not renaming). */
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  /** Which GitLab upload is running (one at a time). */
+  const [gitlabBusy, setGitlabBusy] = useState<'transcript' | 'summary' | 'agenda' | null>(null);
   const [gitlabMessage, setGitlabMessage] = useState<string | null>(null);
   const [llmBusy, setLlmBusy] = useState(false);
   const [filter, setFilter] = useState('');
@@ -58,25 +66,29 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   const [issueMessage, setIssueMessage] = useState<string | null>(null);
   /** Files the last export wrote (desktop: in Downloads). */
   const [exported, setExported] = useState<string[]>([]);
-  const [exportBusy, setExportBusy] = useState(false);
-  const runExport = (work: () => Promise<ExportResult | ExportResult[]>): void => {
+  /** Which export is running (its button says Exporting…). */
+  const [exportBusy, setExportBusy] = useState<string | null>(null);
+  const runExport = (what: string, work: () => Promise<ExportResult | ExportResult[]>): void => {
     setError(null);
     setExported([]);
-    setExportBusy(true);
+    setExportBusy(what);
     work()
       .then((result) => {
         const paths = (Array.isArray(result) ? result : [result]).filter((p): p is string => !!p);
         setExported(paths);
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setExportBusy(false));
+      .finally(() => setExportBusy(null));
   };
   /** One player per track; transcript timestamps seek the matching one. */
   const players = useRef(new Map<string, AudioPlayerHandle>());
-  const playSegment = (startMs: number, speaker?: string): void => {
-    const track = detailTracks.find((t) => speaker && t.label === speaker) ?? detailTracks[0];
-    if (track) players.current.get(track.track)?.playFrom(startMs / 1000);
-  };
+  const playSegment = useCallback(
+    (startMs: number, speaker?: string): void => {
+      const track = detailTracks.find((t) => speaker && t.label === speaker) ?? detailTracks[0];
+      if (track) players.current.get(track.track)?.playFrom(startMs / 1000);
+    },
+    [detailTracks],
+  );
 
   /** Desktop webview swallows target="_blank": open GitLab links externally. */
   const openGitlabLink = (e: React.MouseEvent, url: string): void => {
@@ -89,9 +101,27 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
 
   useEffect(() => {
     setAgendaDraft(null);
+    setFilter(query ?? '');
+    setShowTxSettings(false);
+    setTitleDraft(null);
     void loadDetail(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, query]);
+
+  // Ctrl/Cmd+F jumps to the transcript search instead of the webview's find bar.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f') return;
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="Search transcript"]');
+      if (!input) return;
+      e.preventDefault();
+      setSectionsOpen(['transcript'], true);
+      input.focus();
+      input.select();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   if (!detailMeeting) return <p className="muted">Loading…</p>;
   const m = detailMeeting;
@@ -155,18 +185,64 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
       </button>
 
       <div className="page-head detail-head tint-peach">
-        <h1>{m.title}</h1>
+        {titleDraft === null ? (
+          <h1>{m.title}</h1>
+        ) : (
+          <form
+            className="title-row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              renameMeeting(m.id, titleDraft)
+                .then(() => setTitleDraft(null))
+                .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+            }}
+          >
+            <input
+              className="input title-input"
+              aria-label="Meeting title"
+              autoFocus
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setTitleDraft(null);
+              }}
+            />
+            <button type="submit" className="btn btn-primary btn-sm">Save</button>
+            <button type="button" className="btn btn-sm" onClick={() => setTitleDraft(null)}>Cancel</button>
+          </form>
+        )}
         <p className="muted">
           {m.durationEstimated ? '≈ ' : ''}{formatDuration(m.durationMs)} · Recorded {new Date(m.createdAt).toLocaleString()}
           {m.durationEstimated ? ' · recovered after an interruption' : ''}
+          {titleDraft === null && (
+            <>
+              {' · '}
+              <button type="button" className="link-btn" onClick={() => setTitleDraft(m.title)}>
+                Rename
+              </button>
+            </>
+          )}
         </p>
         <div className="pill-row">
           <span className={`pill pill-${m.mode}`}>{modeLabel(m.mode)}</span>
-          <span className={`pill pill-${m.transcriptionStatus === 'not_started' ? 'processing' : m.transcriptionStatus}`}>
+          <span className={`pill pill-${m.transcriptionStatus === 'not_started' ? 'idle' : m.transcriptionStatus}`}>
             {m.transcriptionStatus === 'not_started' ? 'not transcribed' : m.transcriptionStatus}
           </span>
         </div>
       </div>
+
+      <SectionNav
+        sections={[
+          { id: 'playback', label: 'Recording' },
+          ...(m.agenda?.items.length || agendaDraft ? [{ id: 'agenda', label: 'Agenda' }] : []),
+          ...(m.summary ? [{ id: 'summary', label: 'Summary' }] : []),
+          ...(m.summary ? [{ id: 'calendar', label: 'Calendar' }] : []),
+          ...(detailSegments.length > 0 ? [{ id: 'transcript', label: 'Transcript' }] : []),
+          ...(m.diagnostics ? [{ id: 'audio-check', label: 'Audio check' }] : []),
+          { id: 'manage', label: 'Export & share' },
+        ]}
+        collapsed={collapsedSections}
+      />
 
       {(m.unsavedChunks ?? 0) > 0 && (
         <section className="banner mt-3" role="alert" aria-label="Recording has gaps">
@@ -181,7 +257,7 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
       {/* Web Audio player, not <audio>: in the AppImage every <audio> is a
           GStreamer playbin whose teardown can deadlock the page (see
           src/audio/player.ts). */}
-      <section className="card" aria-label="Recording playback">
+      <Section id="playback" title="Recording" label="Recording playback">
         {detailTracks.length === 0 ? (
           <p className="muted">Recording audio unavailable.</p>
         ) : (
@@ -205,64 +281,10 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
         {detailTracks.length > 0 && (
           <AudioDevicePickers playback onPlaybackChange={() => void applyPlaybackOutput(playbackContext())} />
         )}
-      </section>
-
-      {m.diagnostics && <AudioCheckCard diagnostics={m.diagnostics} stopTrace={m.stopTrace} />}
-
-      <section className="card" aria-label="Meeting agenda">
-        <div className="model-title">
-          <strong>Agenda</strong>
-          {m.agenda && <span className="badge">{m.agenda.items.length} topics</span>}
-        </div>
-        {agendaDraft ? (
-          <>
-            <AgendaEditor items={agendaDraft} onChange={setAgendaDraft} />
-            <div className="btn-row">
-              <button
-                className="btn btn-primary"
-                disabled={agendaBusy}
-                onClick={() => {
-                  setAgendaBusy(true);
-                  setError(null);
-                  saveAgenda(m.id, agendaDraft)
-                    .then(() => setAgendaDraft(null))
-                    .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                    .finally(() => setAgendaBusy(false));
-                }}
-              >
-                {agendaBusy ? 'Saving…' : 'Save agenda'}
-              </button>
-              <button className="btn" disabled={agendaBusy} onClick={() => setAgendaDraft(null)}>
-                Cancel
-              </button>
-            </div>
-          </>
-        ) : m.agenda?.items.length ? (
-          <>
-            <AgendaList items={m.agenda.items} />
-            <div className="btn-row">
-              <button className="btn" onClick={() => setAgendaDraft(m.agenda?.items ?? [])}>
-                Edit agenda
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="muted mt-0">
-              Plan the topics for this meeting. The agenda is included in transcript exports and can be
-              uploaded to GitLab.
-            </p>
-            <div className="btn-row mt-0">
-              <button className="btn" onClick={() => setAgendaDraft([newAgendaItem()])}>
-                Create agenda
-              </button>
-            </div>
-          </>
-        )}
-      </section>
+      </Section>
 
       <h2>Transcript</h2>
-      {!busy && (
+      {!busy && (m.transcriptionStatus !== 'completed' || showTxSettings) && (
         <div className="card" aria-label="Transcription settings">
           <div className="row-selects">
             <label>
@@ -401,9 +423,17 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             Re-transcribe
           </button>
           <button
+            type="button"
+            className="link-btn"
+            aria-expanded={showTxSettings}
+            onClick={() => setShowTxSettings((v) => !v)}
+          >
+            {showTxSettings ? 'Hide model & language' : 'Model & language…'}
+          </button>
+          <button
             className="btn"
             disabled={llmBusy}
-            title="Summarize with your configured LLM provider (Settings → LLM provider)"
+            title="Summarize with your configured AI assistant (Settings → AI assistant)"
             onClick={() => {
               setLlmBusy(true);
               setError(null);
@@ -418,11 +448,14 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
       )}
 
       {m.summary && (
-        <section className="card" aria-label="Meeting summary">
-          <div className="model-title">
-            <strong>Summary</strong>
-            <span className="badge">{m.summary.model}</span>
-          </div>
+        <Section
+          id="summary"
+          title="Summary"
+          label="Meeting summary"
+          badge={<span className="badge">{m.summary.model}</span>}
+          peek={m.summary.text}
+          actions={<CopyButton label="Copy summary" text={() => summaryMarkdown(m)} />}
+        >
           {m.summary.text && <p className="pre-wrap">{m.summary.text}</p>}
           {m.summary.keyPoints.length > 0 && (
             <>
@@ -519,21 +552,70 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             </>
           )}
           {m.summary.sessionId && <ClaudeSessionHint sessionId={m.summary.sessionId} />}
-        </section>
+        </Section>
+      )}
+
+      {error && (
+        <div className="error-toast" role="alert">
+          <span>{error}</span>
+          <button type="button" className="btn btn-sm" onClick={() => setError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
+      {detailSegments.length > 0 && (
+        <Section
+          id="transcript"
+          title="Transcript"
+          label="Transcript text"
+          badge={<span className="badge">{detailSegments.length} {detailSegments.length === 1 ? 'line' : 'lines'}</span>}
+          peek={detailSegments[0]?.text}
+          actions={<CopyButton label="Copy transcript" text={() => segmentsToText(detailSegments)} />}
+        >
+          <div className="transcript-search">
+            <input
+              className="input"
+              aria-label="Search transcript"
+              placeholder="Search transcript…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+            {filter.trim() && (
+              <span className="muted small" role="status">
+                {filtered.length} of {detailSegments.length} lines
+              </span>
+            )}
+          </div>
+          <TranscriptList
+            segments={filtered}
+            query={filter}
+            canSeek={detailTracks.length > 0}
+            onSeek={playSegment}
+          />
+          {filtered.length === 0 && <p className="muted">No matches in this transcript.</p>}
+        </Section>
       )}
 
       {m.summary && (
-        <section className="card" aria-label="Calendar event">
-          <div className="model-title">
-            <strong>Calendar event</strong>
-          </div>
+        <Section
+          id="calendar"
+          title="Calendar event"
+          badge={m.calendarEvents?.length ? <span className="badge">{m.calendarEvents.length} created</span> : undefined}
+        >
           <div className="muted">
             Put the summary&apos;s action items on your company calendar, one event each,
             or prepare a custom event. Nothing is sent until you approve the drafts.
           </div>
           {!calendarReady && (
-            <p className="muted small mb-0">Set up the calendar server under Settings → Calendar first.</p>
+            <p className="muted small mb-0">
+              No company calendar is set up yet.{' '}
+              <button type="button" className="link-btn" onClick={() => go({ name: 'settings', tab: 'calendar' })}>
+                Set up the calendar
+              </button>
+            </p>
           )}
+          {calendarReady && (
+          <>
           {actionItems.length > 0 && !calDrafts && !calDraft && (
               <ul className="transcript" aria-label="Items to schedule">
                 {actionItems.map((a) => {
@@ -725,6 +807,8 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               </div>
             </>
           )}
+          </>
+          )}
           {calMessage && (
             <p className="muted small mb-0" role="status">
               {calMessage}
@@ -753,190 +837,254 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
               </p>
             )
           )}
-        </section>
+        </Section>
       )}
 
-      {error && <p className="error">{error}</p>}
-      {!busy && modelMeta.state !== 'ready' && (
-        <p className="muted">Tip: download the local speech model from My Meetings for offline use.</p>
-      )}
+      {(agendaDraft || m.agenda?.items.length) ? (
+      <Section
+        id="agenda"
+        title="Agenda"
+        label="Meeting agenda"
+        badge={m.agenda?.items.length ? <span className="badge">{m.agenda.items.length} topics</span> : undefined}
+      >
+        {agendaDraft ? (
+          <>
+            <AgendaEditor items={agendaDraft} onChange={setAgendaDraft} />
+            <div className="btn-row">
+              <button
+                className="btn btn-primary"
+                disabled={agendaBusy}
+                onClick={() => {
+                  setAgendaBusy(true);
+                  setError(null);
+                  saveAgenda(m.id, agendaDraft)
+                    .then(() => setAgendaDraft(null))
+                    .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                    .finally(() => setAgendaBusy(false));
+                }}
+              >
+                {agendaBusy ? 'Saving…' : 'Save agenda'}
+              </button>
+              <button className="btn" disabled={agendaBusy} onClick={() => setAgendaDraft(null)}>
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : m.agenda?.items.length ? (
+          <>
+            <AgendaList items={m.agenda.items} />
+            <div className="btn-row">
+              <button className="btn" onClick={() => setAgendaDraft(m.agenda?.items ?? [])}>
+                Edit agenda
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="muted mt-0">
+              Plan the topics for this meeting. The agenda is included in transcript exports and can be
+              uploaded to GitLab.
+            </p>
+            <div className="btn-row mt-0">
+              <button className="btn" onClick={() => setAgendaDraft([newAgendaItem()])}>
+                Create agenda
+              </button>
+            </div>
+          </>
+        )}
+      </Section>
+      ) : null}
 
-      {detailSegments.length > 0 && (
-        <section className="mt-2">
-          <input
-            className="input"
-            aria-label="Search transcript"
-            placeholder="Search transcript…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
-          <ul className="transcript">
-            {filtered.map((s) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  className="ts ts-seek"
-                  title="Play from here"
-                  disabled={detailTracks.length === 0}
-                  onClick={() => playSegment(s.startMs, s.speaker)}
-                >
-                  {String(Math.floor(s.startMs / 60000)).padStart(2, '0')}:
-                  {String(Math.floor((s.startMs % 60000) / 1000)).padStart(2, '0')}
-                </button>
-                {s.speaker && <span className="who">{s.speaker}</span>}
-                {s.text}
-              </li>
-            ))}
-          </ul>
-          {filtered.length === 0 && <p className="muted">No matches in this transcript.</p>}
-        </section>
-      )}
+      {m.diagnostics && <AudioCheckCard diagnostics={m.diagnostics} stopTrace={m.stopTrace} />}
 
-      <h2>Manage</h2>
-      <div className="card">
+      <Section id="manage" title="Export & share" label="Manage meeting">
+        <p className="field-label">Export</p>
         <div className="btn-row mt-0">
-          <button
-            className="btn btn-primary"
-            disabled={gitlabBusy || m.transcriptionStatus !== 'completed'}
-            title={
-              m.transcriptionStatus !== 'completed'
-                ? 'Transcribe first — GitLab receives the transcript'
-                : 'Publish this transcript to the configured GitLab project'
-            }
-            onClick={() => {
-              setGitlabBusy(true);
-              setGitlabMessage(null);
-              uploadToGitlab(m.id)
-                .then((r) => setGitlabMessage(`Published to GitLab (${r.target}).`))
-                .catch((e: unknown) => {
-                  const msg = e instanceof Error ? e.message : String(e);
-                  setGitlabMessage(null);
-                  setError(msg);
-                })
-                .finally(() => setGitlabBusy(false));
-            }}
-          >
-            {gitlabBusy ? 'Uploading…' : 'Upload to GitLab'}
+          <button className="btn" disabled={!!exportBusy} onClick={() => runExport('txt', () => exportTranscript(m.id, 'txt'))}>
+            {exportBusy === 'txt' ? 'Exporting…' : 'TXT'}
           </button>
-          <button
-            className="btn"
-            disabled={gitlabBusy || !m.summary}
-            title={
-              m.summary
-                ? 'Publish the summary + key points into the meeting folder on GitLab'
-                : 'Summarize the meeting first — GitLab receives summary.md'
-            }
-            onClick={() => {
-              setGitlabBusy(true);
-              setGitlabMessage(null);
-              uploadSummaryToGitlab(m.id)
-                .then((r) => setGitlabMessage(`Summary published to GitLab (${r.target}).`))
-                .catch((e: unknown) => {
-                  const msg = e instanceof Error ? e.message : String(e);
-                  setGitlabMessage(null);
-                  setError(msg);
-                })
-                .finally(() => setGitlabBusy(false));
-            }}
-          >
-            {gitlabBusy ? 'Uploading…' : 'Upload summary'}
+          <button className="btn" disabled={!!exportBusy} onClick={() => runExport('md', () => exportTranscript(m.id, 'md'))}>
+            {exportBusy === 'md' ? 'Exporting…' : 'Markdown'}
           </button>
-          <button
-            className="btn"
-            disabled={gitlabBusy || !m.agenda?.items.length}
-            title={
-              m.agenda?.items.length
-                ? 'Publish the agenda to GitLab (agenda.md, wiki page or issue)'
-                : 'Create an agenda first'
-            }
-            onClick={() => {
-              setGitlabBusy(true);
-              setGitlabMessage(null);
-              uploadAgendaToGitlab(m.id)
-                .then((r) => setGitlabMessage(`Agenda published to GitLab (${r.target}).`))
-                .catch((e: unknown) => {
-                  setGitlabMessage(null);
-                  setError(e instanceof Error ? e.message : String(e));
-                })
-                .finally(() => setGitlabBusy(false));
-            }}
-          >
-            {gitlabBusy ? 'Uploading…' : 'Upload agenda'}
-          </button>
-          {m.gitlab?.url ? (
-            <a
-              className="btn"
-              href={m.gitlab.url}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => openGitlabLink(e, m.gitlab?.url ?? '')}
-            >
-              Open in GitLab
-            </a>
-          ) : (
-            m.gitlab && (
-              <span className="muted small self-center">
-                Re-upload to get a working link.
-              </span>
-            )
-          )}
-          {m.gitlabSummary?.url && (
-            <a
-              className="btn"
-              href={m.gitlabSummary.url}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => openGitlabLink(e, m.gitlabSummary?.url ?? '')}
-            >
-              Open summary in GitLab
-            </a>
-          )}
-          {m.gitlabAgenda?.url && (
-            <a
-              className="btn"
-              href={m.gitlabAgenda.url}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => openGitlabLink(e, m.gitlabAgenda?.url ?? '')}
-            >
-              Open agenda in GitLab
-            </a>
-          )}
-        </div>
-        {gitlabMessage && <p className="muted small mb-0">{gitlabMessage}</p>}
-        {m.gitlab && (
-          <p className="muted small mb-0">
-            Last upload: {new Date(m.gitlab.uploadedAt).toLocaleString()} · {m.gitlab.target}
-          </p>
-        )}
-        {m.gitlabAgenda && (
-          <p className="muted small mb-0">
-            Last agenda upload: {new Date(m.gitlabAgenda.uploadedAt).toLocaleString()} · {m.gitlabAgenda.target}
-          </p>
-        )}
-        {m.gitlabSummary && (
-          <p className="muted small mb-0">
-            Last summary upload: {new Date(m.gitlabSummary.uploadedAt).toLocaleString()} · {m.gitlabSummary.target}
-          </p>
-        )}
-        <div className="btn-row">
-          <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportTranscript(m.id, 'txt'))}>
-            TXT
-          </button>
-          <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportTranscript(m.id, 'md'))}>
-            Markdown
-          </button>
-          <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportTranscript(m.id, 'json'))}>
-            JSON
+          <button className="btn" disabled={!!exportBusy} onClick={() => runExport('json', () => exportTranscript(m.id, 'json'))}>
+            {exportBusy === 'json' ? 'Exporting…' : 'JSON'}
           </button>
           {m.agenda?.items.length ? (
-            <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportAgenda(m))}>
-              Agenda
+            <button className="btn" disabled={!!exportBusy} onClick={() => runExport('agenda', () => exportAgenda(m))}>
+              {exportBusy === 'agenda' ? 'Exporting…' : 'Agenda file'}
             </button>
           ) : null}
-          <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportAudio(m))}>
-            {exportBusy ? 'Exporting…' : 'Audio file'}
+          <button className="btn" disabled={!!exportBusy} onClick={() => runExport('audio', () => exportAudio(m))}>
+            {exportBusy === 'audio' ? 'Exporting…' : 'Audio file'}
           </button>
+        </div>
+        {exported.length > 0 && (
+          <p className="muted small mb-0" role="status" aria-label="Export saved">
+            Saved to {exported.join(', ')}{' '}
+            <button type="button" className="link-btn" onClick={() => void revealExport(exported[0]!).catch(() => undefined)}>
+              Show in folder
+            </button>
+          </p>
+        )}
+        <p className="field-label">GitLab</p>
+        {gitlabConnected ? (
+          <>
+        <div className="btn-row">
+            <button
+              className="btn"
+              disabled={!!gitlabBusy || m.transcriptionStatus !== 'completed'}
+              title={
+                m.transcriptionStatus !== 'completed'
+                  ? 'Transcribe first — GitLab receives the transcript'
+                  : 'Publish this transcript to the configured GitLab project'
+              }
+              onClick={() => {
+                setGitlabBusy('transcript');
+                setGitlabMessage(null);
+                uploadToGitlab(m.id)
+                  .then((r) => setGitlabMessage(`Published to GitLab (${r.target}).`))
+                  .catch((e: unknown) => {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    setGitlabMessage(null);
+                    setError(msg);
+                  })
+                  .finally(() => setGitlabBusy(null));
+              }}
+            >
+              {gitlabBusy === 'transcript' ? 'Uploading…' : 'Upload transcript'}
+            </button>
+            <button
+              className="btn"
+              disabled={!!gitlabBusy || !m.summary}
+              title={
+                m.summary
+                  ? 'Publish the summary + key points into the meeting folder on GitLab'
+                  : 'Summarize the meeting first — GitLab receives summary.md'
+              }
+              onClick={() => {
+                setGitlabBusy('summary');
+                setGitlabMessage(null);
+                uploadSummaryToGitlab(m.id)
+                  .then((r) => setGitlabMessage(`Summary published to GitLab (${r.target}).`))
+                  .catch((e: unknown) => {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    setGitlabMessage(null);
+                    setError(msg);
+                  })
+                  .finally(() => setGitlabBusy(null));
+              }}
+            >
+              {gitlabBusy === 'summary' ? 'Uploading…' : 'Upload summary'}
+            </button>
+            <button
+              className="btn"
+              disabled={!!gitlabBusy || !m.agenda?.items.length}
+              title={
+                m.agenda?.items.length
+                  ? 'Publish the agenda to GitLab (agenda.md, wiki page or issue)'
+                  : 'Create an agenda first'
+              }
+              onClick={() => {
+                setGitlabBusy('agenda');
+                setGitlabMessage(null);
+                uploadAgendaToGitlab(m.id)
+                  .then((r) => setGitlabMessage(`Agenda published to GitLab (${r.target}).`))
+                  .catch((e: unknown) => {
+                    setGitlabMessage(null);
+                    setError(e instanceof Error ? e.message : String(e));
+                  })
+                  .finally(() => setGitlabBusy(null));
+              }}
+            >
+              {gitlabBusy === 'agenda' ? 'Uploading…' : 'Upload agenda'}
+            </button>
+            {m.gitlab?.url ? (
+              <a
+                className="btn"
+                href={m.gitlab.url}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => openGitlabLink(e, m.gitlab?.url ?? '')}
+              >
+                Open in GitLab
+              </a>
+            ) : (
+              m.gitlab && (
+                <span className="muted small self-center">
+                  Re-upload to get a working link.
+                </span>
+              )
+            )}
+            {m.gitlabSummary?.url && (
+              <a
+                className="btn"
+                href={m.gitlabSummary.url}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => openGitlabLink(e, m.gitlabSummary?.url ?? '')}
+              >
+                Open summary in GitLab
+              </a>
+            )}
+            {m.gitlabAgenda?.url && (
+              <a
+                className="btn"
+                href={m.gitlabAgenda.url}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => openGitlabLink(e, m.gitlabAgenda?.url ?? '')}
+              >
+                Open agenda in GitLab
+              </a>
+            )}
+          </div>
+          {gitlabMessage && <p className="muted small mb-0">{gitlabMessage}</p>}
+          {m.gitlab && (
+            <p className="muted small mb-0">
+              Last upload: {new Date(m.gitlab.uploadedAt).toLocaleString()} · {m.gitlab.target}
+            </p>
+          )}
+          {m.gitlabAgenda && (
+            <p className="muted small mb-0">
+              Last agenda upload: {new Date(m.gitlabAgenda.uploadedAt).toLocaleString()} · {m.gitlabAgenda.target}
+            </p>
+          )}
+          {m.gitlabSummary && (
+            <p className="muted small mb-0">
+              Last summary upload: {new Date(m.gitlabSummary.uploadedAt).toLocaleString()} · {m.gitlabSummary.target}
+            </p>
+          )}
+          </>
+        ) : (
+          <p className="muted mb-0">
+            Share transcripts, summaries and action items with your team.{' '}
+            <button type="button" className="link-btn" onClick={() => go({ name: 'settings', tab: 'sharing' })}>
+              Set up GitLab sharing
+            </button>
+          </p>
+        )}
+        {!m.agenda?.items.length && !agendaDraft && (
+          <>
+            <p className="field-label">Agenda</p>
+            <div className="btn-row mt-0">
+              <button
+                className="btn"
+                onClick={() => {
+                  setAgendaDraft([newAgendaItem()]);
+                  setSectionsOpen(['agenda'], true);
+                }}
+              >
+                Add agenda
+              </button>
+            </div>
+          </>
+        )}
+      </Section>
+
+      <section className="card danger-zone" aria-label="Delete meeting">
+        <strong>Delete</strong>
+        <p className="muted mt-0">Removes the recording, transcript and summary from this device. This cannot be undone.</p>
+        <div className="btn-row">
           <button
             className="btn btn-danger"
             onClick={() => {
@@ -949,16 +1097,45 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             Delete meeting
           </button>
         </div>
-        {exported.length > 0 && (
-          <p className="muted small mb-0" role="status" aria-label="Export saved">
-            Saved to {exported.join(', ')}{' '}
-            <button type="button" className="link-btn" onClick={() => void revealExport(exported[0]!).catch(() => undefined)}>
-              Show in folder
-            </button>
-          </p>
-        )}
-      </div>
+      </section>
     </>
+  );
+}
+
+/** Sticky "jump to" bar: scrolls to a section (opening it) and folds/unfolds them all. */
+function SectionNav({
+  sections,
+  collapsed,
+}: {
+  sections: Array<{ id: string; label: string }>;
+  collapsed: ReadonlySet<string>;
+}): React.JSX.Element {
+  const ids = sections.map((s) => s.id);
+  const anyOpen = ids.some((id) => !collapsed.has(id));
+  return (
+    <nav className="section-nav" aria-label="Meeting sections">
+      {sections.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          className="link-btn"
+          aria-label={`Jump to ${s.label.toLowerCase()}`}
+          onClick={() => {
+            setSectionsOpen([s.id], true);
+            requestAnimationFrame(() =>
+              document.getElementById(`sec-${s.id}`)?.scrollIntoView({ block: 'start' }),
+            );
+          }}
+        >
+          {s.label}
+        </button>
+      ))}
+      <span className="section-nav-end">
+        <button type="button" className="btn btn-sm" onClick={() => setSectionsOpen(ids, !anyOpen)}>
+          {anyOpen ? 'Collapse all' : 'Expand all'}
+        </button>
+      </span>
+    </nav>
   );
 }
 
@@ -985,3 +1162,56 @@ function ClaudeSessionHint({ sessionId }: { sessionId: string }): React.JSX.Elem
     </p>
   );
 }
+
+/** `text` with every case-insensitive match of `query` in <mark>. */
+function highlight(text: string, query: string): React.ReactNode {
+  const q = query.trim().toLowerCase();
+  if (!q) return text;
+  const lower = text.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let at = 0;
+  for (let i = lower.indexOf(q); i >= 0; i = lower.indexOf(q, at)) {
+    if (i > at) parts.push(text.slice(at, i));
+    parts.push(<mark key={i}>{text.slice(i, i + q.length)}</mark>);
+    at = i + q.length;
+  }
+  if (at < text.length) parts.push(text.slice(at));
+  return parts;
+}
+
+/**
+ * The transcript rows. Memoised: Meeting Detail re-renders on every store
+ * tick (download/transcription progress), and a long meeting has thousands
+ * of rows.
+ */
+const TranscriptList = memo(function TranscriptList({
+  segments,
+  query,
+  canSeek,
+  onSeek,
+}: {
+  segments: TranscriptSegment[];
+  query: string;
+  canSeek: boolean;
+  onSeek: (startMs: number, speaker?: string) => void;
+}): React.JSX.Element {
+  return (
+    <ul className="transcript">
+      {segments.map((s) => (
+        <li key={s.id}>
+          <button
+            type="button"
+            className="ts ts-seek"
+            title="Play from here"
+            disabled={!canSeek}
+            onClick={() => onSeek(s.startMs, s.speaker)}
+          >
+            {formatClock(s.startMs / 1000)}
+          </button>
+          {s.speaker && <span className="who">{s.speaker}</span>}
+          {highlight(s.text, query)}
+        </li>
+      ))}
+    </ul>
+  );
+});

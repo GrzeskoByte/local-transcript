@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../store.tsx';
 import { formatDuration, modeLabel } from '../../domain/meeting.ts';
 import { searchSegments } from '../../domain/transcript.ts';
+import { dayGroupLabel } from '../../domain/dates.ts';
 import { getSegments } from '../../storage/transcripts.ts';
 import { describeNativeRuntime } from '../../asr/model-manager.ts';
 import { MicIcon, PlusIcon, SearchIcon } from '../components/icons.tsx';
@@ -11,6 +12,9 @@ import { isDesktopApp } from '../../platform/desktop.ts';
 const SEARCH_DEBOUNCE_MS = 200;
 const SEARCH_BATCH = 8;
 const MAX_HITS = 30;
+/** The search survives a trip to a meeting and back. */
+let lastQuery = '';
+
 
 export function Dashboard(): React.JSX.Element {
   const {
@@ -20,16 +24,43 @@ export function Dashboard(): React.JSX.Element {
   const [resetState, setResetState] = useState<'idle' | 'confirm' | 'working'>('idle');
   const [resetError, setResetError] = useState<string | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
+  const [query, setQueryState] = useState(() => lastQuery);
+  const setQuery = (q: string): void => {
+    lastQuery = q;
+    setQueryState(q);
+  };
   const [hits, setHits] = useState<{ meetingId: string; title: string; snippet: string }[]>([]);
+  const [searching, setSearching] = useState(false);
+  /** Recovery entry awaiting a second click on Delete. */
+  const [confirmDiscard, setConfirmDiscard] = useState<string | null>(null);
+  // Titles and summaries match at once; transcripts follow (debounced, below).
+  const titleHits = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return meetings.filter(
+      (m) => m.title.toLowerCase().includes(q) || (m.summary?.text ?? '').toLowerCase().includes(q),
+    );
+  }, [query, meetings]);
+  const groups = useMemo(() => {
+    const out: { label: string; items: typeof meetings }[] = [];
+    for (const m of meetings) {
+      const label = dayGroupLabel(m.createdAt);
+      const last = out[out.length - 1];
+      if (last && last.label === label) last.items.push(m);
+      else out.push({ label, items: [m] });
+    }
+    return out;
+  }, [meetings]);
 
   useEffect(() => {
     let cancelled = false;
     const q = query.trim();
     if (!q) {
       setHits([]);
+      setSearching(false);
       return;
     }
+    setSearching(true);
     // Debounced: search once typing pauses, not on every keystroke. Segments
     // are read in parallel batches and a newer query abandons this one.
     const timer = window.setTimeout(() => void run(), SEARCH_DEBOUNCE_MS);
@@ -47,7 +78,10 @@ export function Dashboard(): React.JSX.Element {
           }
         });
       }
-      if (!cancelled) setHits(out);
+      if (!cancelled) {
+        setHits(out);
+        setSearching(false);
+      }
     }
     return () => {
       cancelled = true;
@@ -133,9 +167,26 @@ export function Dashboard(): React.JSX.Element {
                 <button className="btn btn-primary" onClick={() => void recoverUnfinished(m.id)}>
                   Recover Recording
                 </button>
-                <button className="btn btn-danger" onClick={() => void discardUnfinished(m.id)}>
-                  Delete
-                </button>
+                {confirmDiscard === m.id ? (
+                  <>
+                    <button
+                      className="btn btn-danger"
+                      onClick={() => {
+                        setConfirmDiscard(null);
+                        void discardUnfinished(m.id);
+                      }}
+                    >
+                      Yes, delete this audio
+                    </button>
+                    <button className="btn" onClick={() => setConfirmDiscard(null)}>
+                      Keep it
+                    </button>
+                  </>
+                ) : (
+                  <button className="btn btn-danger" onClick={() => setConfirmDiscard(m.id)}>
+                    Delete
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -213,14 +264,36 @@ export function Dashboard(): React.JSX.Element {
       </div>
 
       {query.trim() ? (
-        <section className="mt-2">
+        <section className="mt-2" aria-label="Search results">
+          {titleHits.length > 0 && (
+            <>
+              <h2>Meetings</h2>
+              <ul className="meeting-list">
+                {titleHits.map((m) => (
+                  <li key={m.id}>
+                    <button className="meeting-item" onClick={() => go({ name: 'detail', id: m.id })}>
+                      <span className="body">
+                        <span className="title">{m.title}</span>
+                        <span className="meta">
+                          {dayGroupLabel(m.createdAt)} · {formatDuration(m.durationMs)}
+                          {m.summary?.text ? ` · ${m.summary.text}` : ''}
+                        </span>
+                      </span>
+                      <span className="chev">›</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          <h2>In transcripts</h2>
           {hits.length === 0 ? (
-            <p className="muted">No transcript matches.</p>
+            <p className="muted" role="status">{searching ? 'Searching transcripts…' : 'No transcript matches.'}</p>
           ) : (
             <ul className="meeting-list">
               {hits.map((h, i) => (
                 <li key={`${h.meetingId}-${i}`}>
-                  <button className="meeting-item" onClick={() => go({ name: 'detail', id: h.meetingId })}>
+                  <button className="meeting-item" onClick={() => go({ name: 'detail', id: h.meetingId, q: query.trim() })}>
                     <span className="body">
                       <span className="title">{h.title}</span>
                       <span className="meta">“…{h.snippet}…”</span>
@@ -247,30 +320,36 @@ export function Dashboard(): React.JSX.Element {
         </div>
       ) : (
         <>
-          <h2>Recent recordings</h2>
-          <ul className="meeting-list">
-            {meetings.map((m) => (
-              <li key={m.id}>
-                <button className={`meeting-item mode-${m.mode}`} onClick={() => go({ name: 'detail', id: m.id })}>
-                  <span className="body">
-                    <span className="title">{m.title}</span>
-                    <span className="meta">
-                      {new Date(m.createdAt).toLocaleString()} · {formatDuration(m.durationMs)}
-                    </span>
-                  </span>
-                  <span className="pills">
-                    <span className={`pill pill-${m.mode}`}>
-                      {modeLabel(m.mode)}
-                    </span>
-                    <span className={`pill pill-${m.transcriptionStatus === 'not_started' ? 'processing' : m.transcriptionStatus}`}>
-                      {m.transcriptionStatus === 'not_started' ? 'audio only' : m.transcriptionStatus}
-                    </span>
-                  </span>
-                  <span className="chev">›</span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          {groups.map((g) => (
+            <section key={g.label} aria-label={g.label}>
+              <h2>{g.label}</h2>
+              <ul className="meeting-list">
+                {g.items.map((m) => (
+                  <li key={m.id}>
+                    <button className={`meeting-item mode-${m.mode}`} onClick={() => go({ name: 'detail', id: m.id })}>
+                      <span className="body">
+                        <span className="title">{m.title}</span>
+                        <span className="meta">
+                          {new Date(m.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} ·{' '}
+                          {formatDuration(m.durationMs)}
+                          {m.summary?.text ? ` · ${m.summary.text}` : ''}
+                        </span>
+                      </span>
+                      <span className="pills">
+                        <span className={`pill pill-${m.mode}`}>
+                          {modeLabel(m.mode)}
+                        </span>
+                        <span className={`pill pill-${m.transcriptionStatus === 'not_started' ? 'idle' : m.transcriptionStatus}`}>
+                          {m.transcriptionStatus === 'not_started' ? 'not transcribed' : m.transcriptionStatus}
+                        </span>
+                      </span>
+                      <span className="chev">›</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
         </>
       )}
     </>
