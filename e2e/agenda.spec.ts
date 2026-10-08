@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
 
 /**
  * Agenda: planned on New Meeting, visible while recording, editable on
@@ -20,9 +19,17 @@ async function mockInstalledModel(page: Page): Promise<void> {
       gpu: { available: false, active: false, backend: null, devices: [], hint: null },
       models: [model],
     };
-    (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
-      invoke: async (cmd: string) => {
+    const w = window as unknown as { __TAURI_INTERNALS__: unknown; __exports: { name: string; text: string }[] };
+    w.__exports = [];
+    w.__TAURI_INTERNALS__ = {
+      invoke: async (cmd: string, args?: unknown, options?: { headers?: Record<string, string> }) => {
         switch (cmd) {
+          // The desktop webview cannot save <a download> links: exports go to the shell.
+          case 'native_export_file': {
+            const name = decodeURIComponent(options?.headers?.['x-file-name'] ?? '');
+            w.__exports.push({ name, text: new TextDecoder().decode(args as Uint8Array) });
+            return `/home/me/Downloads/${name}`;
+          }
           case 'native_asr_status': return status;
           case 'native_asr_models': return [model];
           case 'native_storage_dir': return '/tmp/Local Transcribe';
@@ -72,12 +79,13 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await page.reload();
   await expect(page.getByRole('region', { name: 'Meeting agenda' })).toContainText('@anna · 15 min');
 
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Agenda', exact: true }).click(),
-  ]);
-  expect(download.suggestedFilename()).toBe('Agenda-Meeting-agenda.md');
-  const text = await readFile((await download.path())!, 'utf8');
+  await page.getByRole('button', { name: 'Agenda', exact: true }).click();
+  await expect(page.getByRole('status', { name: 'Export saved' })).toContainText(
+    'Saved to /home/me/Downloads/Agenda-Meeting-agenda.md',
+  );
+  const exports = await page.evaluate(() => (window as unknown as { __exports: { name: string; text: string }[] }).__exports);
+  expect(exports.map((e) => e.name)).toEqual(['Agenda-Meeting-agenda.md']);
+  const text = exports[0]!.text;
   expect(text).toContain('1. **Status update** (10 min)');
   expect(text).toContain('2. **Roadmap** (@anna, 15 min)');
   expect(text).not.toContain('Q&A');

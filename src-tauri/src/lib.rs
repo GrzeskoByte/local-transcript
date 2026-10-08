@@ -11,6 +11,7 @@ mod settings;
 mod storage;
 mod system_audio;
 mod calendar;
+mod export;
 mod calendar_detect;
 mod claude_code;
 mod updater;
@@ -75,6 +76,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             native_log,
+            export::native_export_file,
+            export::native_reveal_export,
             recorder::native_recorder_devices,
             recorder::native_recorder_start,
             recorder::native_recorder_pause,

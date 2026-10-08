@@ -8,7 +8,13 @@ import {
   NATIVE_LANGUAGE_OPTIONS,
 } from '../../asr/model-manager';
 import { searchSegments } from '../../domain/transcript';
-import { exportAgenda, exportAudio, exportTranscript } from '../../features/meetings/exports';
+import {
+  exportAgenda,
+  exportAudio,
+  exportTranscript,
+  revealExport,
+  type ExportResult,
+} from '../../features/meetings/exports';
 import { AgendaEditor, AgendaList } from '../components/Agenda.tsx';
 import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
@@ -41,6 +47,21 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
   /** Agenda being edited (null = viewing). */
   const [agendaDraft, setAgendaDraft] = useState<AgendaItem[] | null>(null);
   const [agendaBusy, setAgendaBusy] = useState(false);
+  /** Files the last export wrote (desktop: in Downloads). */
+  const [exported, setExported] = useState<string[]>([]);
+  const [exportBusy, setExportBusy] = useState(false);
+  const runExport = (work: () => Promise<ExportResult | ExportResult[]>): void => {
+    setError(null);
+    setExported([]);
+    setExportBusy(true);
+    work()
+      .then((result) => {
+        const paths = (Array.isArray(result) ? result : [result]).filter((p): p is string => !!p);
+        setExported(paths);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setExportBusy(false));
+  };
   /** One player per track; transcript timestamps seek the matching one. */
   const players = useRef(new Map<string, AudioPlayerHandle>());
   const playSegment = (startMs: number, speaker?: string): void => {
@@ -675,34 +696,22 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
           </p>
         )}
         <div className="btn-row">
-          <button className="btn" onClick={() => void exportTranscript(m.id, 'txt')}>
+          <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportTranscript(m.id, 'txt'))}>
             TXT
           </button>
-          <button className="btn" onClick={() => void exportTranscript(m.id, 'md')}>
+          <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportTranscript(m.id, 'md'))}>
             Markdown
           </button>
-          <button className="btn" onClick={() => void exportTranscript(m.id, 'json')}>
+          <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportTranscript(m.id, 'json'))}>
             JSON
           </button>
           {m.agenda?.items.length ? (
-            <button
-              className="btn"
-              onClick={() => {
-                try {
-                  exportAgenda(m);
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : String(e));
-                }
-              }}
-            >
+            <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportAgenda(m))}>
               Agenda
             </button>
           ) : null}
-          <button
-            className="btn"
-            onClick={() => exportAudio(m).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}
-          >
-            Audio file
+          <button className="btn" disabled={exportBusy} onClick={() => runExport(() => exportAudio(m))}>
+            {exportBusy ? 'Exporting…' : 'Audio file'}
           </button>
           <button
             className="btn btn-danger"
@@ -716,6 +725,14 @@ export function MeetingDetail({ id }: { id: string }): React.JSX.Element {
             Delete meeting
           </button>
         </div>
+        {exported.length > 0 && (
+          <p className="muted small mb-0" role="status" aria-label="Export saved">
+            Saved to {exported.join(', ')}{' '}
+            <button type="button" className="link-btn" onClick={() => void revealExport(exported[0]!).catch(() => undefined)}>
+              Show in folder
+            </button>
+          </p>
+        )}
       </div>
     </>
   );
