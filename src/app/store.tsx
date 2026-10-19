@@ -12,7 +12,7 @@ import { MediaRecorderAudioRecorder } from '../audio/recorder';
 import type { RecorderErrorKind, TrackSpec } from '../audio/recorder';
 import { RecordingDiagnosticsCollector, type DiagnosticsInput } from '../audio/diagnostics';
 import type { AudioIssue } from '../domain/audio-diagnostics';
-import { TranscriptionService } from '../asr/transcription-service';
+import { TranscriptionService, recoverInterruptedTranscriptions } from '../asr/transcription-service';
 import {
   DEFAULT_NATIVE_LANGUAGE,
   NATIVE_DEFAULT_MODEL,
@@ -392,7 +392,20 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, []);
 
   useEffect(() => {
-    void refresh();
+    // Nothing transcribes yet: a meeting still at `processing` is left over
+    // from a run the app did not survive (closed or crashed mid-run).
+    void listMeetings()
+      .then(recoverInterruptedTranscriptions)
+      .catch(() => 0)
+      .then(async (recovered) => {
+        // Meeting Detail may have loaded the stale row first (app opened on it).
+        const id = detailIdRef.current;
+        if (recovered > 0 && id) {
+          const m = await getMeeting(id).catch(() => undefined);
+          if (m) setDetailMeeting((d) => (detailIdRef.current === id ? m : d));
+        }
+        await refresh();
+      });
     // Hash routing so navigation survives reloads.
     const sync = () => {
       const h = window.location.hash;

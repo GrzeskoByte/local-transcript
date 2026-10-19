@@ -5,7 +5,7 @@ import { commitTranscript, getSegments } from '../storage/transcripts';
 import { listTracks, readRecordingBlob } from '../storage/recordings';
 import { decodeToMono16k } from '../audio/decode';
 import { getTranscriptionLanguage, DEFAULT_NATIVE_LANGUAGE } from './model-manager';
-import { trackSpeakerLabel } from '../domain/meeting';
+import { trackSpeakerLabel, type Meeting } from '../domain/meeting';
 import type { TranscriptSegment } from '../domain/transcript';
 
 export interface TranscriptionCallbacks {
@@ -141,4 +141,33 @@ export class TranscriptionService {
   isRunning(meetingId: string): boolean {
     return this.running.has(meetingId);
   }
+}
+
+/** Shown on Meeting Detail ("Reason: …") for a run the app did not survive. */
+export const INTERRUPTED_TRANSCRIPTION_REASON =
+  'Transcription was interrupted (the app closed or crashed). Retry to run it again.';
+
+/**
+ * Startup repair: a run that was going when the app closed or crashed leaves
+ * its meeting at `processing` with nothing behind it, so Meeting Detail would
+ * spin forever and Cancel would have nothing to cancel. Call before any run
+ * starts. A meeting that already had a transcript goes back to `completed`
+ * (the old segments were never replaced: commits are atomic); the others
+ * become `failed` with a reason, which offers Retry.
+ */
+export async function recoverInterruptedTranscriptions(meetings: Meeting[]): Promise<number> {
+  let recovered = 0;
+  for (const m of meetings) {
+    if (m.transcriptionStatus !== 'processing') continue;
+    const hasTranscript = (await getSegments(m.id)).length > 0;
+    const updated = await updateMeeting(m.id, (cur) =>
+      cur.transcriptionStatus !== 'processing'
+        ? cur
+        : hasTranscript
+          ? { ...cur, transcriptionStatus: 'completed' }
+          : { ...cur, transcriptionStatus: 'failed', transcriptionError: INTERRUPTED_TRANSCRIPTION_REASON },
+    );
+    if (updated) recovered++;
+  }
+  return recovered;
 }

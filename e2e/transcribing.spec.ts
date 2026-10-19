@@ -32,3 +32,39 @@ test('processing meeting shows transcription loader', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible();
   await page.screenshot({ path: 'test-results/loader.png' });
 });
+
+test('a run interrupted by a crash is offered for retry after restart', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const req = indexedDB.open('local-transcribe', 1);
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction('meetings', 'readwrite');
+          tx.objectStore('meetings').put({
+            id: 'crashed-run',
+            title: 'Crashed Run',
+            mode: 'speaker',
+            createdAt: Date.now(),
+            startedAt: Date.now(),
+            endedAt: Date.now(),
+            durationMs: 60000,
+            audioPath: 'meetings/crashed-run',
+            mimeType: 'audio/webm',
+            transcriptionStatus: 'processing',
+          });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        };
+        req.onerror = () => reject(req.error);
+      }),
+  );
+  // Relaunch straight onto the meeting: nothing is transcribing any more.
+  await page.goto('/#/meeting/crashed-run');
+  await page.reload();
+  await expect(page.getByText('Transcription failed.')).toBeVisible();
+  await expect(page.getByLabel('Failure reason')).toContainText('interrupted');
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+  await expect(page.getByRole('status', { name: 'Transcription in progress' })).toHaveCount(0);
+});
