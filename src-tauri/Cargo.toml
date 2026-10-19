@@ -19,3 +19,8 @@ tauri-plugin-updater = "2"
 # Native recording (src/recorder): capture + system audio on every OS, Opus encoding.
 cpal = { version = "0.18", features = ["pulseaudio"] }
 opus = "0.4"
+
+# cpal 0.18.2 with one change (vendor/cpal, macOS only): capture never rewrites the
+# shared microphone's / output device's hardware format, which silenced Zoom mid-call.
+[patch.crates-io]
+cpal = { path = "vendor/cpal" }

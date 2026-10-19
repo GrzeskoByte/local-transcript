@@ -36,7 +36,7 @@ Spec source of truth: `/home/gsierock/obsidian_vaults/gs_n/local-transcribe/MVP.
 - Model + language storage are native-only: `getModelMeta()` / `setModelMeta()` (key `asr-model-meta-desktop`) and `getTranscriptionLanguage()` / `setTranscriptionLanguage()` (key `asr-language-desktop`).
 - Native ASR is not exercised by Playwright (no display/GPU in CI); unit-test the pure helpers and keep the browser suite green.
 - **Cross-platform (Linux/Windows/macOS):** the frontend is platform-agnostic.
-  Rust uses only std + the 7 crates in `Cargo.toml` (no `dirs`/`reqwest`; `tauri-plugin-updater` is the one plugin, for in-app updates; `cpal` + `opus` are the native recorder's, user-approved). `.github/workflows/rust.yml` runs `cargo test --lib` on Linux, macOS and Windows.
+  Rust uses only std + the 7 crates in `Cargo.toml` (no `dirs`/`reqwest`; `tauri-plugin-updater` is the one plugin, for in-app updates; `cpal` + `opus` are the native recorder's, user-approved). **`cpal` is patched** (`[patch.crates-io]` → `src-tauri/vendor/cpal`, upstream 0.18.2 + one macOS-only change in `src/host/coreaudio/macos/device.rs`): capture never calls `set_physical_format`, because rewriting the shared mic/output hardware format mid-call left Zoom sending silence until Stop. Keep the patch when upgrading cpal (diff the vendored copy against upstream). `.github/workflows/rust.yml` runs `cargo test --lib` on Linux, macOS and Windows.
   OS-specific code paths: `models.rs` (`home_dir` falls back to `USERPROFILE`,
   `split_paths` for `PATH`, `.exe` probing in `which`, per-OS model dirs) and
   `native_asr.rs` (generic `ggml-*.bin` download from Hugging Face via curl with
