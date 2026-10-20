@@ -71,6 +71,7 @@ test('microphone chosen in Settings is used for recording and shown on New Meeti
   await expect(page.getByLabel('Recording in progress')).toBeVisible();
   page.once('dialog', (d) => void d.accept());
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
 
   const { gum, calls } = await page.evaluate(() => {
@@ -94,6 +95,7 @@ test('an unplugged saved microphone falls back to the system default', async ({ 
   await expect(page.getByLabel('Recording in progress')).toBeVisible();
   page.once('dialog', (d) => void d.accept());
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   const gum = await page.evaluate(
     () => (window as unknown as { __gum: Array<{ audio?: { deviceId?: unknown } }> }).__gum,

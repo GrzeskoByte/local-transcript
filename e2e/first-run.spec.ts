@@ -81,6 +81,7 @@ test('meeting: "Download model & transcribe" does both in one click', async ({ p
   await page.getByRole('button', { name: '● Start Recording' }).click();
   await page.waitForTimeout(6_000);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
 
   await page.getByRole('button', { name: 'Download model & transcribe' }).click();

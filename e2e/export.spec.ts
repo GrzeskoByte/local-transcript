@@ -47,6 +47,7 @@ async function recordMeeting(page: Page, title: string): Promise<void> {
   await expect(page.getByRole('region', { name: 'Recording in progress' })).toBeVisible();
   await page.waitForTimeout(2_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
 }
 

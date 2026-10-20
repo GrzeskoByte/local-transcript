@@ -144,6 +144,7 @@ test('records in the shell: no webview capture, instant Stop, playback via the s
 
   const stoppedAt = Date.now();
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   // Meeting Detail (Active Meeting shows the same title): the player is there.
   await expect(page).toHaveURL(/#\/meeting\//);
   await expect(page.getByRole('region', { name: 'Recording playback' })).toBeVisible();
@@ -184,6 +185,7 @@ test('falls back to webview recording when the shell cannot open the devices', a
   expect(await page.evaluate(() => (window as unknown as { __webviewCapture: number }).__webviewCapture)).toBeGreaterThan(0);
   await page.waitForTimeout(1_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   expect((await calls(page)).some((c) => c.cmd === 'native_recorder_stop')).toBe(false);
 });

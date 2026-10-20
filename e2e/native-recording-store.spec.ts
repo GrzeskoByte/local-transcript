@@ -62,6 +62,7 @@ test('records to the native store when the webview has no OPFS', async ({ page }
   await expect(page.getByRole('region', { name: 'Recording in progress' })).toBeVisible();
   await page.waitForTimeout(6_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   await expect(page.getByText(/could not be saved/i)).toHaveCount(0);
   const id = decodeURIComponent(page.url().split('#/meeting/')[1] ?? '');
@@ -99,6 +100,7 @@ test('records to the native store when the webview has no OPFS', async ({ page }
 
   // Delete removes the chunks from disk too.
   await page.getByRole('button', { name: /^Delete/ }).first().click();
+  await page.getByRole('button', { name: 'Yes, delete' }).click();
   await expect(page).not.toHaveURL(/#\/meeting\//);
   expect(await page.evaluate((meetingId) => {
     const w = window as unknown as { __files: Map<string, string> };

@@ -24,6 +24,7 @@ import { actionItemEventDraft, extractEventDraft, validateCalendarConfig } from 
 import type { CalendarEventDraft } from '../../integrations/calendar';
 import { claudeResumeCommand, llmConfigProblem } from '../../integrations/llm';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
+import { ConfirmButton } from '../components/ConfirmButton.tsx';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { applyPlaybackOutput } from '../../audio/devices';
 import { formatClock, playbackContext } from '../../audio/player';
@@ -441,20 +442,17 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
       )}
       {m.transcriptionStatus === 'completed' && !busy && (
         <div className="btn-row">
-          <button
-            className="btn"
-            onClick={() => {
-              if (
-                m.summary &&
-                !window.confirm('Re-transcribe this meeting? The summary stays, but it was made from the current transcript.')
-              )
-                return;
+          <ConfirmButton
+            prompt="Re-transcribe? The summary stays, but it was made from the current transcript."
+            confirmLabel="Yes, re-transcribe"
+            skipConfirm={!m.summary}
+            onConfirm={() => {
               setError(null);
               setupAndTranscribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}
           >
             Re-transcribe
-          </button>
+          </ConfirmButton>
           <button
             type="button"
             className="link-btn"
@@ -1157,17 +1155,18 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
         <strong>Delete</strong>
         <p className="muted mt-0">Removes the recording, transcript and summary from this device. This cannot be undone.</p>
         <div className="btn-row">
-          <button
+          <ConfirmButton
             className="btn btn-danger"
-            onClick={() => {
-              if (!window.confirm('Delete this meeting and all its local data?')) return;
+            prompt="Delete this meeting and all its local data?"
+            confirmLabel="Yes, delete"
+            onConfirm={() => {
               deleteMeeting(m.id).then(() => {
                 go({ name: 'dashboard' });
               }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}
           >
             Delete meeting
-          </button>
+          </ConfirmButton>
         </div>
       </section>
     </>

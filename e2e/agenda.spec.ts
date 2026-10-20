@@ -65,6 +65,7 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await expect(live).toContainText('Roadmap');
   await page.waitForTimeout(1_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
 
   const card = page.getByRole('region', { name: 'Meeting agenda' });

@@ -73,6 +73,7 @@ test('records through the worker writer when createWritable is missing (older ma
   expect(await page.evaluate(() => 'createWritable' in FileSystemFileHandle.prototype)).toBe(false);
   await page.waitForTimeout(6_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   const id = meetingIdFromUrl(page.url());
 

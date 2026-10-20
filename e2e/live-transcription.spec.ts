@@ -90,6 +90,7 @@ test('live transcription: enable, see text while recording, keep it, re-transcri
   await expect(live).toBeVisible();
   await expect(live.locator('.transcript li').first()).toContainText('Live line 1', { timeout: 30_000 });
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
 
   // --- the live text is the meeting's transcript; whole-file stays available ---
   await expect(page).toHaveURL(/#\/meeting\//);
@@ -120,6 +121,7 @@ test('live transcription off: recording behaves as before (no live calls, not tr
   await expect(page.getByRole('region', { name: 'Live transcript' })).toHaveCount(0);
   await page.waitForTimeout(3_000);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   await expect(page.getByText('Not transcribed yet.')).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { __liveCalls: unknown[] }).__liveCalls)).toEqual([]);

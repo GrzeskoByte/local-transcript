@@ -110,6 +110,7 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
   await page.getByRole('button', { name: 'Resume' }).click();
   await page.waitForTimeout(2_000);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
 
   await expect(page).toHaveURL(/#\/meeting\//);
   const id = meetingIdFromUrl(page.url());
@@ -174,6 +175,7 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
 
   // --- delete → metadata, transcript and audio all gone (§23) ---
   await page.getByRole('button', { name: 'Delete meeting' }).click();
+  await page.getByRole('button', { name: 'Yes, delete' }).click();
   await expect(page.getByRole('heading', { name: 'My Meetings' })).toBeVisible();
   const after = await storedFor(page, id);
   expect(after).toEqual({ meeting: null, segments: [], opfs: false });
@@ -234,6 +236,7 @@ test('deleting a meeting mid-transcription leaves no zombie record or orphan seg
   await page.getByRole('button', { name: '● Start Recording' }).click();
   await page.waitForTimeout(6_000);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   const id = meetingIdFromUrl(page.url());
 
@@ -244,6 +247,7 @@ test('deleting a meeting mid-transcription leaves no zombie record or orphan seg
   await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
   await expect(page.getByRole('status', { name: 'Transcription in progress' })).toBeVisible();
   await page.getByRole('button', { name: 'Delete meeting' }).click();
+  await page.getByRole('button', { name: 'Yes, delete' }).click();
   await expect(page.getByRole('heading', { name: 'My Meetings' })).toBeVisible();
   // Give any straggling write time to land, then verify nothing came back.
   await page.waitForTimeout(4_000);
