@@ -5,6 +5,7 @@ import { modeLabel } from '../../domain/meeting';
 import { CheckIcon } from '../components/icons.tsx';
 import { AgendaList } from '../components/Agenda.tsx';
 import { LiveAudioWarnings } from '../components/AudioCheck.tsx';
+import { ConfirmButton } from '../components/ConfirmButton.tsx';
 
 export function ActiveMeeting(): React.JSX.Element {
   const {
@@ -12,6 +13,7 @@ export function ActiveMeeting(): React.JSX.Element {
     pauseRecording, resumeRecording, retrySaving, stopRecording, stopping, recordingIssues, live,
   } = useApp();
   const [retrying, setRetrying] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
 
   if (!activeMeeting) return <p className="muted">No active recording.</p>;
   const paused = recordingState === 'PAUSED';
@@ -89,14 +91,20 @@ export function ActiveMeeting(): React.JSX.Element {
                 Pause
               </button>
             )}
-            <button
+            <ConfirmButton
               className="btn btn-stop"
-              onClick={() => {
-                if (window.confirm('Stop and save this recording?')) void stopRecording();
-              }}
+              prompt="Stop and save this recording?"
+              confirmLabel="Yes, stop & save"
+              onConfirm={() => void stopRecording().catch((e: unknown) => setStopError(e instanceof Error ? e.message : String(e)))}
             >
               ■ Stop &amp; save
-            </button>
+            </ConfirmButton>
+          </div>
+        )}
+        {stopError && (
+          <div className="rec-alert" role="alert">
+            <strong>Could not stop the recording.</strong>
+            <p>{stopError}</p>
           </div>
         )}
         {!failing && (

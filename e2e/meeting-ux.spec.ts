@@ -42,6 +42,7 @@ async function transcribedMeeting(page: Page, title: string): Promise<void> {
   await expect(page.getByRole('region', { name: 'Recording in progress' })).toBeVisible();
   await page.waitForTimeout(2_000);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
   await expect(page.getByText('Anna will send the budget notes.')).toBeVisible({ timeout: 30_000 });
@@ -155,6 +156,7 @@ test('a failed transcription keeps its reason on the meeting', async ({ page }) 
   await expect(page.getByRole('region', { name: 'Recording in progress' })).toBeVisible();
   await page.waitForTimeout(1_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
   await expect(page.getByText('Transcription failed.')).toBeVisible({ timeout: 30_000 });
@@ -176,6 +178,7 @@ test('opt-in: transcribe automatically after Stop', async ({ page }) => {
   await expect(page.getByRole('region', { name: 'Recording in progress' })).toBeVisible();
   await page.waitForTimeout(1_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   // No Transcribe click.
   await expect(page.getByText('Anna will send the budget notes.')).toBeVisible({ timeout: 30_000 });
@@ -191,6 +194,7 @@ test('meeting list: status filters, row rename and delete, back link to the Cale
   await expect(page.getByRole('region', { name: 'Recording in progress' })).toBeVisible();
   await page.waitForTimeout(1_200);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
 
   await page.goto('/#/');
@@ -209,6 +213,7 @@ test('meeting list: status filters, row rename and delete, back link to the Cale
   await expect(page.locator('.meeting-item').filter({ hasText: 'Raw audio (kept)' })).toHaveCount(1);
   await page.getByLabel('Actions for Raw audio (kept)').click();
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.getByRole('button', { name: 'Yes, delete' }).click();
   await expect(page.locator('.meeting-item')).toHaveCount(1);
 
   // Opened from the Calendar (today is selected), the back link returns there.

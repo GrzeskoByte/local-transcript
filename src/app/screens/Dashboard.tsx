@@ -7,6 +7,7 @@ import { getSegments } from '../../storage/transcripts.ts';
 import { describeNativeRuntime } from '../../asr/model-manager.ts';
 import { MicIcon, PlusIcon, SearchIcon } from '../components/icons.tsx';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
+import { ConfirmButton } from '../components/ConfirmButton.tsx';
 import { isDesktopApp } from '../../platform/desktop.ts';
 
 const SEARCH_DEBOUNCE_MS = 200;
@@ -425,12 +426,11 @@ export function Dashboard(): React.JSX.Element {
                         >
                           Rename
                         </button>
-                        <button
-                          type="button"
+                        <ConfirmButton
                           className="btn btn-sm btn-danger"
-                          onClick={(e) => {
-                            (e.currentTarget.closest('details') as HTMLDetailsElement).open = false;
-                            if (!window.confirm(`Delete "${m.title}" and all its local data?`)) return;
+                          prompt={`Delete "${m.title}" and all its local data?`}
+                          confirmLabel="Yes, delete"
+                          onConfirm={() => {
                             setRowError(null);
                             deleteMeeting(m.id).catch((err: unknown) =>
                               setRowError(err instanceof Error ? err.message : String(err)),
@@ -438,7 +438,7 @@ export function Dashboard(): React.JSX.Element {
                           }}
                         >
                           Delete
-                        </button>
+                        </ConfirmButton>
                       </div>
                     </details>
                   </li>

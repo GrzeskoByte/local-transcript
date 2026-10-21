@@ -54,6 +54,7 @@ test('Stop opens Meeting Detail within seconds even when teardown hangs', async 
 
   const stoppedAt = Date.now();
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   // The loader shows at once, while the hanging step is still running.
   await expect(page.getByRole('status', { name: 'Saving recording' })).toBeVisible({ timeout: 1_000 });
   await expect(page.getByRole('button', { name: '■ Stop & save' })).toHaveCount(0);

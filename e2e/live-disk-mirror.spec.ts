@@ -79,6 +79,8 @@ test('desktop mirror appends audio while recording; stop does not re-copy it', a
   const stopAt = await page.evaluate(() => Date.now());
 
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
   const id = decodeURIComponent(page.url().split('#/meeting/')[1] ?? '');
   await expect

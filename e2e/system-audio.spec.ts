@@ -57,6 +57,7 @@ test('Mic + Device on Linux mixes mic + system audio into one track without a sc
   await page.waitForTimeout(2500);
   page.once('dialog', (d) => void d.accept());
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
 
   const id = decodeURIComponent(page.url().split('#/meeting/')[1]!);

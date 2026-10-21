@@ -99,6 +99,7 @@ test('Mic + Device recording reports clipping, speaker bleed and a headset switc
   await page.waitForTimeout(6_000);
   page.once('dialog', (d) => void d.accept());
   await page.getByRole('button', { name: '■ Stop & save' }).click();
+  await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
 
   const check = page.getByRole('region', { name: 'Audio check' });
