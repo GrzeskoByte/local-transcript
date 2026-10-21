@@ -3,7 +3,7 @@ import type { Page } from '@playwright/test';
 
 /**
  * Agenda: planned on New Meeting, visible while recording, editable on
- * Meeting Detail, included in exports. Also: the sidebar model chip reflects
+ * Meeting Detail, included in exports. Also: the nav model chip reflects
  * a model that is already on disk. Only the Tauri bridge is mocked.
  */
 async function mockInstalledModel(page: Page): Promise<void> {
@@ -40,10 +40,10 @@ async function mockInstalledModel(page: Page): Promise<void> {
   });
 }
 
-test('sidebar shows the installed model even without a saved selection', async ({ page }) => {
+test('nav shows the installed model even without a saved selection', async ({ page }) => {
   await mockInstalledModel(page);
   await page.goto('/');
-  await expect(page.locator('.sidebar .model-chip')).toHaveText('Model: base.en');
+  await expect(page.locator('.topbar .model-chip')).toHaveText('Model: base.en');
 });
 
 test('agenda: plan, record, edit and export', async ({ page }) => {

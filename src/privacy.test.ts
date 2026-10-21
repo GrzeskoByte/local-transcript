@@ -47,7 +47,7 @@ describe('privacy: network access is limited to user-initiated features', () => 
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
       dependencies: Record<string, string>;
     };
-    expect(Object.keys(pkg.dependencies).sort()).toEqual(['@fontsource/archivo-black', 'react', 'react-dom']);
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(['@fontsource/archivo-black', '@fontsource/jetbrains-mono', 'react', 'react-dom']);
     const cargo = readFileSync(join(ROOT, 'src-tauri/Cargo.toml'), 'utf8');
     const deps = cargo.split('[dependencies]')[1]!.split('\n[')[0]!;
     const names = deps

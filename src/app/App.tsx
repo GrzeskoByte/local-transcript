@@ -7,10 +7,9 @@ import { ActiveMeeting } from './screens/ActiveMeeting.tsx';
 import { MeetingDetail } from './screens/MeetingDetail.tsx';
 import { Settings } from './screens/Settings.tsx';
 import { CalendarView } from './screens/CalendarView.tsx';
-import { GearIcon, CalendarIcon, ListIcon, LogoMark } from './components/icons.tsx';
 
-// Layout per DESIGN.md: black page frame → top banner (wordmark, phone-callout,
-// sticker) → white icon-label rail + content column → footer band.
+// Layout per DESIGN.md (Halftone Window): dotted desk → nav window (wordmark,
+// sections, background-run cells, model status, REC / Record) → content → footer.
 function Shell(): React.JSX.Element {
   const {
     route, go, recordingState, modelMeta, updateInfo, txStage, txProgress, meetings, pauseRecording, resumeRecording,
@@ -61,159 +60,122 @@ function Shell(): React.JSX.Element {
   const recording = recordingState === 'RECORDING' || recordingState === 'PAUSED';
   const modelDot = modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'downloading' ? 'working' : '';
 
+  const navTo = (name: 'dashboard' | 'calendar' | 'settings'): void => go({ name });
+  const onMeetings = route.name === 'dashboard' || route.name === 'detail';
+
   return (
     <div className="layout">
-      <header className="topbar">
-        <button type="button" className="brand" onClick={() => go({ name: 'dashboard' })}>
-          <span className="brand-mark">
-            <LogoMark />
+      <nav className="topbar" aria-label="Main">
+        <button type="button" className="brand" title="Meetings" onClick={() => navTo('dashboard')}>
+          <span className="dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
           </span>
-          <span className="brand-text">
-            <span className="brand-name">Local Transcriber</span>
-            <span className="brand-sub">Record now. Transcribe later. On this computer.</span>
-          </span>
+          <span className="brand-name">local-transcriber</span>
         </button>
-        <div className="topbar-right">
-          {recording ? (
-            <button
-              type="button"
-              className={`phone-callout live${recordingState === 'PAUSED' ? ' paused' : ''}`}
-              title="Open the recording in progress"
-              onClick={() => go({ name: 'active' })}
-            >
-              <span className="rec-lamp" aria-hidden="true" />
-              {recordingState === 'PAUSED' ? 'PAUSED' : 'REC'} <ElapsedClock />
-            </button>
-          ) : (
-            <span className="phone-callout">ON-DEVICE</span>
-          )}
+        <button type="button" className={`navlink${onMeetings ? ' active' : ''}`} onClick={() => navTo('dashboard')}>
+          Meetings
+        </button>
+        <button
+          type="button"
+          className={`navlink${route.name === 'calendar' ? ' active' : ''}`}
+          onClick={() => navTo('calendar')}
+        >
+          Calendar
+        </button>
+        <button
+          type="button"
+          className={`navlink${route.name === 'settings' ? ' active' : ''}`}
+          onClick={() => navTo('settings')}
+        >
+          Settings
+        </button>
+        <span className="topbar-fill" aria-hidden="true" />
+        {running.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className="cell busy-chip"
+            title={`Open ${titleOf(id)}`}
+            onClick={() => go({ name: 'detail', id })}
+          >
+            {txStage[id] === 'queued'
+              ? 'Queued'
+              : `Transcribing ${Math.round((txProgress[id] ?? 0) * 100)}%`}{' '}
+            · {titleOf(id)}
+          </button>
+        ))}
+        {updateInfo?.available && (
+          <button type="button" className="cell update-chip" onClick={() => go({ name: 'settings', tab: 'app' })}>
+            Update available · v{updateInfo.version}
+          </button>
+        )}
+        <button
+          type="button"
+          className={`cell model-chip ${modelDot}`}
+          title={`${modelMeta.modelId} (${modelMeta.state.replace('_', ' ')}): open model settings`}
+          onClick={() => go({ name: 'settings', tab: 'models' })}
+        >
+          {modelChipLabel(modelMeta)}
+        </button>
+        {recording ? (
           <button
             type="button"
-            className="sticker sticker-cta"
-            title="New meeting (Ctrl+N)"
-            onClick={() => go({ name: 'new' })}
+            className={`cell live${recordingState === 'PAUSED' ? ' paused' : ''}`}
+            title="Open the recording in progress"
+            onClick={() => go({ name: 'active' })}
           >
-            New meeting
+            <span className="lamp" aria-hidden="true" />
+            {recordingState === 'PAUSED' ? 'PAUSED' : 'REC'} <ElapsedClock />
           </button>
-        </div>
-      </header>
+        ) : (
+          <button type="button" className="cell record" title="New meeting (Ctrl+N)" onClick={() => go({ name: 'new' })}>
+            ● Record <kbd>Ctrl N</kbd>
+          </button>
+        )}
+      </nav>
 
-      <div className="frame-body">
-        <aside className="sidebar">
-          <nav className="nav" aria-label="Main">
-            <button
-              className={`nav-item${route.name === 'dashboard' || route.name === 'detail' ? ' active' : ''}`}
-              onClick={() => go({ name: 'dashboard' })}
-            >
-              <ListIcon />
-              Meetings
-            </button>
-            {recording && (
-              <button
-                className={`nav-item${route.name === 'active' ? ' active' : ''}`}
-                onClick={() => go({ name: 'active' })}
-              >
-                <span className="live-dot" />
-                Recording…
-              </button>
-            )}
-            <button
-              className={`nav-item${route.name === 'calendar' ? ' active' : ''}`}
-              onClick={() => go({ name: 'calendar' })}
-            >
-              <CalendarIcon />
-              Calendar
-            </button>
-            <button
-              className={`nav-item${route.name === 'settings' ? ' active' : ''}`}
-              onClick={() => go({ name: 'settings' })}
-            >
-              <GearIcon />
-              Settings
-            </button>
-          </nav>
-          <div className="sidebar-footer">
-            {running.map((id) => (
-              <button
-                key={id}
-                type="button"
-                className="model-chip busy-chip"
-                title={`Open ${titleOf(id)}`}
-                onClick={() => go({ name: 'detail', id })}
-              >
-                <span className="model-dot working" />
-                {txStage[id] === 'queued'
-                  ? 'Queued'
-                  : `Transcribing ${Math.round((txProgress[id] ?? 0) * 100)}%`}{' '}
-                · {titleOf(id)}
-              </button>
-            ))}
-            {updateInfo?.available && (
-              <button
-                type="button"
-                className="update-chip"
-                onClick={() => go({ name: 'settings', tab: 'app' })}
-              >
-                Update available · v{updateInfo.version}
-              </button>
-            )}
+      <main className="main">
+        <div className="container">
+          {route.name === 'new' ? (
+            <NewMeeting />
+          ) : route.name === 'active' ? (
+            <ActiveMeeting />
+          ) : route.name === 'detail' ? (
+            <MeetingDetail id={route.id} query={route.q} />
+          ) : route.name === 'settings' ? (
+            <Settings />
+          ) : route.name === 'calendar' ? (
+            <CalendarView />
+          ) : (
+            <Dashboard />
+          )}
+        </div>
+        {finished && (
+          <div className="notice-toast" role="status">
+            <span>
+              {finished.ok ? 'Transcript ready' : 'Transcription failed'}: {titleOf(finished.id)}
+            </span>
             <button
               type="button"
-              className="model-chip"
-              title={`${modelMeta.modelId} (${modelMeta.state.replace('_', ' ')}): open model settings`}
-              onClick={() => go({ name: 'settings', tab: 'models' })}
+              className="btn btn-sm btn-primary"
+              onClick={() => {
+                go({ name: 'detail', id: finished.id });
+                setFinished(null);
+              }}
             >
-              <span className={`model-dot ${modelDot}`} />
-              {modelChipLabel(modelMeta)}
+              Open
             </button>
-            <div className="seal" role="img" aria-label="Local speech engine">
-              <span className="seal-big">LOCAL</span>
-              <span className="seal-small">speech engine</span>
-            </div>
+            <button type="button" className="btn btn-sm" onClick={() => setFinished(null)}>
+              Dismiss
+            </button>
           </div>
-        </aside>
-
-        <main className="main">
-          <div className="container">
-            {route.name === 'new' ? (
-              <NewMeeting />
-            ) : route.name === 'active' ? (
-              <ActiveMeeting />
-            ) : route.name === 'detail' ? (
-              <MeetingDetail id={route.id} query={route.q} />
-            ) : route.name === 'settings' ? (
-              <Settings />
-            ) : route.name === 'calendar' ? (
-              <CalendarView />
-            ) : (
-              <Dashboard />
-            )}
-          </div>
-          {finished && (
-            <div className="notice-toast" role="status">
-              <span>
-                {finished.ok ? 'Transcript ready' : 'Transcription failed'}: {titleOf(finished.id)}
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                onClick={() => {
-                  go({ name: 'detail', id: finished.id });
-                  setFinished(null);
-                }}
-              >
-                Open
-              </button>
-              <button type="button" className="btn btn-sm" onClick={() => setFinished(null)}>
-                Dismiss
-              </button>
-            </div>
-          )}
-          <footer className="footer-band">
-            Recordings &amp; transcripts never leave this device unless you upload them.
-          </footer>
-        </main>
-      </div>
+        )}
+      </main>
+      <footer className="footer-band">
+        Recordings &amp; transcripts never leave this device unless you upload them.
+      </footer>
     </div>
   );
 }

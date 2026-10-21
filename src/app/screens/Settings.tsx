@@ -35,6 +35,7 @@ import {
 } from '../../integrations/calendar-detect';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
+import { AppearanceSettings } from '../components/AppearanceSettings.tsx';
 import { LiveTranscriptionSettings, AutoTranscribeSettings } from '../components/LiveTranscription.tsx';
 import { nativeRecordingEnabled, setNativeRecordingEnabled } from '../../audio/native-recorder';
 import {
@@ -254,10 +255,10 @@ export function Settings(): React.JSX.Element {
 
   return (
     <>
-      <div className="page-head tint-periwinkle">
+      <div className="page-head is-tool">
         <div>
           <h1>Settings</h1>
-          <p className="muted">Models, calendar, sharing, AI, and app preferences.</p>
+          <p className="muted">Everything here is stored on this computer and survives updates.</p>
         </div>
         <button className="btn" onClick={() => go({ name: 'dashboard' })}>
           Done
@@ -272,6 +273,7 @@ export function Settings(): React.JSX.Element {
             ['sharing', 'Team sharing'],
             ['ai', 'AI assistant'],
             ['audio', 'Audio'],
+            ['appearance', 'Appearance'],
             ['app', 'App'],
           ] as const
         ).map(([id, label]) => (
@@ -311,6 +313,8 @@ export function Settings(): React.JSX.Element {
       {isDesktopApp() && <LiveTranscriptionSettings />}
       </>
       )}
+
+      {tab === 'appearance' && <AppearanceSettings />}
 
       {tab === 'app' && (
       <>

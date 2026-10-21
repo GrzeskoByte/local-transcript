@@ -102,7 +102,7 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
   await page.getByRole('button', { name: 'Meetings' }).first().click();
   await expect(page.getByRole('heading', { name: 'My Meetings' })).toBeVisible();
   await expect(page.getByText('An unfinished recording was found.')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Recording…' }).first().click();
+  await page.getByRole('button', { name: /^(REC|PAUSED) / }).first().click();
 
   // Pause for 3 s: paused time is not recording time.
   await page.getByRole('button', { name: 'Pause' }).click();

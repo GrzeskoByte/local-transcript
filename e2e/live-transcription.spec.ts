@@ -74,7 +74,7 @@ test('live transcription: enable, see text while recording, keep it, re-transcri
   await expect(picker.locator('option').first()).toHaveText(/base — recommended for live$/, { timeout: 10_000 });
   // The installed whole-file model is a live option too, and stays the main model.
   await expect(picker.locator('option')).toHaveCount(2);
-  await expect(page.locator('.sidebar .model-chip')).toContainText('large-v3-turbo-q5_0');
+  await expect(page.locator('.topbar .model-chip')).toContainText('large-v3-turbo-q5_0');
   await card.getByRole('checkbox', { name: 'Transcribe while recording' }).check();
   await expect(card.getByText('On', { exact: true })).toBeVisible();
 

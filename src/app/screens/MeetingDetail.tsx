@@ -207,7 +207,7 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
         {returnTo === 'calendar' ? '← Calendar' : '← All meetings'}
       </button>
 
-      <div className="page-head detail-head tint-peach">
+      <div className="page-head detail-head">
         {titleDraft === null ? (
           <h1>{m.title}</h1>
         ) : (

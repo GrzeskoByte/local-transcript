@@ -83,7 +83,7 @@ export function NewMeeting(): React.JSX.Element {
 
   return (
     <>
-      <div className="page-head tint-salmon">
+      <div className="page-head">
         <div>
           <h1>New Meeting</h1>
           <p className="muted">Record first, transcribe later — everything stays on this device.</p>

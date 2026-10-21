@@ -95,8 +95,8 @@ function reportStopTrace(trace: StopTrace): void {
   if (isDesktopApp()) void invokeDesktop('native_log', { message: line }).catch(() => undefined);
 }
 
-export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'audio' | 'app';
-const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'audio', 'app'];
+export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'audio' | 'appearance' | 'app';
+const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'audio', 'appearance', 'app'];
 
 export type Route =
   | { name: 'dashboard' }

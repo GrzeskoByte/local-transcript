@@ -124,7 +124,7 @@ export function CalendarView(): React.JSX.Element {
 
   return (
     <div>
-      <div className="page-head tint-lime">
+      <div className="page-head is-tool">
         <h1>Calendar</h1>
         <div className="row">
           <label className="muted" htmlFor="cal-provider">Provider</label>

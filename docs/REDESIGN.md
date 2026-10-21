@@ -1,135 +1,75 @@
-# Redesign plan: Local Transcriber × DESIGN.md (Dell 1996)
+# Redesign: Local Transcriber × DESIGN.md (Halftone Window)
 
-`DESIGN.md` is the authority. This file maps its brand language onto a desktop
-meeting recorder and records every deliberate deviation. Read both before any
-UI change.
+`DESIGN.md` is the authority. This file maps it onto the app's screens and
+records every deliberate deviation. Read both before any UI change.
 
-**Design read:** desktop productivity app (record, transcribe, review) for
-people running their own meetings, re-skinned in the 1996 catalog language:
-literal black frame, flat tinted ribbon cards, Arial Black eyebrows, Times body,
-square everything, hard 1 px edges, yellow stickers.
+Source: canvas "Local Transcriber — redesign proposal"
+(https://claude.ai/artifact/MLbt9MVbgpNdugGe58nKuh, 23 artboards) with the
+"Halftone Window" design system. It replaced the Dell 1996 catalog skin.
 
-**Dials:** variance 4 (app IA stays put), motion 2 (feedback only: press,
-blinking REC), density 6 (catalog density, as DESIGN.md asks).
+## 1. Tokens (`src/app/styles.css :root`)
 
-## 1. Audit of the old UI (retired)
+- Colours, type, spacing, shadow, stroke and size tokens exactly as in
+  DESIGN.md (`--pink`, `--hot`, `--berry`, `--ink`, `--paper`, `--panel`,
+  `--mute`, `--faint`, `--rule`, …; `--space-*`; `--sh-*`; `--frame-line`).
+  `--muted`/`--canvas` remain as aliases for older inline references.
+- `--on-hot` = text on the accent; `--sk` scales every offset shadow.
+- Fonts are bundled (no network): `@fontsource/archivo-black` (display) and
+  `@fontsource/jetbrains-mono` 400/500/700/800 (everything else), imported in
+  `main.tsx`. Archivo Black must stay first in `--font-display`: the AppImage's
+  fontconfig answers "Arial Black" with a regular bold sans.
 
-| Area | Before | Problem against DESIGN.md |
-| --- | --- | --- |
-| Palette | slate neutrals + indigo `#4f46e5` brand, purple gradient logo | accent outside the closed palette; gradients banned |
-| Type | system-ui sans everywhere | no display weight, no serif body |
-| Shape | 10–20 px radii, pills | DESIGN.md: 0 px everywhere, round only for seals |
-| Depth | soft drop shadows on every card | soft shadows banned; hairline + frame only |
-| Shell | dark navy sidebar | no frame; dark rail reads as a different brand |
-| Pills | pastel rounded chips | should be square stickers / tint blocks |
-| Inline styles | 83 `style={{}}` one-offs | tokens/utilities only |
+## 2. Appearance (runtime theme)
 
-Kept: information architecture, routes, labels, every accessible name the e2e
-suite relies on (`.sidebar .model-chip`, `h1 + p.muted`, `.transcript li`,
-`.cal-grid`, `.cal-dot.server`, button texts).
-
-## 2. Tokens (`src/app/styles.css :root`)
-
-- Colours: exactly the DESIGN.md palette (`--primary #e91d2a`, `--ink #000`,
-  `--canvas #fff`, `--yellow #fcc20f`, `--purple #6a26a4`, `--link #0000ee`,
-  8 tints). Aliases `--frame`, `--muted` (`#333`, AA on white and on every tint).
-- Fonts: `--font-display` Archivo Black (bundled via `@fontsource/archivo-black`)
-  first, then Arial Black. It must come first: in the AppImage, fontconfig answers
-  "Arial Black" with a regular bold sans, so WebKitGTK never falls back;
-  `--font-ui` Helvetica → Arial → Liberation/Nimbus Sans; `--font-body` Times
-  New Roman → Liberation Serif/Nimbus Roman.
-- Type scale = DESIGN.md typography tokens (36/24/16/14/14/12/11/12/12).
-- Spacing = DESIGN.md spacing tokens (`--sp-xxs` … `--sp-section-lg`).
-- Radius: `0`; `--round` only for the seal.
-- Form rhythm (one rule for every form): label → control `--field-gap` 10 px,
-  control → hint `--hint-gap` 6 px, field group → next label `--group-gap` 20 px,
-  last control → action row 16 px. Side-by-side fields use `.row-selects`
-  (label stacked over its control with the same gaps).
-- Depth: `--hair: 1px solid #000`, `--frame-w: 8px`, `--bevel: 2px 2px 0 #000`
-  (stickers only).
+`src/app/theme.ts` (pref `appearance` = `{brand, accent, depth, halftone,
+motion}`) writes `--pink`, `--pink-deep`, `--pink-wash` (derived from the
+brand), `--hot`, `--on-hot` (black or white, whichever passes) and `--sk` on
+`<html>`, and toggles `.noht` / `.still`. Applied in `main.tsx` before first
+render; edited in **Settings → Appearance** (`#/settings/appearance`,
+`AppearanceSettings.tsx`: presets Halftone / Sunflower / Harbour / Meadow,
+brand + accent swatches, colour picker + hex field, contrast readout, shadow
+depth, halftone, motion, reset). Covered by `src/app/theme.test.ts` and
+`e2e/appearance.spec.ts`.
 
 ## 3. Component mapping
 
-| DESIGN.md component | App element |
+| Canvas / DESIGN.md | App element |
 | --- | --- |
-| `page-frame` | `.layout`: 8 px black frame around the whole window (4 px ≤ 820 px) |
-| `top-banner` | new black `.topbar`: wordmark, tagline, phone-callout, sticker |
-| `phone-callout` | red-on-black status in the banner: `ON-DEVICE` idle, `● REC 12:34` while recording (links to Active Meeting) |
-| `buy-a-dell-sticker` | yellow **New recording** sticker in the banner (replaces the nav item) |
-| `icon-label-nav` | white left rail (`.sidebar`): icon + uppercase Helvetica labels, active row = black fill + red indicator |
-| `cert-seal` | round red "100% local" seal at the bottom of the rail |
-| `section-eyebrow-*` | every screen's `.page-head`: tinted block, Arial Black caps title |
-| `ribbon-card-title` + `ribbon-card-body-*` | `.card`: white title bar with black underline (`.card-title` / first `<strong>`), white or tinted body |
-| `cta-block-red` | at most one per screen: **Stop & save** (Active Meeting), **Set up transcription** panel (Dashboard first run) |
-| `new-burst-sticker` | rotated yellow **NEW!**-style sticker: update available, "Recommended" model, selected source |
-| `button-primary/secondary` | `.btn-primary` black, `.btn` white outline; uppercase Helvetica 12 bold |
-| `button-text-link` | `.link-btn`, `.backlink`: underlined `#0000ee` Times |
-| `text-input` | `.input`, selects, textareas: 1 px black, Times 14 |
-| `footer-band` | `.footer-band` under every screen: privacy line + engine status, body-sm |
-| `ex-data-table-cell` | transcript rows, model rows, calendar grid: 1 px black rules |
-| `.loader` (app-only) | **Saving recording…** in the Active Meeting hero while Stop runs (`.rec-saving`: white box, square `.spinner`, replaces the buttons) |
-| `.transcript` list + checkboxes (`.issue-pick`) | Summary card **Action items** when GitLab is set up: one checkbox row per pending item, `Issue #N` link (classic link blue) once created, plain `btn` **Create GitLab issues (N)** |
-| `ribbon-card-title` as a toggle (`Section`) | every Meeting Detail card: ▾/▸ + caps title is one button; collapsed = title bar only, with a muted one-line peek and title-bar actions (`btn-sm` **Copy**) |
-| `.section-nav` (app-only) | sticky white strip under the Meeting Detail eyebrow: classic-blue `link-btn` jump links + `btn-sm` **Collapse all** |
-| `.error-toast` / `.notice-toast` (app-only) | fixed hard-bordered boxes (2 px red / 2 px black, no shadow) for errors and "Transcript ready" |
-| `.item-tag` (app-only) | hairline caps tag after an action item: `Issue #N` (link) / `Event <date>` |
-| `.start-bar` (app-only) | New Meeting: sticky white strip with a top hairline holding Start / Import / Cancel |
-| `.tabs` as filters | Dashboard status filter (`aria-pressed`), counts in the label; replaces the stats strip |
-| `.row-menu` (app-only) | **⋯** square per meeting row; opens a hairline box with Rename / Delete |
-| `.transcript li.active` | the line being played: yellow-tinted row with a 4 px black left rule (hard edge, no shadow blur) |
-| `.danger-zone` | Meeting Detail **Delete** card: salmon title bar, red border |
-| `.transcript` + `.issue-pick` + `.event-draft` | **Calendar event** card: **Items to schedule** checkbox list (✓ + start once scheduled), then one `.event-draft` fieldset per item (hairline rule on top, uppercase `field-label` legend "Event N of M", title/start/end/description inputs), `btn-primary` **Approve & create N events**; **Prepare custom event** stays a plain `btn` |
-| `ribbon-card-title` + `.transcript` | **Live transcript** card on Active Meeting (white body, ruled `.transcript` list capped at 320 px with its own scroll, lime/salmon status badge) and the **Live transcription** card in Settings → Models |
+| Nav window | `.topbar` (`nav[aria-label=Main]`): `.brand` (dots + `local-transcriber`), `.navlink` Meetings / Calendar / Settings (`.active` = ink + hot underline), `.topbar-fill`, `.cell` status cells (`.busy-chip` "Transcribing N% · title", `.update-chip`, `.model-chip` with `[x]`/`[ ]`/`[~]`), then `.cell.record` **● Record Ctrl N** or `.cell.live` **● REC mm:ss** (paused = pink) |
+| Page head | `.page-head` pink (Dashboard, New Meeting, Meeting Detail); `.page-head.is-tool` panel (Settings, Calendar); halftone = `::before` |
+| Window | `.card`; title bar = first `strong` / `.model-title` / `.card-title` (ink, `::before` dots) |
+| Window foot bar | `.start-bar` (New Meeting: panel strip with Start / Import / Cancel) |
+| Primary action (hot) | nav **● Record**, Active Meeting **Stop & save**; everything else is ink/paper |
+| Pink feature panel | `.cta-red` (Dashboard "Set up transcription") — pink field + halftone + `sh-lg` |
+| Meeting row | `.meeting-item` (title / meta / tags / ink chevron), `.row-menu` ⋯ square |
+| Tags | `.pill` with mode glyphs and `[x]`/`[ ]`/`[!]` status marks; `.badge-*` share them |
+| Tabs | `.tabs` / `.tab` (Settings sections, Dashboard filters) |
+| Tier module | `.tier-card` (`details`/`section`), `.tier-badge` (S = hot), `.model-row.active` |
+| Recording field | `.rec-hero` (ink, `sh-xl`, hot halftone, round lamp, 124 px timer) |
+| Transcript | `.transcript` (berry timestamps, `li.active` pink-wash + hot bar, pink `mark`) |
+| Jump bar | `.section-nav` (sticky under the nav window) |
+| Toasts | `.notice-toast` (ink bar), `.error-toast` (hot bar) |
+| Danger window | `.card.danger-zone` (hot title bar) |
+| Calendar month | `.cal-grid`: ink weekday heads, ruled cells, today = hot number, selected = pink, dots ink (recorded) / hot (server) |
+| Footer | `.footer-band` (black band, pink `[x]`) |
 
-### Tint assignment (one family per "product line")
+## 4. Deviations from the canvas (deliberate)
 
-| Line | Tint |
-| --- | --- |
-| Meetings (Dashboard) | sky |
-| New Meeting | salmon |
-| Meeting Detail | peach |
-| Calendar | lime |
-| Settings | periwinkle |
-| Active Meeting | black frame (no tint: the recording is the CTA) |
-| Mode: Speaker / Device / Mic + Device / File | sage / periwinkle / peach / steel |
-| Status: completed / processing / failed | lime / yellow sticker / salmon |
-| Model tiers S / A / B / C / D | yellow / lime / sky / peach / steel |
+- **IA kept.** Nav reads **Meetings / Calendar / Settings** (the canvas has
+  Home / Library / Settings with Calendar as a Library "Month" tab); routes,
+  screen order and every accessible name the e2e suite relies on are
+  unchanged. New Meeting stays its own screen (the canvas folds it into Home).
+- **Settings sections stay tabs** (`#/settings/<tab>`), not a side window;
+  Appearance is a new tab.
+- **Not built yet** (canvas proposals that need new features, not a skin):
+  Home "Waiting for you" / "Coming up" panels, Library filters + bulk actions,
+  the 8-step first-run wizard, Moments (press M), per-speaker transcript
+  filter and agenda chapters on the waveform, the guided after-Stop wrap-up
+  and its tabbed revisit, the storage meter, Settings "after recording" /
+  "summaries" split.
+- **Light only**, as in the canvas.
 
-## 4. Screen plan
-
-1. **Shell** – frame, black banner, white rail with icon-label nav, model chip,
-   NEW! update sticker, seal; content column max 880 px.
-2. **Dashboard** – sky eyebrow "My Meetings"; stats as three bordered catalog
-   cells; search as a classic bordered input; meetings as ribbon rows (white
-   title bar, mode-tinted body, square stickers); empty state as a ribbon card.
-3. **New Meeting** – salmon eyebrow; source choices as ribbon cards tinted by
-   mode, selected = thick frame + rotated "Selected" sticker; numbered fields;
-   black **Start Recording**.
-4. **Active Meeting** – black hero framed like the banner; Arial Black title,
-   giant red timer (phone-callout scale), blinking square REC lamp (still under
-   reduced motion); red **Stop & save** = the screen's only red CTA.
-5. **Meeting Detail** – peach eyebrow with title; player as a framed ribbon
-   card (black/steel waveform); transcript as a ruled list with blue underlined
-   timestamps; export grid of square buttons; danger zone in salmon.
-6. **Calendar** – lime eyebrow; 7-column grid of square bordered cells, today =
-   yellow sticker number, selected = inverted, event marks = square swatches.
-7. **Settings** – periwinkle eyebrow; tabs as folder tabs (active = black);
-   tiers as ribbon cards with tint tier badges.
-
-## 5. Deviations from DESIGN.md (functional, deliberate)
-
-- **Red for errors/destructive.** The palette has no error colour; `--primary`
-  is used as *text/border* for errors and destructive buttons. As a *fill* it
-  stays reserved for the single red CTA and the phone-callout.
-- **Hover/focus states.** DESIGN.md documents no hover; an app needs them.
-  Hover = invert (black ⇄ white) or underline; focus = 2 px dotted black
-  outline offset 2 px (keyboard a11y).
-- **Light only.** The 1996 language has no dark mode; the app stays light.
-- **Progress bars, waveform, sliders** are app-only primitives: black fill,
-  1 px black track, no radius.
-- **Bundled display font** (Archivo Black) where Arial Black is missing.
-
-## 6. Verification
+## 5. Verification
 
 `npx tsc --noEmit` → `npx vitest run` → `npm run build && npx playwright test`
-→ `npm run tauri:dev` for a visual pass on the real desktop shell.
+→ `npm run tauri:dev` (or the AppImage) for a visual pass on the real shell.

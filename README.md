@@ -241,6 +241,12 @@ download link. Installing is disabled while recording or transcribing.
   releases still build, just without in-app update artifacts. Losing the private
   key means installed apps can no longer update — keep a backup.
 
+**Canary builds:** run **Actions → Release** on any branch with *channel = canary*.
+It publishes pre-releases tagged `v<next-patch>-canary.<run>-<platform>` at once
+(no drafts). The app inside keeps its stable version, so the in-app updater moves
+canary users to the next stable release, and `latest.json` ignores canary tags —
+stable users are never offered a canary.
+
 Run it manually from **Actions → Release** to test (drafts by default). Builds are
 not code-signed or notarized yet; the release notes (`.github/release-notes/`)
 tell users how to get past SmartScreen / Gatekeeper.

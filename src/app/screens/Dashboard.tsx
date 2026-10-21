@@ -130,7 +130,7 @@ export function Dashboard(): React.JSX.Element {
 
   return (
     <>
-      <div className="page-head tint-sky">
+      <div className="page-head">
         <div>
           <h1>My Meetings</h1>
           <p className="muted">Your recording and transcript stay on this device.</p>

@@ -11,6 +11,12 @@
 # Trigger: push a tag `v<version>` matching package.json / tauri.conf.json /
 # Cargo.toml, or run manually (Actions → Release → Run workflow).
 # Releases are created as DRAFTS by default: review, then publish.
+#
+# Canary (Actions → Release → Run workflow, channel = canary, any branch):
+# publishes PRE-RELEASES tagged v<next-patch>-canary.<run>-<platform> straight
+# away (never drafts). The app keeps its own version, so the in-app updater
+# moves canary users to the next stable release; the updater manifest only
+# reads v<x.y.z>-<platform> tags, so stable users are never offered a canary.
 name: Release
 
 on:
@@ -18,8 +24,13 @@ on:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
     inputs:
+      channel:
+        description: stable = v<version>-<platform>; canary = pre-release v<next>-canary.<run>-<platform>, published at once
+        type: choice
+        options: [stable, canary]
+        default: stable
       draft:
-        description: Create the releases as drafts (review before publishing)
+        description: Create the releases as drafts (review before publishing; ignored for canary)
         type: boolean
         default: true
       prerelease:
@@ -48,6 +59,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      label: ${{ steps.version.outputs.label }}
+      canary: ${{ steps.version.outputs.canary }}
       build-matrix: ${{ steps.matrix.outputs.build }}
       publish-matrix: ${{ steps.matrix.outputs.publish }}
     steps:
@@ -66,6 +79,14 @@ jobs:
             echo "::error::Tag ${GITHUB_REF_NAME} does not match version v$pkg."; exit 1
           fi
           echo "version=$pkg" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.channel }}" = "canary" ]; then
+            next=$(node -p "const [a,b,c]='$pkg'.split('.').map(Number); [a,b,c+1].join('.')")
+            echo "label=$next-canary.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "canary=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "label=$pkg" >> "$GITHUB_OUTPUT"
+            echo "canary=false" >> "$GITHUB_OUTPUT"
+          fi
       - id: matrix
         name: Select platforms
         env:
@@ -196,7 +217,7 @@ jobs:
           [ "$os_name" = "ubuntu" ] && os_name=linux
           node scripts/collect-release.mjs \
             "src-tauri/target/${{ matrix.target }}/release/bundle" release \
-            "${{ needs.prepare.outputs.version }}" "$os_name" "${{ matrix.arch }}"
+            "${{ needs.prepare.outputs.label }}" "$os_name" "${{ matrix.arch }}"
 
       - uses: actions/upload-artifact@v6
         with:
@@ -233,28 +254,35 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
-          sed "s/{{VERSION}}/${{ needs.prepare.outputs.version }}/g" \
-            ".github/release-notes/${{ matrix.platform }}.md" > notes.md
+          if [ "${{ needs.prepare.outputs.canary }}" = "true" ]; then
+            {
+              echo "> **Canary build** of \`${{ github.ref_name }}\` @ ${GITHUB_SHA::7} — a preview, not a stable release."
+              echo "> The app reports version ${{ needs.prepare.outputs.version }} and updates to the next stable release."
+              echo
+            } > notes.md
+          fi
+          sed "s/{{VERSION}}/${{ needs.prepare.outputs.label }}/g" \
+            ".github/release-notes/${{ matrix.platform }}.md" >> notes.md
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - uses: softprops/action-gh-release@v3
         if: steps.files.outputs.skip == 'false'
         with:
-          tag_name: v${{ needs.prepare.outputs.version }}-${{ matrix.platform }}
-          name: Local Transcriber ${{ needs.prepare.outputs.version }} — ${{ matrix.title }}
+          tag_name: v${{ needs.prepare.outputs.label }}-${{ matrix.platform }}
+          name: Local Transcriber ${{ needs.prepare.outputs.label }} — ${{ matrix.title }}
           target_commitish: ${{ github.sha }}
           body_path: notes.md
           files: release/*
           fail_on_unmatched_files: true
-          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || github.event_name == 'push' }}
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
+          draft: ${{ needs.prepare.outputs.canary != 'true' && (github.event_name == 'workflow_dispatch' && inputs.draft || github.event_name == 'push') }}
+          prerelease: ${{ needs.prepare.outputs.canary == 'true' || (github.event_name == 'workflow_dispatch' && inputs.prerelease) }}
 
   update-manifest:
     name: Refresh in-app update manifest
     needs: [publish]
     # Drafts are not downloadable yet: publishing a draft by hand fires
     # update-manifest.yml (release: published) instead.
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.draft }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.draft && inputs.channel != 'canary' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write

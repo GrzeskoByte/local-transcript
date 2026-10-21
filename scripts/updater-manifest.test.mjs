@@ -29,6 +29,16 @@ describe('updater manifest', () => {
     expect(plan.entries.map((e) => e.key).sort()).toEqual(['linux-x86_64', 'windows-x86_64']);
   });
 
+  it('never offers a canary pre-release to the stable updater', () => {
+    const withCanary = [
+      ...releases,
+      release('v0.1.3-canary.7-ubuntu', [
+        'LocalTranscriber_0.1.3-canary.7_linux_amd64.AppImage', 'LocalTranscriber_0.1.3-canary.7_linux_amd64.AppImage.sig',
+      ], { prerelease: true }),
+    ];
+    expect(planManifest(withCanary).version).toBe('0.1.2');
+  });
+
   it('builds latest.json with trimmed signatures', () => {
     const plan = planManifest(releases);
     const sigs = Object.fromEntries(plan.entries.map((e) => [e.sigUrl, `sig-${e.key}\n`]));
