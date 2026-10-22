@@ -57,8 +57,9 @@ describe('privacy: network access is limited to user-initiated features', () => 
       .filter(Boolean)
       .sort();
     // cpal (audio capture: WASAPI / CoreAudio / PulseAudio over its local
-    // socket) and opus (libopus, built in) are offline audio libraries.
-    expect(names).toEqual(['base64', 'cpal', 'opus', 'serde', 'serde_json', 'tauri', 'tauri-plugin-updater']);
+    // socket) and opus (libopus, built in) are offline audio libraries;
+    // tauri-plugin-dialog only opens the system folder picker.
+    expect(names).toEqual(['base64', 'cpal', 'opus', 'serde', 'serde_json', 'tauri', 'tauri-plugin-dialog', 'tauri-plugin-updater']);
   });
 
   it('the native recorder keeps audio on this machine', () => {
@@ -68,6 +69,14 @@ describe('privacy: network access is limited to user-initiated features', () => 
     for (const source of files) {
       expect(source).not.toMatch(/TcpStream|UdpSocket|reqwest|http:\/\/|https:\/\/|proc::command/);
     }
+  });
+
+  it('speaker detection runs offline on bundled models', () => {
+    const source = readFileSync(join(ROOT, 'src-tauri/src/diarize.rs'), 'utf8');
+    expect(source).not.toMatch(/curl|TcpStream|reqwest|https?:\/\//);
+    // The diarizer and its models are fetched at build time (release.yml), never by the app.
+    const script = readFileSync(join(ROOT, 'scripts/fetch-diarizer.sh'), 'utf8');
+    expect(script).toMatch(/sha256/i);
   });
 
   it('does not check for updates on its own unless the user turned it on', () => {

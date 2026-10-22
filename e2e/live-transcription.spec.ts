@@ -80,6 +80,7 @@ test('live transcription: enable, see text while recording, keep it, re-transcri
 
   // --- New Meeting shows the same switch, with the model ---
   await page.goto('/#/new');
+  await page.getByRole('button', { name: 'Devices, agenda & live draft…' }).click();
   const toggle = page.getByRole('checkbox', { name: 'Transcribe live while recording (base)' });
   await expect(toggle).toBeChecked();
   await page.locator('#meeting-title').fill('Live Test');
@@ -115,6 +116,7 @@ test('live transcription off: recording behaves as before (no live calls, not tr
   page.on('dialog', (d) => void d.accept());
   await mockDesktop(page);
   await page.goto('/#/new');
+  await page.getByRole('button', { name: 'Devices, agenda & live draft…' }).click();
   await expect(page.getByRole('checkbox', { name: /Transcribe live while recording/ })).not.toBeChecked();
   await page.getByRole('button', { name: '● Start Recording' }).click();
   await expect(page.getByRole('region', { name: 'Recording in progress' })).toBeVisible();

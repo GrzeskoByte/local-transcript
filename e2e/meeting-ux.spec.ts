@@ -1,10 +1,10 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
 
 /**
- * Meeting Detail ergonomics for long meetings: collapsible sections (state
- * remembered), jump bar, copy, rename, Ctrl+F, and Dashboard search that
- * matches titles and carries the query into the transcript.
+ * Meeting screen ergonomics: tabs (in the URL), editable lines, copy, rename,
+ * Ctrl+F, and Library search that matches titles and carries a transcript hit
+ * into the meeting.
  */
 async function mockDesktop(page: Page, opts: { failTranscribe?: boolean } = {}): Promise<void> {
   await page.addInitScript((failTranscribe) => {
@@ -48,78 +48,62 @@ async function transcribedMeeting(page: Page, title: string): Promise<void> {
   await expect(page.getByText('Anna will send the budget notes.')).toBeVisible({ timeout: 30_000 });
 }
 
-test('sections collapse (remembered), the jump bar reopens them, Copy and Rename work', async ({ page, context }) => {
+test('tabs live in the URL; lines can be fixed; Copy, Ctrl+F and Rename work', async ({ page, context }) => {
   test.setTimeout(90_000);
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await mockDesktop(page);
   await transcribedMeeting(page, 'Budget sync');
 
-  if (process.env.LT_SHOT) await page.screenshot({ path: `${process.env.LT_SHOT}-detail.png`, fullPage: true });
-  const transcript = page.getByRole('region', { name: 'Transcript text' });
-  const toggle = transcript.getByRole('button', { name: 'Transcript', exact: true });
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(transcript.getByRole('listitem')).toHaveCount(0);
-  // Collapsed sections show a one-line preview.
-  await expect(transcript).toContainText('Anna will send the budget notes.');
-
-  // Remembered across a reload.
+  const tabs = page.getByRole('tablist', { name: 'Meeting' });
+  await tabs.getByRole('tab', { name: /Summary/ }).click();
+  await expect(page).toHaveURL(/\/summary$/);
   await page.reload();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(tabs.getByRole('tab', { name: /Summary/ })).toHaveAttribute('aria-selected', 'true');
+  await tabs.getByRole('tab', { name: /Transcript/ }).click();
 
-  // The jump bar opens it again.
-  await page.getByRole('navigation', { name: 'Meeting sections' }).getByRole('button', { name: 'Jump to transcript' }).click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-
-  // Collapse all / Expand all.
-  const nav = page.getByRole('navigation', { name: 'Meeting sections' });
-  await nav.getByRole('button', { name: 'Collapse all' }).click();
-  await expect(page.getByRole('region', { name: 'Recording playback' }).getByRole('button', { name: 'Recording', exact: true }))
-    .toHaveAttribute('aria-expanded', 'false');
-  if (process.env.LT_SHOT) await page.screenshot({ path: `${process.env.LT_SHOT}-collapsed.png`, fullPage: true });
-  await nav.getByRole('button', { name: 'Expand all' }).click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  // Fix a line in place.
+  const transcript = page.getByRole('region', { name: 'Transcript text' });
+  await transcript.getByRole('button', { name: 'Anna will send the budget notes.' }).click();
+  await transcript.getByLabel('Edit line').fill('Anna will send the final budget notes.');
+  await transcript.getByLabel('Edit line').press('Enter');
+  await expect(transcript).toContainText('Anna will send the final budget notes.');
+  await page.reload();
+  await expect(transcript).toContainText('Anna will send the final budget notes.');
 
   // Copy the whole transcript.
   await transcript.getByRole('button', { name: 'Copy transcript' }).click();
   await expect(transcript.getByRole('button', { name: 'Copy transcript' })).toHaveText('Copied');
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('Anna will send the budget notes.');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('final budget notes');
 
   // Ctrl+F focuses the transcript search.
+  await page.locator('h1').click();
   await page.keyboard.press('Control+f');
   await expect(page.getByLabel('Search transcript')).toBeFocused();
 
-  // Rename in place; the list shows the new title.
+  // Rename in place; Home shows the new title.
   await page.getByRole('button', { name: 'Rename' }).click();
   await page.getByLabel('Meeting title').fill('Budget sync (Q4)');
   await page.getByLabel('Meeting title').press('Enter');
   await expect(page.getByRole('heading', { name: 'Budget sync (Q4)' })).toBeVisible();
-  await page.getByRole('button', { name: '← All meetings' }).click();
-  await expect(page.getByRole('region', { name: 'Today' })).toContainText('Budget sync (Q4)');
-  if (process.env.LT_SHOT) await page.screenshot({ path: `${process.env.LT_SHOT}-dashboard.png`, fullPage: true });
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Recent meetings' })).toContainText('Budget sync (Q4)');
 });
 
-test('Dashboard search matches titles at once and carries a transcript hit into the meeting', async ({ page }) => {
+test('Library search matches titles at once and carries a transcript hit into the meeting', async ({ page }) => {
   test.setTimeout(90_000);
   await mockDesktop(page);
   await transcribedMeeting(page, 'Weekly planning');
-  await page.getByRole('button', { name: '← All meetings' }).click();
+  await page.goto('/#/library');
 
   const search = page.getByLabel('Search meetings');
   await search.fill('weekly');
-  const results = page.getByRole('region', { name: 'Search results' });
-  await expect(results.getByRole('button', { name: /Weekly planning/ })).toBeVisible();
+  await expect(page.getByRole('region', { name: /Meetings matching/ }).getByRole('button', { name: 'Weekly planning' })).toBeVisible();
 
   await search.fill('budget');
-  await results.getByRole('button', { name: /budget notes/ }).click();
+  await page.getByRole('region', { name: 'Lines matching budget' }).getByRole('button', { name: 'Weekly planning' }).click();
   await expect(page.getByLabel('Search transcript')).toHaveValue('budget');
   await expect(page.locator('.transcript mark')).toHaveText('budget');
   await expect(page.getByRole('region', { name: 'Transcript text' }).getByRole('status')).toHaveText('1 of 1 lines');
-
-  // The Dashboard query is still there on the way back.
-  await page.getByRole('button', { name: '← All meetings' }).click();
-  await expect(page.getByLabel('Search meetings')).toHaveValue('budget');
 });
 
 test('player: Space plays, speed cycles, the transcript follows; keys stay out of text fields', async ({ page }) => {
@@ -169,7 +153,7 @@ test('a failed transcription keeps its reason on the meeting', async ({ page }) 
 test('opt-in: transcribe automatically after Stop', async ({ page }) => {
   test.setTimeout(90_000);
   await mockDesktop(page);
-  await page.goto('/#/settings/models');
+  await page.goto('/#/settings/after');
   await page.getByRole('region', { name: 'Transcribe after recording' }).getByLabel('Transcribe automatically after Stop').check();
   page.on('dialog', (d) => void d.accept());
   await page.goto('/#/new');
@@ -184,7 +168,7 @@ test('opt-in: transcribe automatically after Stop', async ({ page }) => {
   await expect(page.getByText('Anna will send the budget notes.')).toBeVisible({ timeout: 30_000 });
 });
 
-test('meeting list: status filters, row rename and delete, back link to the Calendar', async ({ page }) => {
+test('library: status filters, bulk delete, back link to the month view', async ({ page }) => {
   test.setTimeout(120_000);
   await mockDesktop(page);
   await transcribedMeeting(page, 'Filter me');
@@ -197,29 +181,24 @@ test('meeting list: status filters, row rename and delete, back link to the Cale
   await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
 
-  await page.goto('/#/');
-  const filters = page.getByRole('group', { name: 'Filter meetings' });
-  await filters.getByRole('button', { name: 'Transcribed (1)', exact: true }).click();
-  await expect(page.locator('.meeting-item')).toHaveCount(1);
-  await expect(page.locator('.meeting-item')).toContainText('Filter me');
-  await filters.getByRole('button', { name: 'Not transcribed (1)' }).click();
-  await expect(page.locator('.meeting-item')).toContainText('Raw audio');
-  await filters.getByRole('button', { name: 'All (2)' }).click();
+  await page.goto('/#/library');
+  const filters = page.getByLabel('Filters');
+  const rows = page.locator('.meetings-table tbody tr');
+  await expect(rows).toHaveCount(2);
+  await filters.getByRole('checkbox', { name: 'Not transcribed' }).uncheck();
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText('Filter me');
+  await filters.getByRole('checkbox', { name: 'Not transcribed' }).check();
 
-  await page.getByLabel('Actions for Raw audio').click();
-  await page.getByRole('button', { name: 'Rename', exact: true }).click();
-  await page.getByLabel('Meeting title').fill('Raw audio (kept)');
-  await page.getByLabel('Meeting title').press('Enter');
-  await expect(page.locator('.meeting-item').filter({ hasText: 'Raw audio (kept)' })).toHaveCount(1);
-  await page.getByLabel('Actions for Raw audio (kept)').click();
-  await page.getByRole('button', { name: 'Delete', exact: true }).click();
-  await page.getByRole('button', { name: 'Yes, delete' }).click();
-  await expect(page.locator('.meeting-item')).toHaveCount(1);
+  await page.getByRole('checkbox', { name: 'Select Raw audio' }).check();
+  const bar = page.getByRole('toolbar', { name: 'Selected meetings' });
+  await bar.getByRole('button', { name: 'Delete…' }).click();
+  await bar.getByRole('button', { name: 'Yes, delete 1' }).click();
+  await expect(rows).toHaveCount(1);
 
-  // Opened from the Calendar (today is selected), the back link returns there.
-  await page.getByRole('button', { name: 'Calendar' }).first().click();
+  // Opened from the month view (today is selected), the back link returns there.
+  await page.getByRole('button', { name: 'Month', exact: true }).click();
   await page.getByRole('button', { name: 'Open', exact: true }).first().click();
-  await expect(page.getByRole('button', { name: '← Calendar' })).toBeVisible();
-  await page.getByRole('button', { name: '← Calendar' }).click();
+  await page.getByRole('button', { name: '← Library' }).click();
   await expect(page.locator('.cal-grid')).toBeVisible();
 });

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
 
 /**
@@ -69,7 +69,7 @@ test('Stop opens Meeting Detail within seconds even when teardown hangs', async 
   // The Stop timings reach the terminal and name the step that hung.
   const log = await page.evaluate(() => (window as unknown as { __log?: string[] }).__log ?? []);
   expect(log.join('\n')).toMatch(/Stop took \d+ ms: diagnostics \d{4} ms \(slowest\)/);
-  await page.getByRole('button', { name: '← All meetings' }).click();
-  await expect(page.getByRole('heading', { name: 'My Meetings' })).toBeVisible();
+  await page.getByRole('button', { name: /^← (Home|Library)/ }).click();
+  await expect(page).not.toHaveURL(/#\/meeting\//);
   await expect(page.getByText('Hang Test')).toBeVisible();
 });

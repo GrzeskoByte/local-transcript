@@ -13,6 +13,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const TAG = /^v(\d+)\.(\d+)\.(\d+)-(windows|macos|ubuntu)$/;
+/** Test releases: v<x.y.z>-canary.<n>-<platform>; the app inside reports <x.y.z>-<n>. */
+const CANARY_TAG = /^v(\d+)\.(\d+)\.(\d+)-canary\.(\d+)-(windows|macos|ubuntu)$/;
 
 /** Update artifact name suffix → Tauri platform key. */
 export const ARTIFACTS = [
@@ -24,21 +26,33 @@ export const ARTIFACTS = [
   { match: /_linux_arm64\.AppImage$/, key: 'linux-aarch64' },
 ];
 
+/** Versions as [major, minor, patch, pre]: pre = Infinity for a stable release
+ *  (semver: 0.1.24-40 < 0.1.24). */
 function cmp(a, b) {
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  for (let i = 0; i < 4; i++) if ((a[i] ?? Infinity) !== (b[i] ?? Infinity)) return (a[i] ?? Infinity) - (b[i] ?? Infinity);
   return 0;
+}
+
+function versionString(v) {
+  const base = v.slice(0, 3).join('.');
+  return v[3] === undefined || v[3] === Infinity ? base : `${base}-${v[3]}`;
 }
 
 /**
  * Pick the newest published version and its update artifacts.
  * Returns { version, notes, pubDate, entries: [{ key, url, sigUrl }] } or null.
  */
-export function planManifest(releases) {
+export function planManifest(releases, { canary = false } = {}) {
   const published = [];
   for (const r of releases) {
+    if (r.draft) continue;
     const m = TAG.exec(r.tag_name ?? '');
-    if (!m || r.draft) continue;
-    published.push({ r, v: [+m[1], +m[2], +m[3]], platform: m[4] });
+    if (m) {
+      published.push({ r, v: [+m[1], +m[2], +m[3], Infinity], platform: m[4] });
+      continue;
+    }
+    const c = canary ? CANARY_TAG.exec(r.tag_name ?? '') : null;
+    if (c) published.push({ r, v: [+c[1], +c[2], +c[3], +c[4]], platform: c[5] });
   }
   if (published.length === 0) return null;
   const newest = published.reduce((a, b) => (cmp(b.v, a.v) > 0 ? b : a)).v;
@@ -56,8 +70,8 @@ export function planManifest(releases) {
   }
   const dates = current.map((p) => p.r.published_at).filter(Boolean).sort();
   return {
-    version: newest.join('.'),
-    notes: `Local Transcriber ${newest.join('.')}. Release notes: https://github.com/GrzeskoByte/local-transcript/releases`,
+    version: versionString(newest),
+    notes: `Local Transcriber ${versionString(newest)}. Release notes: https://github.com/GrzeskoByte/local-transcript/releases`,
     pubDate: dates[dates.length - 1] ?? new Date().toISOString(),
     entries,
   };
@@ -74,14 +88,16 @@ export function buildManifest(plan, signatures) {
 }
 
 async function main() {
-  const [releasesPath, outPath] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const canary = args.includes('--canary');
+  const [releasesPath, outPath] = args.filter((a) => a !== '--canary');
   if (!releasesPath || !outPath) {
-    console.error('usage: updater-manifest.mjs <releases.json> <latest.json>');
+    console.error('usage: updater-manifest.mjs [--canary] <releases.json> <latest.json>');
     process.exit(2);
   }
   // `gh api --paginate` concatenates JSON arrays: `[...][...]`.
   const raw = readFileSync(releasesPath, 'utf8').trim().replace(/\]\s*\[/g, ',');
-  const plan = planManifest(JSON.parse(raw));
+  const plan = planManifest(JSON.parse(raw), { canary });
   if (!plan) {
     console.error('No published release found.');
     process.exit(1);

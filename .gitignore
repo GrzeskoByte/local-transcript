@@ -7,3 +7,6 @@ bench/fixtures/cache/
 
 # promo showreel (local only)
 promo/
+
+# speaker-detection runtime fetched at build time (scripts/fetch-diarizer.sh)
+src-tauri/diarize/

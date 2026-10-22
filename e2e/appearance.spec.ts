@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 /** Settings → Appearance: presets/colours apply at once and survive a reload. */
 test('appearance: a preset recolours the app and is remembered', async ({ page }) => {

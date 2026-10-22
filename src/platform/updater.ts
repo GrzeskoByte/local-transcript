@@ -21,19 +21,37 @@ export interface UpdateInfo {
 }
 
 export interface UpdateProgress {
-  stage: 'idle' | 'downloading' | 'installing' | 'restarting' | 'error';
+  /** `installed`: installed with "On next launch", waiting for a restart. */
+  stage: 'idle' | 'downloading' | 'installing' | 'restarting' | 'installed' | 'error';
   downloaded: number;
   total: number | null;
   error: string | null;
 }
 
-export function checkForUpdate(): Promise<UpdateInfo> {
-  return invokeDesktop<UpdateInfo>('native_update_check');
+/** Settings → App: "Include test releases" (canary builds; off by default). */
+export const TEST_RELEASES_KEY = 'update-test-releases';
+export function getTestReleases(): boolean {
+  return getPref(TEST_RELEASES_KEY) === 'true';
+}
+export function setTestReleases(value: boolean): void {
+  setPref(TEST_RELEASES_KEY, String(value));
 }
 
-/** Resolves only on failure: a successful install restarts the app. */
-export function installUpdate(): Promise<void> {
-  return invokeDesktop<void>('native_update_install');
+export function checkForUpdate(): Promise<UpdateInfo> {
+  return invokeDesktop<UpdateInfo>('native_update_check', { channel: getTestReleases() ? 'canary' : 'stable' });
+}
+
+/**
+ * `relaunch` true ("Restart now"): resolves only on failure — the app
+ * restarts. false ("On next launch"): installs and resolves; the new
+ * version starts next time (or via `relaunchApp`).
+ */
+export function installUpdate(relaunch = true): Promise<void> {
+  return invokeDesktop<void>('native_update_install', { relaunch });
+}
+
+export function relaunchApp(): Promise<void> {
+  return invokeDesktop<void>('native_relaunch');
 }
 
 export function getUpdateProgress(): Promise<UpdateProgress> {

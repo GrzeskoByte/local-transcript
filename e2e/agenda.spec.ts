@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
 
 /**
@@ -52,6 +52,7 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await mockInstalledModel(page);
   await page.goto('/#/new');
   await page.locator('#meeting-title').fill('Agenda Meeting');
+  await page.getByRole('button', { name: 'Devices, agenda & live draft…' }).click();
   await page.getByRole('button', { name: '+ Add agenda' }).click();
   await page.getByLabel('Topic 1', { exact: true }).fill('Status update');
   await page.getByLabel('Minutes for topic 1').fill('10');
@@ -67,6 +68,7 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await page.getByRole('button', { name: '■ Stop & save' }).click();
   await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
+  await page.getByRole('tab', { name: /Summary/ }).click();
 
   const card = page.getByRole('region', { name: 'Meeting agenda' });
   await expect(card).toContainText('3 topics');
@@ -80,7 +82,8 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await page.reload();
   await expect(page.getByRole('region', { name: 'Meeting agenda' })).toContainText('@anna · 15 min');
 
-  await page.getByRole('button', { name: 'Agenda file', exact: true }).click();
+  await page.locator('details.menu > summary').click();
+  await page.getByRole('menuitem', { name: 'Agenda file', exact: true }).click();
   await expect(page.getByRole('status', { name: 'Export saved' })).toContainText(
     'Saved to /home/me/Downloads/Agenda-Meeting-agenda.md',
   );

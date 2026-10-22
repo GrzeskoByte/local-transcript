@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 /**
  * Linux desktop: Device Audio / Two-way record system sound through the sound
@@ -49,8 +49,8 @@ test('Mic + Device on Linux mixes mic + system audio into one track without a sc
   });
 
   await page.goto('/#/new');
-  await page.getByRole('button', { name: /Mic \+ Device/ }).click();
-  await expect(page.getByText('everything your computer plays (e.g. the call), mixed into one recording')).toBeVisible();
+  await page.getByRole('radiogroup', { name: 'Recording source' }).getByText('Call', { exact: true }).click();
+  await expect(page.getByText('Your mic + the call, mixed.')).toBeVisible();
   await expect(page.getByText(/Wear headphones/)).toBeVisible();
   await page.getByRole('button', { name: '● Start Recording' }).click();
   await expect(page.getByLabel('Recording in progress')).toBeVisible();

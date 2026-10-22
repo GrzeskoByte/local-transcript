@@ -59,6 +59,8 @@ export interface CatalogModel {
   downloadable: boolean;
   recommended: boolean;
   detail: string;
+  /** Download size when the engine reports it. */
+  sizeBytes?: number | null;
 }
 
 export function nativeCatalog(models: NativeModelInfo[]): CatalogModel[] {
@@ -72,6 +74,7 @@ export function nativeCatalog(models: NativeModelInfo[]): CatalogModel[] {
     downloadable: m.downloadable,
     recommended: m.recommended,
     detail: m.detail,
+    sizeBytes: m.sizeBytes,
   }));
 }
 

@@ -1,5 +1,6 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page, Route } from '@playwright/test';
+import { route } from './helpers';
 
 /**
  * Summary → calendar events: each picked action item becomes its own editable
@@ -62,8 +63,9 @@ async function summarizedMeeting(page: Page, title: string): Promise<void> {
   await expect(page).toHaveURL(/#\/meeting\//);
   await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
   await expect(page.getByText('Anna will send the notes.')).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('tab', { name: /Summary/ }).click();
   await page.getByRole('button', { name: 'Summarize with LLM' }).click();
-  await expect(page.getByRole('region', { name: 'Calendar event' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Action items' })).toBeVisible();
 }
 
 const SUMMARY = [
@@ -79,28 +81,26 @@ const SUMMARY = [
 
 type Created = { body: string; method: string; endpoint: string };
 
-test('picked action items become one approved calendar event each, never twice', async ({ page }) => {
+test('action items routed to the calendar become one approved event each, never twice', async ({ page }) => {
   test.setTimeout(90_000);
   await mockDesktop(page);
   await summarizedMeeting(page, 'Release sync');
 
+  await route(page, 'send the release notes', 'Calendar');
+  await route(page, 'update the changelog', 'Calendar');
+  await page.getByRole('tab', { name: /Calendar/ }).click();
   const card = page.getByRole('region', { name: 'Calendar event' });
-  const items = page.getByRole('list', { name: 'Action items' });
-  await expect(items.getByRole('checkbox')).toHaveCount(3);
-  await items.getByRole('checkbox', { name: 'Unassigned: book the demo room' }).uncheck();
-  await page.getByRole('button', { name: 'Prepare calendar events (2)' }).click();
-
+  const titles = card.getByLabel('Event title');
+  await expect(titles).toHaveCount(2);
   // One editable draft per item; nothing is sent yet.
-  const anna = card.getByRole('group', { name: 'Event for Anna: send the release notes (2026-10-20)' });
-  await expect(anna.getByLabel('Event title')).toHaveValue('send the release notes');
-  await expect(anna.getByLabel('Event start')).toHaveValue('2026-10-20T09:00');
-  const bob = card.getByRole('group', { name: 'Event for Bob: update the changelog (Friday)' });
-  await bob.getByLabel('Event title').fill('Changelog review with Bob');
-  if (process.env.LT_SHOT) await card.screenshot({ path: process.env.LT_SHOT });
+  await expect(titles.first()).toHaveValue('send the release notes');
+  await expect(card.getByLabel('Date').first()).toHaveValue('2026-10-20');
+  await expect(card.getByLabel('Time').first()).toHaveValue('09:00');
+  await titles.nth(1).fill('Changelog review with Bob');
   expect(await page.evaluate(() => (window as unknown as { __created: unknown[] }).__created.length)).toBe(0);
 
-  await card.getByRole('button', { name: 'Approve & create 2 events' }).click();
-  await expect(card.getByRole('status')).toHaveText('Created 2 calendar events.');
+  await card.getByRole('button', { name: 'Add 2 events' }).click();
+  await expect(card.getByRole('list', { name: 'Created calendar events' })).toContainText('Changelog review with Bob');
   const created = await page.evaluate(() => (window as unknown as { __created: Created[] }).__created);
   expect(created).toHaveLength(2);
   expect(created[0]!.method).toBe('PUT');
@@ -110,26 +110,27 @@ test('picked action items become one approved calendar event each, never twice',
   expect(created[1]!.body).toContain('SUMMARY:Changelog review with Bob');
   expect(created[0]!.endpoint).not.toBe(created[1]!.endpoint);
 
-  // After a reload the scheduled items are ticked; only the remaining one is offered.
+  // After a reload the scheduled items are tagged and not offered again.
   await page.reload();
-  await expect(items).toContainText('✓ Anna: send the release notes (2026-10-20)Event 2026-10-20 09:00');
-  await expect(items.getByRole('checkbox')).toHaveCount(1);
-  await expect(page.getByRole('button', { name: 'Prepare calendar event (1)' })).toBeVisible();
-  await expect(card.getByRole('list', { name: 'Created calendar events' })).toContainText('Changelog review with Bob');
+  await expect(card.getByLabel('Event title')).toHaveCount(0);
+  await expect(card).toContainText('Every action item routed to the calendar has an event.');
+  await page.getByRole('tab', { name: /Summary/ }).click();
+  await expect(page.getByRole('region', { name: 'Action items' })).toContainText('[x] calendar 2026-10-20 09:00');
 });
 
 test('a failed event keeps only the drafts not yet created', async ({ page }) => {
   test.setTimeout(90_000);
   await mockDesktop(page, 2);
   await summarizedMeeting(page, 'Flaky calendar');
+  for (const t of ['send the release notes', 'book the demo room', 'update the changelog']) await route(page, t, 'Calendar');
+  await page.getByRole('tab', { name: /Calendar/ }).click();
   const card = page.getByRole('region', { name: 'Calendar event' });
-  await page.getByRole('button', { name: 'Prepare calendar events (3)' }).click();
-  await card.getByRole('button', { name: 'Approve & create 3 events' }).click();
-  await expect(card.getByRole('status')).toContainText('Created 1 event, then: HTTP 503 from the calendar server');
-  await expect(card.getByRole('group')).toHaveCount(2);
+  await card.getByRole('button', { name: 'Add 3 events' }).click();
+  await expect(page.getByRole('alert')).toContainText('Added 1 event, then: HTTP 503 from the calendar server');
+  await expect(card.getByLabel('Event title')).toHaveCount(2);
   // Retrying creates the rest, not the first one again.
-  await card.getByRole('button', { name: 'Approve & create 2 events' }).click();
-  await expect(card.getByRole('status')).toHaveText('Created 2 calendar events.');
+  await card.getByRole('button', { name: 'Add 2 events' }).click();
+  await expect(card.getByLabel('Event title')).toHaveCount(0);
   const created = await page.evaluate(() => (window as unknown as { __created: Created[] }).__created);
   expect(created.map((c) => c.body.match(/SUMMARY:(.*)/)![1]!.trim())).toEqual([
     'send the release notes', 'book the demo room', 'update the changelog',

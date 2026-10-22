@@ -163,7 +163,7 @@ export function AutoTranscribeSettings(): React.JSX.Element {
       {on && installedModels.length === 0 && (
         <p className="muted small mb-0">
           No speech model is installed yet, so nothing will run.{' '}
-          <button type="button" className="link-btn" onClick={() => go({ name: 'dashboard' })}>
+          <button type="button" className="link-btn" onClick={() => go({ name: 'home' })}>
             Set up transcription
           </button>
         </p>

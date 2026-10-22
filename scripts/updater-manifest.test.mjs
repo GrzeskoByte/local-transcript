@@ -39,6 +39,17 @@ describe('updater manifest', () => {
     expect(planManifest(withCanary).version).toBe('0.1.2');
   });
 
+  it('the test-release manifest offers the newest canary, and stable over a canary of the same version', () => {
+    const canaryRel = release('v0.1.3-canary.7-ubuntu', [
+      'LocalTranscriber_0.1.3-canary.7_linux_amd64.AppImage', 'LocalTranscriber_0.1.3-canary.7_linux_amd64.AppImage.sig',
+    ], { prerelease: true });
+    const plan = planManifest([...releases, canaryRel], { canary: true });
+    expect(plan.version).toBe('0.1.3-7');
+    expect(plan.entries.map((e) => e.key)).toEqual(['linux-x86_64']);
+    const stable = release('v0.1.3-ubuntu', ['LocalTranscriber_0.1.3_linux_amd64.AppImage', 'LocalTranscriber_0.1.3_linux_amd64.AppImage.sig']);
+    expect(planManifest([...releases, canaryRel, stable], { canary: true }).version).toBe('0.1.3');
+  });
+
   it('builds latest.json with trimmed signatures', () => {
     const plan = planManifest(releases);
     const sigs = Object.fromEntries(plan.entries.map((e) => [e.sigUrl, `sig-${e.key}\n`]));

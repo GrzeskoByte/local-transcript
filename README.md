@@ -166,10 +166,15 @@ all run on this computer. It goes online **only when you click something**:
 | What | When | Where |
 | --- | --- | --- |
 | Speech model download | You click Download / Set up transcription | Hugging Face (`ggerganov/whisper.cpp`) |
-| Update check | You click **Check for updates**, or turn on the launch check (off by default) | GitHub releases |
-| GitLab sharing | You click Upload / Test connection / Create GitLab issues (from summary action items) | Your GitLab server |
+| Update check | You click **Check for updates**, or turn on the launch check (off by default); **Include test releases** reads the canary manifest | GitHub releases |
+| GitLab sharing | You click Upload / Test connection / Create GitLab issues / Post to wiki; the issue step also lists project members and labels and refreshes issue states | Your GitLab server |
 | Company calendar | You open Calendar, test, detect or approve an event | Your calendar server |
 | LLM summary | You click Summarize (Ollama stays local; API/Open WebUI/OpenCode/Claude Code send the transcript to that provider) | The endpoint you configured |
+
+Settings → Storage & privacy → **Network activity** lists every connection the
+app made in the last 30 days (where, why, what was sent). Speaker detection
+(sherpa-onnx) runs on this computer: the diarizer and its two models are
+downloaded at build time with pinned checksums, never by the app.
 
 The bundled whisper.cpp engine is built without its network features
 (`WHISPER_CURL=OFF`, `GGML_RPC=OFF`, no server). The desktop app records with

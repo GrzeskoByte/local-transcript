@@ -10,15 +10,16 @@ export type TrackId = '' | 'microphone' | 'device';
 /** Track layout of two-way recordings made before Mic + Device was mixed into one track (still readable). */
 export const DUAL_TRACKS: TrackId[] = ['microphone', 'device'];
 
+/** Source names (DESIGN.md): what the recording heard. */
 export const MODE_LABELS: Record<RecordingMode, string> = {
-  speaker: 'Speaker',
-  device: 'Device Audio',
-  dual: 'Mic + Device',
-  file: 'Imported audio',
+  speaker: 'Room mic',
+  device: 'This computer',
+  dual: 'Call',
+  file: 'Imported',
 };
 
 export function modeLabel(mode: RecordingMode): string {
-  return MODE_LABELS[mode] ?? 'Speaker';
+  return MODE_LABELS[mode] ?? 'Room mic';
 }
 
 /**
@@ -90,9 +91,13 @@ export interface Meeting {
     text: string;
     keyPoints: string[];
     actionItems?: string[];
+    decisions?: string[];
+    openQuestions?: string[];
     model: string;
     createdAt: number;
     sessionId?: string;
+    /** The user reviewed or edited it. */
+    reviewedAt?: number;
   };
   /** Audio health measured while recording (see audio-diagnostics.ts). */
   diagnostics?: RecordingDiagnostics;
@@ -102,6 +107,42 @@ export interface Meeting {
   calendarEvent?: { provider: string; createdAt: number };
   /** Every calendar event created from this meeting (newest last). */
   calendarEvents?: CalendarEventRecord[];
+  /** Moments marked while recording (press M), oldest first. */
+  moments?: Moment[];
+  /** Display names for detected speakers ("speaker_00" → "Greg"). */
+  speakerNames?: Record<string, string>;
+  /** Last speaker detection run (absent = never run). */
+  diarization?: { at: number; speakers: number; error?: string };
+  /** Guided wrap-up after Stop: which steps are done or skipped, and where each action item goes. */
+  wrapUp?: WrapUp;
+  /** Files saved by the Export step / tab, by format. */
+  exports?: Partial<Record<ExportFormat, { at: number; path?: string }>>;
+  /** The calendar event this recording was started from (Home "Coming up"). */
+  calendarSource?: { title: string; startIso: string; location?: string };
+  /** The audio was removed to save space (Keep audio setting); the transcript stays. */
+  audioRemovedAt?: number;
+}
+
+/** A point marked while recording; `atMs` = recorded time (pauses excluded). */
+export interface Moment {
+  id: string;
+  atMs: number;
+  label: string;
+}
+
+export type ExportFormat = 'md' | 'txt' | 'json' | 'audio';
+
+export type WrapStepId = 'transcribe' | 'summary' | 'gitlab' | 'calendar' | 'export';
+export type WrapStepStatus = 'done' | 'skipped';
+
+export interface WrapUp {
+  /** Steps finished or skipped; absent = still to do. */
+  steps: Partial<Record<WrapStepId, WrapStepStatus>>;
+  /** Per action item (its text): send to GitLab and/or the calendar. */
+  routes: Record<string, { gitlab: boolean; calendar: boolean }>;
+  /** "Not needed": hide the unfinished-steps banner and the Home entry. */
+  dismissed?: boolean;
+  updatedAt: number;
 }
 
 /** One calendar event created (after user approval) from a meeting summary. */

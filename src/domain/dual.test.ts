@@ -9,9 +9,9 @@ import type { TranscriptSegment } from './transcript';
 
 describe('two-way recording modes', () => {
   it('labels every mode', () => {
-    expect(modeLabel('speaker')).toBe('Speaker');
-    expect(modeLabel('device')).toBe('Device Audio');
-    expect(modeLabel('dual')).toBe('Mic + Device');
+    expect(modeLabel('speaker')).toBe('Room mic');
+    expect(modeLabel('device')).toBe('This computer');
+    expect(modeLabel('dual')).toBe('Call');
   });
 
   it('defines the two captured tracks', () => {

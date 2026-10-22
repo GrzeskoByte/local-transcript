@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 /**
  * The AppImage's WebKitGTK has no OPFS (`navigator.storage.getDirectory`).
@@ -99,7 +99,8 @@ test('records to the native store when the webview has no OPFS', async ({ page }
   await expect(page.getByRole('region', { name: 'Recording playback' }).getByRole('button', { name: 'Play' })).toHaveCount(1);
 
   // Delete removes the chunks from disk too.
-  await page.getByRole('button', { name: /^Delete/ }).first().click();
+  await page.getByRole('tab', { name: /Export/ }).click();
+  await page.getByRole('button', { name: 'Delete meeting' }).click();
   await page.getByRole('button', { name: 'Yes, delete' }).click();
   await expect(page).not.toHaveURL(/#\/meeting\//);
   expect(await page.evaluate((meetingId) => {

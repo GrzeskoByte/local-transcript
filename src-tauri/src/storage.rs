@@ -10,8 +10,21 @@ use tauri::{AppHandle, Manager};
 
 const APP_FOLDER: &str = "Local Transcribe";
 
-/// Root folder where recordings and transcripts are mirrored.
+/// Root folder where recordings and transcripts are mirrored: the folder
+/// picked in Settings → Storage ("storage-dir"), else Documents/Local Transcribe.
 pub fn storage_root(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(chosen) = crate::settings::get_string(app, "storage-dir").filter(|p| !p.trim().is_empty()) {
+        let dir = PathBuf::from(chosen);
+        if dir.is_absolute() {
+            std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+            return Ok(dir);
+        }
+    }
+    default_root(app)
+}
+
+/// Documents/Local Transcribe (home when there is no Documents folder).
+pub fn default_root(app: &AppHandle) -> Result<PathBuf, String> {
     let base = app
         .path()
         .document_dir()

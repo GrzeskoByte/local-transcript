@@ -4,10 +4,9 @@ import { groupByTier, type CatalogModel } from '../../asr/model-tiers';
 import {
   NATIVE_LANGUAGE_OPTIONS,
   nativeAccuracyHint,
-  describeNativeRuntime,
   describeGpu,
 } from '../../asr/model-manager';
-import { CheckIcon, GearIcon } from '../components/icons.tsx';
+import { CheckIcon } from '../components/icons.tsx';
 import { GITLAB_TARGET_LABELS, createGitlabClient, parseProjectUrl } from '../../integrations/gitlab';
 import type { GitlabTarget } from '../../integrations/gitlab';
 import {
@@ -35,6 +34,18 @@ import {
 } from '../../integrations/calendar-detect';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
+import {
+  AfterRecordingCards,
+  AppCards,
+  CalendarExtras,
+  EngineOverview,
+  GitlabExtras,
+  SummaryContent,
+  SummaryModePicker,
+  needsAcknowledgement,
+  RecordingCards,
+  StorageCards,
+} from '../components/settings/SectionCards.tsx';
 import { AppearanceSettings } from '../components/AppearanceSettings.tsx';
 import { LiveTranscriptionSettings, AutoTranscribeSettings } from '../components/LiveTranscription.tsx';
 import { nativeRecordingEnabled, setNativeRecordingEnabled } from '../../audio/native-recorder';
@@ -42,6 +53,7 @@ import {
   getAutoCheck,
   getUpdateProgress,
   installUpdate,
+  relaunchApp,
   setAutoCheck,
   updateBlockedReason,
   updateRatio,
@@ -57,6 +69,17 @@ import {
 /** Tiers expanded by default; the rest stay collapsed to keep this scannable. */
 const OPEN_TIERS = new Set(['S', 'A']);
 
+const SECTIONS: Array<[SettingsTab, string, string]> = [
+  ['models', 'Engine & models', 'Speech model, language, GPU'],
+  ['recording', 'Recording & devices', 'Sources, microphone, while recording'],
+  ['after', 'After recording', 'Wrap-up steps, export defaults'],
+  ['summaries', 'Summaries', 'Where summaries are made'],
+  ['integrations', 'GitLab & calendar', 'Issues, wiki, events'],
+  ['storage', 'Storage & privacy', 'Disk, keeping audio, network'],
+  ['appearance', 'Appearance', 'Colours, depth, motion'],
+  ['app', 'App & updates', 'Updates, shortcuts, diagnostics'],
+];
+
 export function Settings(): React.JSX.Element {
   const {
     go,
@@ -69,10 +92,6 @@ export function Settings(): React.JSX.Element {
     language,
     setLanguage,
     enableGpu,
-    saveToDisk,
-    setSaveToDisk,
-    storageDir,
-    openStorageDir,
     gitlabConfig,
     saveGitlabConfig,
     calendarConfig,
@@ -188,14 +207,21 @@ export function Settings(): React.JSX.Element {
       .finally(() => setUpdateBusy(null));
   };
 
-  const runUpdateInstall = () => {
+  const [staged, setStaged] = useState(false);
+  const runUpdateInstall = (relaunch = true) => {
     setUpdateBusy('installing');
     setUpdateMessage(null);
     const poll = window.setInterval(() => {
       void getUpdateProgress().then(setUpdateProgress).catch(() => undefined);
     }, 400);
-    // Resolves only on failure: success restarts the app.
-    installUpdate()
+    // With relaunch it resolves only on failure: success restarts the app.
+    installUpdate(relaunch)
+      .then(() => {
+        if (!relaunch) {
+          setStaged(true);
+          setUpdateMessage('Installed — the new version starts next time you open the app.');
+        }
+      })
       .catch((e: unknown) => setUpdateMessage(e instanceof Error ? e.message : String(e)))
       .finally(() => {
         window.clearInterval(poll);
@@ -260,58 +286,39 @@ export function Settings(): React.JSX.Element {
           <h1>Settings</h1>
           <p className="muted">Everything here is stored on this computer and survives updates.</p>
         </div>
-        <button className="btn" onClick={() => go({ name: 'dashboard' })}>
+        <button className="btn" onClick={() => go({ name: 'home' })}>
           Done
         </button>
       </div>
 
-      <div className="tabs" role="tablist" aria-label="Settings sections">
-        {(
-          [
-            ['models', 'Models'],
-            ['calendar', 'Calendar'],
-            ['sharing', 'Team sharing'],
-            ['ai', 'AI assistant'],
-            ['audio', 'Audio'],
-            ['appearance', 'Appearance'],
-            ['app', 'App'],
-          ] as const
-        ).map(([id, label]) => (
+      <div className="settings-layout">
+      <nav className="settings-nav" aria-label="Settings sections">
+        {SECTIONS.map(([id, label, hint]) => (
           <button
             key={id}
             type="button"
-            role="tab"
-            aria-selected={tab === id}
-            className={`tab${tab === id ? ' active' : ''}`}
+            aria-current={tab === id ? 'page' : undefined}
+            className={`settings-link${tab === id ? ' active' : ''}`}
             onClick={() => go({ name: 'settings', tab: id })}
           >
-            {label}
+            <b>{label}</b>
+            <small>{hint}</small>
           </button>
         ))}
-      </div>
-
+      </nav>
+      <div className="settings-body">
       {tab === 'models' && (
       <>
-      <section className="card" aria-label="Engine">
-        <div className="media-row">
-          <span className="media-art">
-            <GearIcon />
-          </span>
-          <div className="grow">
-            <strong>Desktop engine</strong>
-            <div className="muted" aria-label="Acceleration">
-              {describeNativeRuntime(nativeStatus)}
-            </div>
-          </div>
-        </div>
-        <p className="muted mb-0">
-          Native models live on disk and are shared with your system CLI. Only installed
-          models appear in the transcription options.
-        </p>
-      </section>
-      {isDesktopApp() && <AutoTranscribeSettings />}
+      <EngineOverview />
       {isDesktopApp() && <LiveTranscriptionSettings />}
       </>
+      )}
+
+      {tab === 'after' && (
+        <>
+          <AfterRecordingCards />
+          {isDesktopApp() && <AutoTranscribeSettings />}
+        </>
       )}
 
       {tab === 'appearance' && <AppearanceSettings />}
@@ -380,9 +387,24 @@ export function Settings(): React.JSX.Element {
                   className="btn btn-primary"
                   type="button"
                   disabled={!!updateBusy || !!updateBlocked}
-                  onClick={runUpdateInstall}
+                  onClick={() => runUpdateInstall(true)}
                 >
-                  {updateBusy === 'installing' ? 'Updating…' : 'Update & restart'}
+                  {updateBusy === 'installing' ? 'Updating…' : 'Install & restart now'}
+                </button>
+              )}
+              {updateInfo?.available && updateInfo.canSelfUpdate && !staged && (
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={!!updateBusy || !!updateBlocked}
+                  onClick={() => runUpdateInstall(false)}
+                >
+                  On next launch
+                </button>
+              )}
+              {staged && (
+                <button className="btn btn-primary" type="button" onClick={() => void relaunchApp()}>
+                  Restart now
                 </button>
               )}
               {updateInfo?.available && !updateInfo.canSelfUpdate && (
@@ -412,11 +434,13 @@ export function Settings(): React.JSX.Element {
           </>
         )}
       </section>
+      <AppCards />
       </>
       )}
 
-      {tab === 'audio' && (
+      {tab === 'recording' && (
       <>
+      <RecordingCards />
       <section className="card" aria-label="Microphone access">
         <div className="model-title">
           <strong>Microphone access</strong>
@@ -483,41 +507,13 @@ export function Settings(): React.JSX.Element {
       </>
       )}
 
-      {tab === 'app' && (
+      {tab === 'storage' && (
       <>
-      <section className="card" aria-label="Local files">
-        <div className="model-title">
-          <strong>Local files</strong>
-          {saveToDisk && <span className="badge badge-ok">Saving</span>}
-        </div>
-        <div className="muted">
-          {storageDir ? (
-            <>
-              Finished meetings are copied to <code>{storageDir}</code> — audio, transcript and
-              a JSON manifest.
-            </>
-          ) : (
-            'Locating the local storage folder…'
-          )}
-        </div>
-        <label className="check-row mt-3">
-          <input
-            type="checkbox"
-            checked={saveToDisk}
-            onChange={(e) => setSaveToDisk(e.target.checked)}
-          />
-          Save recordings and transcripts to disk automatically
-        </label>
-        <div className="mt-3">
-          <button className="btn" onClick={() => void openStorageDir()}>
-            Open folder
-          </button>
-        </div>
-      </section>
+      <StorageCards />
       </>
       )}
 
-      {tab === 'sharing' && (
+      {tab === 'integrations' && (
       <>
       <section className="card" aria-label="GitLab team sharing">
         <div className="model-title">
@@ -594,6 +590,7 @@ export function Settings(): React.JSX.Element {
             </label>
           )}
         </div>
+        <GitlabExtras draft={gitlabDraft} setDraft={setGitlabDraft} />
         {gitlabMessage && <p className="muted small mb-0">{gitlabMessage}</p>}
         <div className="btn-row">
           <button
@@ -629,12 +626,25 @@ export function Settings(): React.JSX.Element {
           >
             Test connection
           </button>
+          {gitlabConfig.token && (
+            <button
+              className="btn"
+              disabled={gitlabBusy}
+              onClick={() => {
+                const cleared = { ...gitlabDraft, token: '' };
+                setGitlabDraft(cleared);
+                void saveGitlabConfig(cleared).then(() => setGitlabMessage('Disconnected — the token was removed from this computer.'));
+              }}
+            >
+              Disconnect
+            </button>
+          )}
         </div>
       </section>
       </>
       )}
 
-      {tab === 'calendar' && (
+      {tab === 'integrations' && (
       <>
       <section className="card" aria-label="Company calendar">
         <div className="model-title">
@@ -933,11 +943,14 @@ export function Settings(): React.JSX.Element {
           </button>
         </div>
       </section>
+      <CalendarExtras />
       </>
       )}
 
-      {tab === 'ai' && (
+      {tab === 'summaries' && (
       <>
+      <SummaryModePicker draft={llmDraft} setDraft={setLlmDraft} />
+      {llmDraft.enabled !== false && (
       <section className="card" aria-label="AI assistant">
         <div className="model-title">
           <strong>AI assistant</strong>
@@ -1049,7 +1062,7 @@ export function Settings(): React.JSX.Element {
         <div className="btn-row">
           <button
             className="btn btn-primary"
-            disabled={llmBusy}
+            disabled={llmBusy || needsAcknowledgement(llmDraft)}
             onClick={() => {
               setLlmBusy(true);
               setLlmMessage(null);
@@ -1061,7 +1074,7 @@ export function Settings(): React.JSX.Element {
                 .finally(() => setLlmBusy(false));
             }}
           >
-            {llmBusy ? 'Saving…' : 'Save LLM settings'}
+            {llmBusy ? 'Saving…' : 'Save summary settings'}
           </button>
           <button
             className="btn"
@@ -1082,6 +1095,16 @@ export function Settings(): React.JSX.Element {
           </button>
         </div>
       </section>
+      )}
+      <SummaryContent draft={llmDraft} setDraft={setLlmDraft} />
+      {llmDraft.enabled === false && (
+        <div className="btn-row">
+          <button className="btn btn-primary" onClick={() => void saveLlmConfig(llmDraft).then(() => setLlmMessage('Summaries are off.'))}>
+            Save
+          </button>
+          {llmMessage && <span className="muted small">{llmMessage}</span>}
+        </div>
+      )}
       </>
       )}
 
@@ -1249,6 +1272,8 @@ export function Settings(): React.JSX.Element {
       )}
       </>
       )}
+      </div>
+      </div>
     </>
   );
 }

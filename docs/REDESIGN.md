@@ -31,45 +31,47 @@ brand + accent swatches, colour picker + hex field, contrast readout, shadow
 depth, halftone, motion, reset). Covered by `src/app/theme.test.ts` and
 `e2e/appearance.spec.ts`.
 
-## 3. Component mapping
+## 3. Screens (canvas IA)
+
+| Route | Screen | File |
+| --- | --- | --- |
+| `#/` | **Home**: pink `.record-hero` (title, source radios, mic level, more options, Start / Import), `.waiting` (unfinished wrap-ups, untranscribed), **Coming up** (`.evrec` calendar rows → record with the event's name/agenda), Recent | `screens/Home.tsx` |
+| `#/library`, `#/library/month` | **Library**: List (search, `.filters`, `.select-bar` bulk Transcribe/Export/Delete, `.meetings-table`, transcript hits) or Month (`MonthView`) | `screens/Library.tsx`, `screens/MonthView.tsx` |
+| `#/active` | **Recording room**: ink `.rec-hero` + `.room-levels`, Pause / Mark moment / Stop; side: agenda progress, moments, live transcript | `screens/RecordingRoom.tsx` |
+| `#/wrapup/<id>/<step>` | **Wrap-up** after Stop: `.wrap-steps` (Transcribe → Summary → GitLab → Calendar → Export), `.wrap-card`, `.so-far` | `screens/WrapUp.tsx`, `components/wrap/*` |
+| `#/meeting/<id>/<tab>` | **Meeting**: head (Rename / Export ▾ / Share), player with `.player-markers`, `.leftover` banner, `.meeting-tabs` Transcript / Summary / GitLab / Calendar / Export | `screens/MeetingScreen.tsx` |
+| `#/settings/<section>` | **Settings**: `.settings-nav` side window with 8 sections (Engine & models, Recording & devices, After recording, Summaries, GitLab & calendar, Storage & privacy, Appearance, App & updates) | `screens/Settings.tsx`, `components/settings/SectionCards.tsx` |
+| `#/setup/<n>` | **Setup** (first run, full screen): Welcome, Microphone, Calls, Model, Try it, After recording, Ready | `screens/Setup.tsx` |
+
+Legacy hashes (`#/new`, `#/calendar`, old settings tabs) redirect.
+
+## 4. Component mapping
 
 | Canvas / DESIGN.md | App element |
 | --- | --- |
-| Nav window | `.topbar` (`nav[aria-label=Main]`): `.brand` (dots + `local-transcriber`), `.navlink` Meetings / Calendar / Settings (`.active` = ink + hot underline), `.topbar-fill`, `.cell` status cells (`.busy-chip` "Transcribing N% · title", `.update-chip`, `.model-chip` with `[x]`/`[ ]`/`[~]`), then `.cell.record` **● Record Ctrl N** or `.cell.live` **● REC mm:ss** (paused = pink) |
-| Page head | `.page-head` pink (Dashboard, New Meeting, Meeting Detail); `.page-head.is-tool` panel (Settings, Calendar); halftone = `::before` |
-| Window | `.card`; title bar = first `strong` / `.model-title` / `.card-title` (ink, `::before` dots) |
-| Window foot bar | `.start-bar` (New Meeting: panel strip with Start / Import / Cancel) |
-| Primary action (hot) | nav **● Record**, Active Meeting **Stop & save**; everything else is ink/paper |
-| Pink feature panel | `.cta-red` (Dashboard "Set up transcription") — pink field + halftone + `sh-lg` |
-| Meeting row | `.meeting-item` (title / meta / tags / ink chevron), `.row-menu` ⋯ square |
-| Tags | `.pill` with mode glyphs and `[x]`/`[ ]`/`[!]` status marks; `.badge-*` share them |
-| Tabs | `.tabs` / `.tab` (Settings sections, Dashboard filters) |
-| Tier module | `.tier-card` (`details`/`section`), `.tier-badge` (S = hot), `.model-row.active` |
-| Recording field | `.rec-hero` (ink, `sh-xl`, hot halftone, round lamp, 124 px timer) |
-| Transcript | `.transcript` (berry timestamps, `li.active` pink-wash + hot bar, pink `mark`) |
-| Jump bar | `.section-nav` (sticky under the nav window) |
-| Toasts | `.notice-toast` (ink bar), `.error-toast` (hot bar) |
-| Danger window | `.card.danger-zone` (hot title bar) |
-| Calendar month | `.cal-grid`: ink weekday heads, ruled cells, today = hot number, selected = pink, dots ink (recorded) / hot (server) |
-| Footer | `.footer-band` (black band, pink `[x]`) |
+| Nav window | `.topbar`: `.brand`, `.navlink` Home / Library / Settings, `.topbar-fill`, status cells, `.theme-quick` (brand/accent popover), then `.cell.record` **● Record** or `.cell.live` **● REC mm:ss** |
+| Page head | `.page-head` pink (Library, Meeting, Wrap-up); `.page-head.is-tool` panel (Settings) |
+| Window | `.card`; title bar = first `strong` / `.model-title` / `.card-title` |
+| Primary action (hot) | `.btn-hero` (Home Start recording, setup), nav **● Record**, `.btn-stop` |
+| Pink feature panel | `.record-hero`, `.cta-red`, `.first-hero` |
+| Meeting row / table | `.meeting-item` (Home), `.meetings-table` (Library) |
+| Settings rows | `.set-row` (label + hint + control), `.seg-control` radios, `.mode-grid` (summary modes), `.usage-bar` |
+| Level meter | `.level-bars` (ink bars, hot = clipping; `.on-ink` in the recording room) |
+| Tabs | `.tabs` / `.tab`; `.meeting-tabs` carry a status line and a hot dot when work is left |
+| Recording field | `.rec-hero` + `.room-levels`, `.btn-moment` |
+| Transcript | `.transcript` with `.sect` (agenda chapters), `.moment-row`, editable `.line-text` |
+| Wrap-up tables | `.draft-table` (issues/events), `.route-list` (action-item routing), `.format-grid` |
+| Danger window | `.card.danger-zone` |
 
-## 4. Deviations from the canvas (deliberate)
+## 5. Deviations from the canvas (deliberate)
 
-- **IA kept.** Nav reads **Meetings / Calendar / Settings** (the canvas has
-  Home / Library / Settings with Calendar as a Library "Month" tab); routes,
-  screen order and every accessible name the e2e suite relies on are
-  unchanged. New Meeting stays its own screen (the canvas folds it into Home).
-- **Settings sections stay tabs** (`#/settings/<tab>`), not a side window;
-  Appearance is a new tab.
-- **Not built yet** (canvas proposals that need new features, not a skin):
-  Home "Waiting for you" / "Coming up" panels, Library filters + bulk actions,
-  the 8-step first-run wizard, Moments (press M), per-speaker transcript
-  filter and agenda chapters on the waveform, the guided after-Stop wrap-up
-  and its tabbed revisit, the storage meter, Settings "after recording" /
-  "summaries" split.
+- **Secrets stay in the settings file** (0600), not the OS keychain — no
+  keychain wording in the UI.
+- **Speaker detection** is a button on the transcript (sherpa-onnx, bundled in
+  release builds), not automatic.
 - **Light only**, as in the canvas.
 
-## 5. Verification
+## 6. Verification
 
 `npx tsc --noEmit` → `npx vitest run` → `npm run build && npx playwright test`
 → `npm run tauri:dev` (or the AppImage) for a visual pass on the real shell.

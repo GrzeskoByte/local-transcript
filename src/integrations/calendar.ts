@@ -195,9 +195,16 @@ export function nextWorkingDay(from: Date): Date {
  */
 export function actionItemEventDraft(meeting: Meeting, item: ActionItem): CalendarEventDraft {
   let start: Date;
+  // "Mon Oct 26 10:00" → that time; a date alone → 09:00.
+  const time = item.due?.match(/\b(\d{1,2})[:.](\d{2})\b/);
+  const hh = time ? Math.min(23, Number(time[1])) : 9;
+  const mm = time ? Math.min(59, Number(time[2])) : 0;
   if (item.dueDate) {
     const [y, mo, d] = item.dueDate.split('-').map(Number);
-    start = new Date(y!, mo! - 1, d!, 9, 0);
+    start = new Date(y!, mo! - 1, d!, hh, mm);
+  } else if (time) {
+    start = nextWorkingDay(new Date(meeting.startedAt));
+    start.setHours(hh, mm, 0, 0);
   } else {
     start = nextWorkingDay(new Date(meeting.startedAt));
     start.setHours(10, 0, 0, 0);
@@ -413,6 +420,17 @@ export interface ServerEvent {
   provider: CalendarProvider;
   /** All-day event (start/end carry the date; time is a placeholder). */
   allDay?: boolean;
+  /** Event description (its agenda, when "Use event agendas" is on). */
+  description?: string;
+  /** A video-call link in the location/description (Zoom, Meet, Teams…). */
+  hasCallLink?: boolean;
+}
+
+const CALL_LINK = /https?:\/\/[^\s"<>]*(zoom\.us|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|webex\.com|whereby\.com|jit\.si)/i;
+
+/** Mark events with a video-call link (they start as "Call" recordings). */
+export function withCallLink<T extends { location: string; description?: string }>(e: T): T & { hasCallLink: boolean } {
+  return { ...e, hasCallLink: CALL_LINK.test(`${e.location} ${e.description ?? ''}`) };
 }
 
 /** `Date` → UTC `20261005T090000Z` for CalDAV time-range filters. */
@@ -452,7 +470,7 @@ export function parseCaldavReport(xml: string, range?: IcsRange): ServerEvent[] 
 
 /** Graph `{"value":[{subject,start:{dateTime},…}]}` → events. */
 export function parseGraphEvents(payload: string): ServerEvent[] {
-  let json: { value?: Array<{ id?: string; subject?: string; start?: { dateTime?: string }; end?: { dateTime?: string }; location?: { displayName?: string } }> };
+  let json: { value?: Array<{ id?: string; subject?: string; bodyPreview?: string; start?: { dateTime?: string }; end?: { dateTime?: string }; location?: { displayName?: string } }> };
   try {
     json = JSON.parse(payload);
   } catch {
@@ -464,6 +482,7 @@ export function parseGraphEvents(payload: string): ServerEvent[] {
     startIso: (e.start?.dateTime ?? '').slice(0, 16),
     endIso: (e.end?.dateTime ?? e.start?.dateTime ?? '').slice(0, 16),
     location: e.location?.displayName ?? '',
+    ...(e.bodyPreview ? { description: e.bodyPreview } : {}),
     provider: 'graph' as CalendarProvider,
   })).filter((e) => e.startIso);
 }

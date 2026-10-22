@@ -39,6 +39,12 @@ fn parse(text: &str) -> Option<Map<String, Value>> {
     }
 }
 
+/// One string setting (e.g. "storage-dir"), for the Rust side.
+pub fn get_string(app: &AppHandle, key: &str) -> Option<String> {
+    let path = settings_path(app).ok()?;
+    read_settings(&path).get(key)?.as_str().map(str::to_string)
+}
+
 /// Read the settings file; a missing file is empty. A damaged file falls
 /// back to the `.bak` written before the last change.
 pub fn read_settings(path: &Path) -> Map<String, Value> {
@@ -102,6 +108,16 @@ pub fn native_settings_set(
         return Ok(());
     }
     map.insert(key, value);
+    write_settings(&path, &map)
+}
+
+/// Store one string setting from the Rust side (same lock as the command).
+pub fn set_string(app: &AppHandle, key: &str, value: &str) -> Result<(), String> {
+    let path = settings_path(app)?;
+    let lock = app.state::<SettingsLock>();
+    let _guard = lock.0.lock().unwrap_or_else(|e| e.into_inner());
+    let mut map = read_settings(&path);
+    map.insert(key.to_string(), Value::String(value.to_string()));
     write_settings(&path, &map)
 }
 

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
 
 /**
@@ -133,7 +133,7 @@ test('records in the shell: no webview capture, instant Stop, playback via the s
   await mockNativeShell(page);
   await page.goto('/#/new');
   await page.locator('#meeting-title').fill('Native Test');
-  await page.getByRole('button', { name: /Mic \+ Device/ }).click();
+  await page.getByRole('radiogroup', { name: 'Recording source' }).getByText('Call', { exact: true }).click();
   // System sound is recorded directly: no screen-share instructions.
   await expect(page.getByText(/pick a screen or window to share/)).toHaveCount(0);
   await page.getByRole('button', { name: '● Start Recording' }).click();

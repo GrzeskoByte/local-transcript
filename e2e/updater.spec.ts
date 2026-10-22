@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
 
 /** Desktop shell whose updater reports v9.9.9; install fails so the page stays. */
@@ -46,7 +46,7 @@ test('launch check (when turned on) surfaces an update; install needs a click an
   const card = page.getByLabel('Updates');
   await expect(card.getByText('Version 9.9.9 is available.')).toBeVisible();
   await expect(card.getByText('Faster transcription.')).toBeVisible();
-  await card.getByRole('button', { name: 'Update & restart' }).click();
+  await card.getByRole('button', { name: 'Install & restart now' }).click();
   await expect(card.getByLabel('Update progress')).toBeVisible();
   await expect(card.getByText('Update failed: signature mismatch')).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { __installs: number }).__installs)).toBe(1);
@@ -58,13 +58,13 @@ test('deb/rpm installs get a download button instead of self-update', async ({ p
   const card = page.getByLabel('Updates');
   await card.getByRole('button', { name: 'Check for updates' }).click();
   await expect(card.getByRole('button', { name: 'Download v9.9.9' })).toBeVisible();
-  await expect(card.getByRole('button', { name: 'Update & restart' })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: 'Install & restart now' })).toHaveCount(0);
 });
 
 test('the app does not check for updates on launch unless the user turned it on', async ({ page }) => {
   await mockDesktopWithUpdate(page);
   await page.goto('/#/settings/app');
-  await expect(page.getByLabel('Updates').getByRole('checkbox')).not.toBeChecked();
+  await expect(page.getByLabel('Updates').getByRole('checkbox', { name: /Check for updates when/ })).not.toBeChecked();
   await page.waitForTimeout(6_000);
   await expect(page.getByRole('button', { name: /Update available/ })).toHaveCount(0);
 });

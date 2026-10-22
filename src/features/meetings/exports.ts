@@ -8,6 +8,66 @@ import { deleteSegments } from '../../storage/transcripts';
 import { segmentsToJSON, segmentsToMarkdown, segmentsToText } from '../../domain/transcript';
 import { agendaDocument } from '../../domain/agenda';
 import { invokeDesktop, invokeDesktopRaw, isDesktopApp } from '../../platform/desktop';
+import { namedSegments } from '../../domain/speakers';
+import { saveBlobToDisk, saveFileToDisk } from '../../platform/desktop-storage';
+import { folderName } from './disk-sync';
+import { summaryMarkdown } from '../../integrations/gitlab';
+import type { ExportFormat } from '../../domain/meeting';
+
+/** Markdown with the summary and action items (when there are some) above the transcript. */
+export function meetingMarkdown(meeting: Meeting, segments: ReturnType<typeof namedSegments>): string {
+  const agenda = meeting.agenda?.items ?? [];
+  const transcript = segmentsToMarkdown(meeting.title, meeting.startedAt, segments, agenda);
+  if (!meeting.summary) return transcript;
+  const summary = summaryMarkdown(meeting).replace(/^# Summary: .*\n\n/, '');
+  return transcript.replace(/^(# .*\n)/, `$1\n## Summary\n\n${summary.replace(/^## /gm, '### ')}\n\n## Transcript\n`);
+}
+
+/**
+ * The Export step / tab: save the chosen formats as `<base>.<ext>` — on
+ * desktop into the meeting's folder in the local-files folder, in a browser
+ * as downloads. Returns the saved paths by format.
+ */
+export async function exportFormats(
+  meeting: Meeting,
+  formats: ExportFormat[],
+  base: string,
+): Promise<Partial<Record<ExportFormat, string | null>>> {
+  const segments = namedSegments(await getSegments(meeting.id), meeting.speakerNames);
+  const agenda = meeting.agenda?.items ?? [];
+  const enc = new TextEncoder();
+  const folder = folderName(meeting);
+  const out: Partial<Record<ExportFormat, string | null>> = {};
+  const text = (fmt: ExportFormat): { body: string; mime: string } | null =>
+    fmt === 'md'
+      ? { body: meetingMarkdown(meeting, segments), mime: 'text/markdown' }
+      : fmt === 'txt'
+        ? { body: segmentsToText(segments, agenda), mime: 'text/plain' }
+        : fmt === 'json'
+          ? { body: segmentsToJSON(meeting.id, meeting.title, segments, agenda), mime: 'application/json' }
+          : null;
+  for (const fmt of formats) {
+    if (fmt === 'audio') {
+      if (meeting.audioRemovedAt) continue;
+      const ext = fileExtensionForMimeType(meeting.mimeType);
+      const tracks = meeting.tracks?.length ? meeting.tracks : [''];
+      for (const track of tracks) {
+        const blob = await readRecordingBlob(meeting.id, meeting.mimeType, track);
+        if (!blob) continue;
+        const name = `${base}${track ? `-${track}` : ''}.${ext}`;
+        out.audio = isDesktopApp() ? await saveBlobToDisk(`${folder}/${name}`, blob) : await saveExport(name, blob);
+      }
+      continue;
+    }
+    const t = text(fmt);
+    if (!t) continue;
+    const name = `${base}.${fmt}`;
+    out[fmt] = isDesktopApp()
+      ? await saveFileToDisk(`${folder}/${name}`, enc.encode(t.body))
+      : await saveExport(name, new Blob([t.body], { type: t.mime }));
+  }
+  return out;
+}
 
 /** Where an export went: a path on disk (desktop), or null (browser download). */
 export type ExportResult = string | null;
@@ -45,13 +105,12 @@ function saveText(filename: string, text: string, mime: string): Promise<ExportR
 export async function exportTranscript(meetingId: string, format: 'txt' | 'md' | 'json'): Promise<ExportResult> {
   const meeting = await getMeeting(meetingId);
   if (!meeting) throw new Error('Meeting not found');
-  const segments = await getSegments(meetingId);
+  const segments = namedSegments(await getSegments(meetingId), meeting.speakerNames);
   const base = (meeting.title || 'meeting').replace(/[^\w\-]+/g, '-');
   // The agenda (if any) is part of every transcript export.
   const agenda = meeting.agenda?.items ?? [];
   if (format === 'txt') return saveText(`${base}.txt`, segmentsToText(segments, agenda), 'text/plain');
-  if (format === 'md')
-    return saveText(`${base}.md`, segmentsToMarkdown(meeting.title, meeting.startedAt, segments, agenda), 'text/markdown');
+  if (format === 'md') return saveText(`${base}.md`, meetingMarkdown(meeting, segments), 'text/markdown');
   return saveText(`${base}.json`, segmentsToJSON(meetingId, meeting.title, segments, agenda), 'application/json');
 }
 

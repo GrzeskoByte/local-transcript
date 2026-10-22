@@ -20,6 +20,16 @@ interface Props {
   label?: string;
   /** Playhead updates (≈5/s while playing), for the transcript to follow. */
   onTime?: (seconds: number, playing: boolean) => void;
+  /** Agenda chapters and moments under the waveform (click = play from there). */
+  markers?: PlayerMarker[];
+  /** Extra controls at the end of the row (Follow). */
+  extra?: React.ReactNode;
+}
+
+export interface PlayerMarker {
+  atMs: number;
+  label: string;
+  kind: 'chapter' | 'moment';
 }
 
 const BINS = 240;
@@ -38,7 +48,7 @@ function savedSpeed(): number {
  * meeting stays instant and nothing runs right after Stop.
  */
 export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
-  { load, durationHintMs = 0, label, onTime },
+  { load, durationHintMs = 0, label, onTime, markers = [], extra },
   ref,
 ) {
   const onTimeRef = useRef(onTime);
@@ -227,9 +237,30 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPl
         <span className="player-time" aria-label="Playback position">
           {formatClock(current)} / {formatClock(duration)}
         </span>
+        {extra}
       </div>
       {status === 'ready' && (
         <canvas ref={canvasRef} className="player-wave" aria-hidden="true" onClick={onWaveClick} />
+      )}
+      {markers.length > 0 && (
+        <div className="player-markers" aria-label="Chapters and moments">
+          {markers.map((mk, i) => {
+            const total = duration > 0 ? duration * 1000 : durationHintMs;
+            const left = total > 0 ? Math.min(98, (mk.atMs / total) * 100) : 0;
+            return (
+              <button
+                key={`${mk.kind}-${i}`}
+                type="button"
+                className={`marker ${mk.kind}`}
+                style={{ left: `${left}%` }}
+                title={`Play from ${formatClock(mk.atMs / 1000)}`}
+                onClick={() => withPlayer((p) => { p.seek(mk.atMs / 1000); if (!p.playing) p.play(); })}
+              >
+                {mk.kind === 'moment' ? `✚ ${formatClock(mk.atMs / 1000)}` : mk.label}
+              </button>
+            );
+          })}
+        </div>
       )}
       {status === 'loading' && <p className="muted small mb-0">Loading audio…</p>}
       {status === 'error' && (
