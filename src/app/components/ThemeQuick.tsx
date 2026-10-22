@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Popover } from './Popover.tsx';
 import { ACCENT_SWATCHES, BRAND_SWATCHES, loadAppearance, saveAppearance, type Appearance } from '../theme';
 import { useApp } from '../store.tsx';
 
@@ -7,21 +8,9 @@ export function ThemeQuick(): React.JSX.Element {
   const { go } = useApp();
   const [open, setOpen] = useState(false);
   const [look, setLook] = useState<Appearance>(loadAppearance);
-  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) return;
-    setLook(loadAppearance());
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
+    if (open) setLook(loadAppearance());
   }, [open]);
 
   const pick = (patch: Partial<Appearance>) => {
@@ -31,21 +20,23 @@ export function ThemeQuick(): React.JSX.Element {
   };
 
   return (
-    <div className="theme-quick" ref={ref}>
-      <button
-        type="button"
-        className={`cell theme-cell${open ? ' open' : ''}`}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        title="Theme colours"
-        onClick={() => setOpen((v) => !v)}
+    <div className="theme-quick">
+      <Popover
+        role="dialog"
+        label="Theme colours"
+        align="end"
+        open={open}
+        onOpenChange={setOpen}
+        className="card theme-pop"
+        triggerClassName="cell theme-cell"
+        trigger={
+          <>
+            <i className="theme-chip brand" aria-hidden="true" />
+            <i className="theme-chip accent" aria-hidden="true" />
+            Theme
+          </>
+        }
       >
-        <i className="theme-chip brand" aria-hidden="true" />
-        <i className="theme-chip accent" aria-hidden="true" />
-        Theme
-      </button>
-      {open && (
-        <section className="card theme-pop" role="dialog" aria-label="Theme colours">
           <div className="card-title">
             <strong>theme</strong>
             <button type="button" className="btn btn-sm" aria-label="Close" onClick={() => setOpen(false)}>
@@ -100,8 +91,7 @@ export function ThemeQuick(): React.JSX.Element {
           >
             Custom colours, presets, texture →
           </button>
-        </section>
-      )}
+      </Popover>
     </div>
   );
 }

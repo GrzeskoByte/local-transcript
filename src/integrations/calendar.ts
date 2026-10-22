@@ -68,6 +68,26 @@ export interface CalendarEventDraft {
   endIso: string;
   description: string;
   location: string;
+  /** Attendee e-mail addresses; the server sends them invitations. */
+  attendees?: string[];
+}
+
+const EMAIL = /^[^\s@<>,;:"]+@[^\s@<>,;:"]+\.[^\s@<>,;:"]+$/;
+
+/** Split "a@x.com, B <b@y.org>; c@z.io" into valid, unique, lower-cased addresses. */
+export function parseAttendees(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split(/[,;\n]+/)) {
+    const m = raw.match(/<([^>]+)>/);
+    const addr = (m ? m[1]! : raw).trim().toLowerCase();
+    if (EMAIL.test(addr) && !out.includes(addr)) out.push(addr);
+  }
+  return out;
+}
+
+/** The attendees that are valid e-mail addresses (what the builders send). */
+export function validAttendees(draft: CalendarEventDraft): string[] {
+  return parseAttendees((draft.attendees ?? []).join(','));
 }
 
 export interface CalendarCreateResult {
@@ -234,8 +254,10 @@ function icsFold(line: string): string {
   return parts.join('\r\n');
 }
 
-/** Full .ics file for a CalDAV PUT. */
-export function buildIcsEvent(draft: CalendarEventDraft, uid: string): string {
+/** Full .ics file for a CalDAV PUT. With attendees it carries ORGANIZER (the account, when it is an e-mail) so the server invites them. */
+export function buildIcsEvent(draft: CalendarEventDraft, uid: string, organizer?: string): string {
+  const attendees = validAttendees(draft);
+  const org = organizer && EMAIL.test(organizer.trim()) ? organizer.trim().toLowerCase() : null;
   const stamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   const dt = (iso: string) => iso.replace(/[-:]/g, '') + '00';
   const lines = [
@@ -250,6 +272,8 @@ export function buildIcsEvent(draft: CalendarEventDraft, uid: string): string {
     `SUMMARY:${icsEscape(draft.title)}`,
     `DESCRIPTION:${icsEscape(draft.description)}`,
     ...(draft.location ? [`LOCATION:${icsEscape(draft.location)}`] : []),
+    ...(attendees.length && org ? [`ORGANIZER:mailto:${org}`] : []),
+    ...attendees.map((a) => `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${a}`),
     'END:VEVENT',
     'END:VCALENDAR',
   ];
@@ -264,11 +288,15 @@ export function buildGraphEvent(draft: CalendarEventDraft): string {
     start: { dateTime: draft.startIso, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
     end: { dateTime: draft.endIso, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
     ...(draft.location ? { location: { displayName: draft.location } } : {}),
+    ...(validAttendees(draft).length
+      ? { attendees: validAttendees(draft).map((address) => ({ emailAddress: { address }, type: 'required' })) }
+      : {}),
   });
 }
 
-/** SOAP envelope for EWS CreateItem (CalendarItem, no attendees). */
+/** SOAP envelope for EWS CreateItem (CalendarItem; attendees get invitations). */
 export function buildEwsCreateItem(draft: CalendarEventDraft): string {
+  const attendees = validAttendees(draft);
   const esc = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return `<?xml version="1.0" encoding="utf-8"?>` +
@@ -276,7 +304,7 @@ export function buildEwsCreateItem(draft: CalendarEventDraft): string {
     `xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" ` +
     `xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">` +
     `<soap:Header><t:RequestServerVersion Version="Exchange2013"/></soap:Header>` +
-    `<soap:Body><m:CreateItem SendMeetingInvitations="SendToNone">` +
+    `<soap:Body><m:CreateItem SendMeetingInvitations="${attendees.length ? 'SendToAllAndSaveCopy' : 'SendToNone'}">` +
     `<m:SavedItemFolderId><t:DistinguishedFolderId Id="calendar"/></m:SavedItemFolderId>` +
     `<m:Items><t:CalendarItem>` +
     `<t:Subject>${esc(draft.title)}</t:Subject>` +
@@ -284,6 +312,9 @@ export function buildEwsCreateItem(draft: CalendarEventDraft): string {
     `<t:Start>${esc(draft.startIso)}:00</t:Start>` +
     `<t:End>${esc(draft.endIso)}:00</t:End>` +
     (draft.location ? `<t:Location>${esc(draft.location)}</t:Location>` : '') +
+    (attendees.length
+      ? `<t:RequiredAttendees>${attendees.map((a) => `<t:Attendee><t:Mailbox><t:EmailAddress>${esc(a)}</t:EmailAddress></t:Mailbox></t:Attendee>`).join('')}</t:RequiredAttendees>`
+      : '') +
     `</t:CalendarItem></m:Items></m:CreateItem></soap:Body></soap:Envelope>`;
 }
 
@@ -327,7 +358,7 @@ export function buildTransport(
       endpoint: `${base}/${uid}.ics`,
       method: 'PUT',
       contentType: 'text/calendar; charset=utf-8',
-      body: buildIcsEvent(draft, uid),
+      body: buildIcsEvent(draft, uid, config.username),
       headers: [],
       ...authOf(config),
     };

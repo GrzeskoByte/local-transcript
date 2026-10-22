@@ -97,10 +97,13 @@ test('action items routed to the calendar become one approved event each, never 
   await expect(card.getByLabel('Date').first()).toHaveValue('2026-10-20');
   await expect(card.getByLabel('Time').first()).toHaveValue('09:00');
   await titles.nth(1).fill('Changelog review with Bob');
+  // Invitees per event (e-mails); the server sends the invitations.
+  await card.getByLabel('Attendees').nth(1).fill('Bob <bob@example.com>, carol@example.com');
   expect(await page.evaluate(() => (window as unknown as { __created: unknown[] }).__created.length)).toBe(0);
 
   await card.getByRole('button', { name: 'Add 2 events' }).click();
   await expect(card.getByRole('list', { name: 'Created calendar events' })).toContainText('Changelog review with Bob');
+  await expect(card.getByRole('list', { name: 'Created calendar events' })).toContainText('invited bob@example.com, carol@example.com');
   const created = await page.evaluate(() => (window as unknown as { __created: Created[] }).__created);
   expect(created).toHaveLength(2);
   expect(created[0]!.method).toBe('PUT');
@@ -108,6 +111,10 @@ test('action items routed to the calendar become one approved event each, never 
   expect(created[0]!.body).toContain('DTSTART:20261020T090000');
   expect(created[0]!.body).toContain('Owner: Anna');
   expect(created[1]!.body).toContain('SUMMARY:Changelog review with Bob');
+  const bobIcs = created[1]!.body.replace(/\r\n /g, '');
+  expect(bobIcs).toContain('ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:bob@example.com');
+  expect(bobIcs).toContain('mailto:carol@example.com');
+  expect(created[0]!.body).not.toContain('ATTENDEE');
   expect(created[0]!.endpoint).not.toBe(created[1]!.endpoint);
 
   // After a reload the scheduled items are tagged and not offered again.

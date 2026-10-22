@@ -85,7 +85,9 @@ export interface Meeting {
   /** Last GitLab agenda upload of this meeting, if any. */
   gitlabAgenda?: { url: string; target: string; uploadedAt: number };
   /** GitLab issues created from the summary's action items (newest last). */
-  gitlabActionIssues?: { item: string; url: string; iid?: number; assignee?: string; createdAt: number }[];
+  gitlabActionIssues?: { item: string; url: string; iid?: number; assignee?: string; project?: string; createdAt: number }[];
+  /** People in the meeting (loaded from GitLab members or typed): owners, assignees, invitees. */
+  participants?: Participant[];
   /** LLM summary; `sessionId` = Claude Code session that produced it. */
   summary?: {
     text: string;
@@ -154,6 +156,8 @@ export interface CalendarEventRecord {
   createdAt: number;
   /** The summary action item this event was created for (absent = custom event). */
   item?: string;
+  /** Invited e-mail addresses. */
+  attendees?: string[];
 }
 
 /** MediaRecorder timeslice: every stored chunk holds about this much audio. */
@@ -187,3 +191,12 @@ export function formatTimestamp(t: number): string {
 }
 
 export { formatTimestamp as formatSegmentTime };
+
+/** A meeting participant; `email` makes them invitable to calendar events. */
+export interface Participant {
+  name: string;
+  email?: string;
+  /** GitLab username, when loaded from a member list. */
+  username?: string;
+  source: 'gitlab' | 'manual';
+}

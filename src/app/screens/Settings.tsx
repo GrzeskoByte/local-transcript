@@ -46,6 +46,7 @@ import {
   RecordingCards,
   StorageCards,
 } from '../components/settings/SectionCards.tsx';
+import { GitlabProjectPicker } from '../components/GitlabPicker.tsx';
 import { AppearanceSettings } from '../components/AppearanceSettings.tsx';
 import { LiveTranscriptionSettings, AutoTranscribeSettings } from '../components/LiveTranscription.tsx';
 import { nativeRecordingEnabled, setNativeRecordingEnabled } from '../../audio/native-recorder';
@@ -560,6 +561,11 @@ export function Settings(): React.JSX.Element {
           onChange={(e) => setGitlabDraft({ ...gitlabDraft, token: e.target.value })}
           placeholder="glpat-… (api scope)"
           autoComplete="off"
+        />
+        <GitlabProjectPicker
+          config={gitlabDraft}
+          value={gitlabDraft.project}
+          onChange={(project) => setGitlabDraft({ ...gitlabDraft, project })}
         />
         <div className="row-selects">
           <label>

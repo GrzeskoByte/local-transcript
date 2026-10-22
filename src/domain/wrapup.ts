@@ -136,3 +136,8 @@ export function nextWrapStep(m: Meeting, enabled: WrapStepId[], pretick = true):
 export function newWrapUp(now = Date.now()): WrapUp {
   return { steps: {}, routes: {}, updatedAt: now };
 }
+
+/** Key of an issue in the store's issue-state map: its project (records from before projects were tracked use the configured one) and iid. */
+export function issueStateKey(issue: { project?: string; iid?: number }, defaultProject: string): string {
+  return `${(issue.project || defaultProject).trim().replace(/^\/+|\/+$/g, '')}#${issue.iid ?? ''}`;
+}

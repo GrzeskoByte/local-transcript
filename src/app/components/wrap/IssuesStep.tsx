@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../../store.tsx';
 import type { Meeting } from '../../../domain/meeting';
-import { pendingTargets } from '../../../domain/wrapup';
+import { issueStateKey, pendingTargets } from '../../../domain/wrapup';
 import { createGitlabClient, type IssueOverride } from '../../../integrations/gitlab';
 import { wrapPrefs } from '../../preferences';
 import { gitlabReady, openLink } from './SummaryStep.tsx';
+import { GitlabProjectPicker } from '../GitlabPicker.tsx';
 
 /**
  * GitLab issues from the action items routed there: editable title, the
@@ -26,6 +27,8 @@ export function IssuesStep({
   const ready = gitlabReady(gitlabConfig);
   const pending = pendingTargets(m, wrapPrefs().pretick).gitlab;
   const [overrides, setOverrides] = useState<Record<string, IssueOverride>>({});
+  const [project, setProject] = useState(gitlabConfig.project);
+  const [choosing, setChoosing] = useState(false);
   const [members, setMembers] = useState<Array<{ id: number; username: string; name: string }> | null>(null);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -36,15 +39,16 @@ export function IssuesStep({
   useEffect(() => {
     if (!ready || pending.length === 0) return;
     let stop = false;
+    setMembers(null);
     createGitlabClient(gitlabConfig)
-      .listMembers()
+      .listMembers(project)
       .then((list) => !stop && setMembers(list))
       .catch(() => !stop && setMembers([]));
     return () => {
       stop = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, gitlabConfig, pending.length > 0]);
+  }, [ready, gitlabConfig, project, pending.length > 0]);
 
   const memberFor = useMemo(
     () => (owner?: string) => {
@@ -124,7 +128,7 @@ export function IssuesStep({
               disabled={busy}
               onClick={() => {
                 setBusy(true);
-                createGitlabActionIssues(m.id, pending.map((a) => a.text), overrides)
+                createGitlabActionIssues(m.id, pending.map((a) => a.text), overrides, project)
                   .then(() => {
                     setOverrides({});
                     onCreated?.();
@@ -138,8 +142,22 @@ export function IssuesStep({
             >
               {busy ? 'Creating issues…' : `Create ${pending.length} issue${pending.length === 1 ? '' : 's'}`}
             </button>
-            <span className="muted small self-center">in {gitlabConfig.project}</span>
+            <span className="muted small self-center">in {project}</span>
+            <button type="button" className="link-btn self-center" aria-expanded={choosing} onClick={() => setChoosing((v) => !v)}>
+              {choosing ? 'Done' : 'Another project…'}
+            </button>
           </div>
+          {choosing && (
+            <GitlabProjectPicker
+              config={gitlabConfig}
+              value={project}
+              label="Create issues in"
+              onChange={(p) => {
+                setProject(p);
+                setOverrides((o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { ...v, assigneeId: undefined }])));
+              }}
+            />
+          )}
         </>
       ) : (
         <p className="muted mt-0">
@@ -171,7 +189,7 @@ export function IssuesStep({
           </div>
           <ul className="issue-list" aria-label="Created issues">
             {created.map((i) => {
-              const st = i.iid !== undefined ? states?.states[i.iid] : undefined;
+              const st = i.iid !== undefined ? states?.states[issueStateKey(i, gitlabConfig.project)] : undefined;
               return (
                 <li key={i.url} className="issue-row">
                   <a className="issue-num" href={i.url} target="_blank" rel="noreferrer" onClick={(e) => openLink(e, i.url)}>

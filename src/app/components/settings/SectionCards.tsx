@@ -1044,6 +1044,12 @@ export function GitlabExtras({
         checked={draft.wikiSummaries !== false}
         onChange={(v) => setDraft({ ...draft, wikiSummaries: v })}
       />
+      <Toggle
+        label="Only projects and groups I'm a member of"
+        hint="Off lists every project the token can see (can be a lot on a big instance)."
+        checked={draft.membersOnly !== false}
+        onChange={(v) => setDraft({ ...draft, membersOnly: v })}
+      />
     </div>
   );
 }

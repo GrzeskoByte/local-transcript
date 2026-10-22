@@ -6,7 +6,7 @@ import { describeNativeRuntime, nativeAccuracyHint, NATIVE_LANGUAGE_OPTIONS } fr
 import { searchSegments, segmentsToText } from '../../domain/transcript';
 import { speakerName, speakersOf } from '../../domain/speakers';
 import { actionItemsOf } from '../../domain/action-items';
-import { pendingTargets, wrapLeftover } from '../../domain/wrapup';
+import { issueStateKey, pendingTargets, wrapLeftover } from '../../domain/wrapup';
 import { exportAgenda, exportAudio, exportTranscript, revealExport, type ExportResult } from '../../features/meetings/exports';
 import { AgendaEditor, AgendaList } from '../components/Agenda.tsx';
 import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
@@ -21,6 +21,8 @@ import { CopyButton } from '../components/CopyButton.tsx';
 import { SourcePill, StatusPill } from '../components/MeetingRow.tsx';
 import { TranscriptList, setPlayhead } from '../components/meeting/Transcript.tsx';
 import { SummaryStep, gitlabReady, openLink } from '../components/wrap/SummaryStep.tsx';
+import { Popover } from '../components/Popover.tsx';
+import { ParticipantsCard } from '../components/meeting/Participants.tsx';
 import { IssuesStep } from '../components/wrap/IssuesStep.tsx';
 import { EventsStep } from '../components/wrap/EventsStep.tsx';
 import { ExportStep } from '../components/wrap/ExportStep.tsx';
@@ -134,7 +136,7 @@ export function MeetingScreen({ id, query, tab: routeTab }: { id: string; query?
   const glReady = gitlabReady(gitlabConfig);
   const calReady = validateCalendarConfig(calendarConfig) === null;
   const issues = m.gitlabActionIssues ?? [];
-  const openIssues = issues.filter((i) => i.iid !== undefined && issueStates[m.id]?.states[i.iid] !== 'closed').length;
+  const openIssues = issues.filter((i) => i.iid !== undefined && issueStates[m.id]?.states[issueStateKey(i, gitlabConfig.project)] !== 'closed').length;
   const progress = txProgress[m.id];
   const defaultTab: MeetingTab = m.summary ? 'summary' : 'transcript';
   const current = tab ?? defaultTab;
@@ -255,30 +257,51 @@ export function MeetingScreen({ id, query, tab: routeTab }: { id: string; query?
               Rename
             </button>
           )}
-          <details className="menu">
-            <summary className="btn">Export ▾</summary>
-            <div className="menu-list" role="menu">
-              {(['txt', 'md', 'json'] as const).map((f) => (
+          <Popover trigger="Export ▾" label="Export">
+            {(close) => (
+              <>
+                {(['txt', 'md', 'json'] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    role="menuitem"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      close();
+                      runExport(() => exportTranscript(m.id, f));
+                    }}
+                  >
+                    {f === 'md' ? 'Markdown' : f.toUpperCase()}
+                  </button>
+                ))}
+                {m.agenda?.items.length ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      close();
+                      runExport(() => exportAgenda(m));
+                    }}
+                  >
+                    Agenda file
+                  </button>
+                ) : null}
                 <button
-                  key={f}
                   type="button"
                   role="menuitem"
                   className="btn btn-sm"
-                  onClick={() => runExport(() => exportTranscript(m.id, f))}
+                  disabled={!!m.audioRemovedAt}
+                  onClick={() => {
+                    close();
+                    runExport(() => exportAudio(m));
+                  }}
                 >
-                  {f === 'md' ? 'Markdown' : f.toUpperCase()}
+                  Audio file
                 </button>
-              ))}
-              {m.agenda?.items.length ? (
-                <button type="button" role="menuitem" className="btn btn-sm" onClick={() => runExport(() => exportAgenda(m))}>
-                  Agenda file
-                </button>
-              ) : null}
-              <button type="button" role="menuitem" className="btn btn-sm" disabled={!!m.audioRemovedAt} onClick={() => runExport(() => exportAudio(m))}>
-                Audio file
-              </button>
-            </div>
-          </details>
+              </>
+            )}
+          </Popover>
           <button
             type="button"
             className="btn btn-primary"
@@ -417,6 +440,7 @@ export function MeetingScreen({ id, query, tab: routeTab }: { id: string; query?
               </div>
               <SummaryStep m={m} onError={(e) => setError(e)} />
             </section>
+            <ParticipantsCard m={m} />
             <AgendaCard />
           </>
         )}
@@ -432,6 +456,9 @@ export function MeetingScreen({ id, query, tab: routeTab }: { id: string; query?
               <EventsStep m={m} onError={(e) => setError(e)} onCreated={() => void setWrapUp(m.id, (w) => ({ ...w, steps: { ...w.steps, calendar: 'done' } }))} />
             )}
           </section>
+        )}
+        {current === 'calendar' && calReady && (
+          <ParticipantsCard m={m} />
         )}
         {current === 'export' && (
           <>

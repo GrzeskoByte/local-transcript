@@ -1,6 +1,6 @@
 import { autoTranscribeEnabled } from './auto-transcribe';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { Meeting, RecordingMode, RecordingState } from '../domain/meeting';
+import type { Meeting, Participant, RecordingMode, RecordingState } from '../domain/meeting';
 import { estimateDurationFromChunks, formatDuration, newMeetingId } from '../domain/meeting';
 import { DeviceAudioSource } from '../audio/device-audio';
 import { SystemAudioSource, systemAudioStatus } from '../audio/system-audio';
@@ -84,7 +84,7 @@ import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
 import { normalizeAgendaItems, type AgendaItem } from '../domain/agenda';
 import { settleWithin } from '../domain/settle';
 import type { ExportFormat, Moment, WrapStepId, WrapUp } from '../domain/meeting';
-import { newWrapUp } from '../domain/wrapup';
+import { issueStateKey, newWrapUp } from '../domain/wrapup';
 import { updateSegment } from '../storage/transcripts';
 import { detectSpeakers } from '../features/meetings/diarize';
 import { namedSegments } from '../domain/speakers';
@@ -316,9 +316,16 @@ interface AppState {
     meetingId: string,
     items: string[],
     overrides?: Record<string, IssueOverride>,
+    /** Project path to create them in (default: the configured project). */
+    project?: string,
   ) => Promise<ActionIssueResult[]>;
-  /** Open/closed state of a meeting's issues (GitLab tab), with when it was read. */
-  issueStates: Record<string, { at: number; states: Record<number, 'opened' | 'closed'> }>;
+  /** Open/closed state of a meeting's issues, keyed by `issueStateKey`, with when it was read. */
+  issueStates: Record<string, { at: number; states: Record<string, 'opened' | 'closed'> }>;
+  /** The meeting's participants (owners, assignees, invitees). */
+  meetingParticipants: (meetingId: string) => Participant[];
+  setParticipants: (meetingId: string, people: Participant[]) => Promise<void>;
+  /** Members of a GitLab project or group as participants (with public e-mails). */
+  loadGitlabPeople: (from: { project: string } | { groupId: number; name: string }) => Promise<Participant[]>;
   refreshIssueStates: (meetingId: string) => Promise<void>;
   /** Post the summary to the wiki page Meetings/<date>-<title>. */
   postSummaryToWiki: (meetingId: string) => Promise<GitlabUploadResult>;
@@ -998,7 +1005,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * later one fails (the error carries them as `created`).
    */
   const createGitlabActionIssues = useCallback(
-    async (meetingId: string, items: string[], overrides?: Record<string, IssueOverride>): Promise<ActionIssueResult[]> => {
+    async (meetingId: string, items: string[], overrides?: Record<string, IssueOverride>, project?: string): Promise<ActionIssueResult[]> => {
+      const target = (project || gitlabConfig.project).trim();
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw new Error('Meeting not found');
       const wanted = actionItemsOf(meeting).filter((a) => items.includes(a.text));
@@ -1014,12 +1022,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       };
       logNetwork(
         gitlabConfig.url,
-        `Created ${wanted.length} issue${wanted.length === 1 ? '' : 's'} from "${meeting.title}"`,
+        `Created ${wanted.length} issue${wanted.length === 1 ? '' : 's'} in ${target} from "${meeting.title}"`,
         `${wanted.length} title${wanted.length === 1 ? '' : 's'}, ${wanted.length} quote${wanted.length === 1 ? '' : 's'}`,
       );
       try {
         const segments = await getSegments(meetingId).catch(() => [] as TranscriptSegment[]);
-        const created = await createGitlabClient(gitlabConfig).createActionItemIssues(meeting, wanted, { overrides, segments });
+        const created = await createGitlabClient({ ...gitlabConfig, project: target }).createActionItemIssues(meeting, wanted, { overrides, segments });
         await record(created);
         return created;
       } catch (err) {
@@ -1034,10 +1042,20 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const refreshIssueStates = useCallback(
     async (meetingId: string) => {
       const meeting = await getMeeting(meetingId);
-      const iids = (meeting?.gitlabActionIssues ?? []).map((i) => i.iid).filter((n): n is number => n !== undefined);
-      if (!meeting || iids.length === 0) return;
-      logNetwork(gitlabConfig.url, `Refreshed issue status for "${meeting.title}"`, `${iids.length} issue numbers`);
-      const states = await createGitlabClient(gitlabConfig).issueStates(iids);
+      const issues = (meeting?.gitlabActionIssues ?? []).filter((i) => i.iid !== undefined);
+      if (!meeting || issues.length === 0) return;
+      logNetwork(gitlabConfig.url, `Refreshed issue status for "${meeting.title}"`, `${issues.length} issue numbers`);
+      const byProject = new Map<string, number[]>();
+      for (const i of issues) {
+        const p = (i.project || gitlabConfig.project).trim();
+        byProject.set(p, [...(byProject.get(p) ?? []), i.iid!]);
+      }
+      const client = createGitlabClient(gitlabConfig);
+      const states: Record<string, 'opened' | 'closed'> = {};
+      for (const [project, iids] of byProject) {
+        const got = await client.issueStates(iids, project);
+        for (const [iid, st] of Object.entries(got)) states[issueStateKey({ project, iid: Number(iid) }, gitlabConfig.project)] = st;
+      }
       setIssueStates((cur) => ({ ...cur, [meetingId]: { at: Date.now(), states } }));
     },
     [gitlabConfig],
@@ -1128,7 +1146,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const followup = calendarPrefs().followupCalendar.trim();
       const target = followup && calendarConfig.provider === 'caldav' ? { ...calendarConfig, calendarUrl: followup } : calendarConfig;
       const transport = buildTransport(target, draft, uid);
-      logNetwork(calendarConfig.serverUrl || 'graph.microsoft.com', `Added "${draft.title}" to the calendar`, 'Event title, time, description');
+      logNetwork(calendarConfig.serverUrl || 'graph.microsoft.com', `Added "${draft.title}" to the calendar`, `Event title, time, description${draft.attendees?.length ? `, ${draft.attendees.length} invitee e-mail${draft.attendees.length === 1 ? '' : 's'}` : ''}`);
       await invokeDesktop<string>('native_calendar_create', { request: transport });
       const record = {
         uid,
@@ -1137,6 +1155,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         startIso: draft.startIso,
         createdAt,
         ...(item ? { item } : {}),
+        ...(draft.attendees?.length ? { attendees: draft.attendees } : {}),
       };
       const updated = await updateMeeting(meetingId, (cur) => ({
         ...cur,
@@ -1688,6 +1707,27 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
   }, []);
 
+  const meetingParticipants = useCallback(
+    (meetingId: string): Participant[] =>
+      (detailMeeting?.id === meetingId ? detailMeeting : meetings.find((x) => x.id === meetingId))?.participants ?? [],
+    [detailMeeting, meetings],
+  );
+  const setParticipants = useCallback(async (meetingId: string, people: Participant[]) => {
+    const updated = await updateMeeting(meetingId, { participants: people });
+    if (updated) {
+      setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      setMeetings((list) => list.map((x) => (x.id === meetingId ? updated : x)));
+    }
+  }, []);
+  const loadGitlabPeople = useCallback(
+    async (from: { project: string } | { groupId: number; name: string }): Promise<Participant[]> => {
+      logNetwork(gitlabConfig.url, `Loaded the members of ${'project' in from ? from.project : from.name}`, 'Nothing (read only)');
+      const people = await createGitlabClient(gitlabConfig).listPeople('project' in from ? { project: from.project } : { groupId: from.groupId });
+      return people.map((p) => ({ name: p.name, username: p.username, ...(p.email ? { email: p.email } : {}), source: 'gitlab' as const }));
+    },
+    [gitlabConfig],
+  );
+
   const [diarizing, setDiarizing] = useState<Record<string, number>>({});
   const detectSpeakersFor = useCallback(async (meetingId: string, speakers = 0) => {
     setDiarizing((p) => ({ ...p, [meetingId]: 0 }));
@@ -1821,6 +1861,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       markAgenda,
       editSegment,
       renameSpeaker,
+      meetingParticipants,
+      setParticipants,
+      loadGitlabPeople,
       detectSpeakers: detectSpeakersFor,
       diarizing,
       setWrapUp,
@@ -1902,7 +1945,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
-      recordingIssues, storageWarning, startRecording, addMoment, labelMoment, markAgenda, editSegment, renameSpeaker,
+      recordingIssues, storageWarning, startRecording, addMoment, labelMoment, markAgenda, editSegment, renameSpeaker, meetingParticipants, setParticipants, loadGitlabPeople,
       detectSpeakersFor, diarizing, setWrapUp, recordExport, deleteAllMeetings, applyRetention, recordingLevels, pauseRecording, resumeRecording, retrySaving, deleteMeeting, renameMeeting,
       stopRecording, stopping, nativeDevices, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, summarizing, returnTo, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,

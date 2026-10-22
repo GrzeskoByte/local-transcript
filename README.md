@@ -167,8 +167,8 @@ all run on this computer. It goes online **only when you click something**:
 | --- | --- | --- |
 | Speech model download | You click Download / Set up transcription | Hugging Face (`ggerganov/whisper.cpp`) |
 | Update check | You click **Check for updates**, or turn on the launch check (off by default); **Include test releases** reads the canary manifest | GitHub releases |
-| GitLab sharing | You click Upload / Test connection / Create GitLab issues / Post to wiki; the issue step also lists project members and labels and refreshes issue states | Your GitLab server |
-| Company calendar | You open Calendar, test, detect or approve an event | Your calendar server |
+| GitLab sharing | You click Upload / Test connection / Create GitLab issues / Post to wiki / Load my projects & groups / Load members; the issue step also lists project members and refreshes issue states | Your GitLab server |
+| Company calendar | You open Calendar, test, detect or approve an event (invitees you typed get the server's invitation e-mail) | Your calendar server |
 | LLM summary | You click Summarize (Ollama stays local; API/Open WebUI/OpenCode/Claude Code send the transcript to that provider) | The endpoint you configured |
 
 Settings → Storage & privacy → **Network activity** lists every connection the

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useApp } from '../../store.tsx';
 import type { Meeting } from '../../../domain/meeting';
-import { actionItemsOf } from '../../../domain/action-items';
-import { eventFor, issueFor, routesOf } from '../../../domain/wrapup';
+import { actionItemsOf, parseActionItem } from '../../../domain/action-items';
+import { eventFor, issueFor, issueStateKey, routesOf } from '../../../domain/wrapup';
 import { claudeResumeCommand, llmConfigProblem } from '../../../integrations/llm';
 import { summaryMarkdown } from '../../../integrations/gitlab';
 import { validateCalendarConfig } from '../../../integrations/calendar';
@@ -21,12 +21,6 @@ export function openLink(e: React.MouseEvent, url: string): void {
   e.preventDefault();
   void openExternalUrl(url).catch(() => undefined);
 }
-
-const lines = (t: string): string[] =>
-  t
-    .split('\n')
-    .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim())
-    .filter(Boolean);
 
 /**
  * The summary, editable, and its action items with where each goes (GitLab,
@@ -115,8 +109,8 @@ export function SummaryStep({ m, onError }: { m: Meeting; onError: (e: string) =
               {s.reviewedAt && <span className="badge badge-ok">reviewed</span>}
               <span className="grow" />
               <CopyButton label="Copy summary" text={() => summaryMarkdown(m)} />
-              <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
-                Edit
+              <button type="button" className="btn btn-sm btn-primary" onClick={() => setEditing(true)}>
+                ✎ Edit summary
               </button>
               {!problem && (
                 <ConfirmButton
@@ -134,6 +128,7 @@ export function SummaryStep({ m, onError }: { m: Meeting; onError: (e: string) =
                 Made from an earlier transcript — Regenerate to match the current one.
               </p>
             )}
+            <div className="summary-view" title="Double-click to edit" onDoubleClick={() => setEditing(true)}>
             {s.text && <p className="pre-wrap summary-tldr">{s.text}</p>}
             {s.keyPoints.length > 0 && (
               <ul className="summary-points">
@@ -162,6 +157,7 @@ export function SummaryStep({ m, onError }: { m: Meeting; onError: (e: string) =
                 </ul>
               </>
             ) : null}
+            </div>
             {s.sessionId && (
               <p className="muted small">
                 Ask follow-up questions in Claude Code: <code className="select-all">{claudeResumeCommand(s.sessionId)}</code>
@@ -178,7 +174,7 @@ export function SummaryStep({ m, onError }: { m: Meeting; onError: (e: string) =
               const r = routes[a.text]!;
               const issue = issueFor(m, a.text);
               const ev = eventFor(m, a.text);
-              const state = issue?.iid !== undefined ? gitlabIssueStates?.[issue.iid] : undefined;
+              const state = issue?.iid !== undefined ? gitlabIssueStates?.[issueStateKey(issue, gitlabConfig.project)] : undefined;
               return (
                 <li key={a.text} className="route-row">
                   <div className="grow">
@@ -239,6 +235,84 @@ export function SummaryStep({ m, onError }: { m: Meeting; onError: (e: string) =
   );
 }
 
+/** One editable list: a row per item with remove, reorder and "+ Add"; Enter adds the next row. */
+function ListEditor({
+  label,
+  items,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  items: string[];
+  onChange: (items: string[]) => void;
+  placeholder: string;
+}): React.JSX.Element {
+  const set = (i: number, v: string): void => onChange(items.map((x, j) => (j === i ? v : x)));
+  const focusRow = (i: number): void => {
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>(`[data-list="${label}"][data-row="${i}"]`)?.focus());
+  };
+  return (
+    <fieldset className="list-editor">
+      <legend className="field-label">{label}</legend>
+      {items.map((it, i) => (
+        <div key={i} className="list-row">
+          <span className="list-bullet" aria-hidden="true">•</span>
+          <input
+            className="input"
+            aria-label={`${label} ${i + 1}`}
+            data-list={label}
+            data-row={i}
+            value={it}
+            placeholder={placeholder}
+            onChange={(e) => set(i, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onChange([...items.slice(0, i + 1), '', ...items.slice(i + 1)]);
+                focusRow(i + 1);
+              } else if (e.key === 'Backspace' && !it && items.length > 0) {
+                e.preventDefault();
+                onChange(items.filter((_, j) => j !== i));
+                focusRow(Math.max(0, i - 1));
+              }
+            }}
+          />
+          <button type="button" className="icon-btn" aria-label={`Move ${label} ${i + 1} up`} disabled={i === 0} onClick={() => onChange(items.map((x, j) => (j === i - 1 ? items[i]! : j === i ? items[i - 1]! : x)))}>
+            ↑
+          </button>
+          <button type="button" className="icon-btn" aria-label={`Remove ${label} ${i + 1}`} onClick={() => onChange(items.filter((_, j) => j !== i))}>
+            ×
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="link-btn"
+        onClick={() => {
+          onChange([...items, '']);
+          focusRow(items.length);
+        }}
+      >
+        + Add {label.toLowerCase().replace(/s$/, '')}
+      </button>
+    </fieldset>
+  );
+}
+
+interface ActionRow {
+  owner: string;
+  task: string;
+  due: string;
+}
+
+const toRow = (text: string): ActionRow => {
+  const a = parseActionItem(text);
+  return { owner: a.owner ?? '', task: a.task, due: a.due ?? '' };
+};
+/** Back to the summary's "Owner: task (due)" line. */
+export const fromRow = (r: ActionRow): string =>
+  `${r.owner.trim() || 'Unassigned'}: ${r.task.trim()}${r.due.trim() ? ` (${r.due.trim()})` : ''}`;
+
 function SummaryEditor({
   m,
   onSave,
@@ -249,22 +323,33 @@ function SummaryEditor({
   onCancel: () => void;
 }): React.JSX.Element {
   const s = m.summary;
+  const { meetingParticipants } = useApp();
+  const people = meetingParticipants(m.id);
   const [tldr, setTldr] = useState(s?.text ?? '');
-  const [points, setPoints] = useState((s?.keyPoints ?? []).join('\n'));
-  const [decisions, setDecisions] = useState((s?.decisions ?? []).join('\n'));
-  const [actions, setActions] = useState((s?.actionItems ?? []).join('\n'));
-  const [questions, setQuestions] = useState((s?.openQuestions ?? []).join('\n'));
+  const [points, setPoints] = useState<string[]>(s?.keyPoints ?? []);
+  const [decisions, setDecisions] = useState<string[]>(s?.decisions ?? []);
+  const [actions, setActions] = useState<ActionRow[]>((s?.actionItems ?? []).map(toRow));
+  const [questions, setQuestions] = useState<string[]>(s?.openQuestions ?? []);
+  const clean = (xs: string[]): string[] => xs.map((x) => x.trim()).filter(Boolean);
+  const setA = (i: number, patch: Partial<ActionRow>): void => setActions((xs) => xs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   return (
     <form
       className="summary-editor"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onCancel();
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          (e.currentTarget as HTMLFormElement).requestSubmit();
+        }
+      }}
       onSubmit={(e) => {
         e.preventDefault();
         onSave({
           text: tldr.trim(),
-          keyPoints: lines(points),
-          decisions: lines(decisions),
-          actionItems: lines(actions),
-          openQuestions: lines(questions),
+          keyPoints: clean(points),
+          decisions: clean(decisions),
+          actionItems: actions.filter((a) => a.task.trim()).map(fromRow),
+          openQuestions: clean(questions),
           model: s?.model ?? '',
           createdAt: s?.createdAt ?? Date.now(),
           reviewedAt: Date.now(),
@@ -272,26 +357,42 @@ function SummaryEditor({
         });
       }}
     >
+      <p className="muted small mt-0">Edit any line. Enter adds a row, Backspace on an empty row removes it, Ctrl+Enter saves, Esc cancels.</p>
       <label className="field-label mt-0" htmlFor="sum-tldr">
         TL;DR
       </label>
-      <textarea id="sum-tldr" className="input" rows={2} value={tldr} onChange={(e) => setTldr(e.target.value)} />
-      <label className="field-label" htmlFor="sum-points">
-        Key points · one per line
-      </label>
-      <textarea id="sum-points" className="input" rows={4} value={points} onChange={(e) => setPoints(e.target.value)} />
-      <label className="field-label" htmlFor="sum-decisions">
-        Decisions · one per line
-      </label>
-      <textarea id="sum-decisions" className="input" rows={3} value={decisions} onChange={(e) => setDecisions(e.target.value)} />
-      <label className="field-label" htmlFor="sum-actions">
-        Action items · "Owner: task (due)", one per line
-      </label>
-      <textarea id="sum-actions" className="input" rows={4} value={actions} onChange={(e) => setActions(e.target.value)} />
-      <label className="field-label" htmlFor="sum-questions">
-        Open questions · one per line
-      </label>
-      <textarea id="sum-questions" className="input" rows={2} value={questions} onChange={(e) => setQuestions(e.target.value)} />
+      <textarea id="sum-tldr" className="input" rows={2} value={tldr} onChange={(e) => setTldr(e.target.value)} placeholder="One or two sentences." />
+      <ListEditor label="Key points" items={points} onChange={setPoints} placeholder="What was said or agreed" />
+      <ListEditor label="Decisions" items={decisions} onChange={setDecisions} placeholder="What was decided" />
+      <fieldset className="list-editor">
+        <legend className="field-label">Action items</legend>
+        {actions.length > 0 && (
+          <div className="action-head" aria-hidden="true">
+            <span>Owner</span>
+            <span>Task</span>
+            <span>Due</span>
+          </div>
+        )}
+        <datalist id="sum-people">
+          {people.map((p) => (
+            <option key={p.username ?? p.name} value={p.name} />
+          ))}
+        </datalist>
+        {actions.map((a, i) => (
+          <div key={i} className="action-row">
+            <input className="input" list="sum-people" aria-label={`Owner of action item ${i + 1}`} placeholder="Unassigned" value={a.owner} onChange={(e) => setA(i, { owner: e.target.value })} />
+            <input className="input" aria-label={`Action item ${i + 1}`} placeholder="What needs doing" value={a.task} onChange={(e) => setA(i, { task: e.target.value })} />
+            <input className="input" aria-label={`Due date of action item ${i + 1}`} placeholder="e.g. 2026-11-03 or Friday" value={a.due} onChange={(e) => setA(i, { due: e.target.value })} />
+            <button type="button" className="icon-btn" aria-label={`Remove action item ${i + 1}`} onClick={() => setActions((xs) => xs.filter((_, j) => j !== i))}>
+              ×
+            </button>
+          </div>
+        ))}
+        <button type="button" className="link-btn" onClick={() => setActions((xs) => [...xs, { owner: '', task: '', due: '' }])}>
+          + Add action item
+        </button>
+      </fieldset>
+      <ListEditor label="Open questions" items={questions} onChange={setQuestions} placeholder="Still to be answered" />
       <div className="btn-row">
         <button type="submit" className="btn btn-primary">
           Save summary

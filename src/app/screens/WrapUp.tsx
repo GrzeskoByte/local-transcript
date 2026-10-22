@@ -1,3 +1,4 @@
+import { ParticipantsCard } from '../components/meeting/Participants.tsx';
 import { useEffect, useRef, useState } from 'react';
 import { useApp, formatDuration } from '../store.tsx';
 import type { WrapStepId } from '../../domain/meeting';
@@ -260,6 +261,7 @@ export function WrapUp({ id, step }: { id: string; step?: WrapStepId }): React.J
           )}
 
           {current === 'calendar' && (
+            <>
             <section className="card wrap-card" aria-label="Calendar events">
               <div className="card-title">
                 <strong>{index + 1} · Calendar events</strong>
@@ -291,6 +293,8 @@ export function WrapUp({ id, step }: { id: string; step?: WrapStepId }): React.J
                 )}
               </div>
             </section>
+            <ParticipantsCard m={m} />
+            </>
           )}
 
           {current === 'export' && (

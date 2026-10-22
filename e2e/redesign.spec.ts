@@ -39,6 +39,18 @@ test('record from Home, mark a moment, stop into the wrap-up, come back later', 
   await expect(page).toHaveURL(/#\/meeting\//);
   await expect(page.getByRole('tablist', { name: 'Meeting' })).toBeVisible();
   await expect(page.getByLabel('Chapters and moments')).toBeVisible();
+
+  // The Export menu opens over the page, not clipped by the pink header.
+  await page.getByRole('button', { name: 'Export ▾' }).click();
+  const audio = page.getByRole('menuitem', { name: 'Audio file' });
+  await expect(audio).toBeVisible();
+  const box = (await audio.boundingBox())!;
+  const head = (await page.locator('.detail-head').boundingBox())!;
+  expect(box.y + box.height).toBeGreaterThan(head.y + head.height);
+  const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.textContent ?? '', [box.x + box.width / 2, box.y + box.height / 2]);
+  expect(hit).toContain('Audio file');
+  await page.keyboard.press('Escape');
+  await expect(audio).toHaveCount(0);
 });
 
 test('library lists, filters and selects meetings', async ({ page }) => {

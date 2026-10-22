@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../../store.tsx';
-import type { Meeting } from '../../../domain/meeting';
+import type { Meeting, Participant } from '../../../domain/meeting';
 import { pendingTargets } from '../../../domain/wrapup';
 import {
   actionItemEventDraft,
+  parseAttendees,
   extractEventDraft,
   validateCalendarConfig,
   CALENDAR_PROVIDER_LABELS,
@@ -18,10 +19,29 @@ interface Draft {
   date: string;
   time: string;
   description: string;
+  /** Invitees, comma-separated e-mails as typed. */
+  attendees: string;
 }
 
 function toDraft(item: string, d: CalendarEventDraft): Draft {
-  return { item, title: d.title, date: d.startIso.slice(0, 10), time: d.startIso.slice(11, 16), description: d.description };
+  return {
+    item,
+    title: d.title,
+    date: d.startIso.slice(0, 10),
+    time: d.startIso.slice(11, 16),
+    description: d.description,
+    attendees: (d.attendees ?? []).join(', '),
+  };
+}
+
+/** The participant an action item's owner names (by name, first name or username) with an e-mail. */
+export function ownerEmail(owner: string | undefined, people: Participant[]): string | undefined {
+  if (!owner) return undefined;
+  const n = owner.replace(/^@/, '').trim().toLowerCase();
+  const hit = people.filter(
+    (p) => p.email && (p.name.toLowerCase() === n || p.username?.toLowerCase() === n || p.name.toLowerCase().split(' ')[0] === n),
+  );
+  return hit.length === 1 ? hit[0]!.email : undefined;
 }
 
 function fromDraft(d: Draft, location = ''): CalendarEventDraft {
@@ -29,7 +49,8 @@ function fromDraft(d: Draft, location = ''): CalendarEventDraft {
   const end = new Date(start.getTime() + 30 * 60_000);
   const pad = (n: number) => String(n).padStart(2, '0');
   const iso = (x: Date) => `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}T${pad(x.getHours())}:${pad(x.getMinutes())}`;
-  return { title: d.title, startIso: iso(start), endIso: iso(end), description: d.description, location };
+  const attendees = parseAttendees(d.attendees);
+  return { title: d.title, startIso: iso(start), endIso: iso(end), description: d.description, location, ...(attendees.length ? { attendees } : {}) };
 }
 
 /**
@@ -54,6 +75,8 @@ export function EventsStep({
   const transcriptNote = storageDir ? `\n\nTranscript: ${storageDir}/${folderName(m)}/transcript.md` : '';
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [custom, setCustom] = useState<CalendarEventDraft | null>(null);
+  const [customInvite, setCustomInvite] = useState('');
+  const emails = (m.participants ?? []).map((p) => p.email).filter((x): x is string => !!x);
   const [busy, setBusy] = useState(false);
   const key = pending.map((a) => a.text).join('\n');
 
@@ -63,7 +86,11 @@ export function EventsStep({
       pending.map(
         (a) =>
           cur.find((d) => d.item === a.text) ??
-          toDraft(a.text, { ...actionItemEventDraft(m, a), description: actionItemEventDraft(m, a).description + transcriptNote }),
+          toDraft(a.text, {
+            ...actionItemEventDraft(m, a),
+            description: actionItemEventDraft(m, a).description + transcriptNote,
+            attendees: [ownerEmail(a.owner, m.participants ?? [])].filter((x): x is string => !!x),
+          }),
       ),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -110,15 +137,46 @@ export function EventsStep({
               <span role="columnheader">Event</span>
               <span role="columnheader">Date</span>
               <span role="columnheader">Time</span>
+              <span role="columnheader">Invite (e-mails)</span>
             </div>
             {drafts.map((d, i) => (
               <div key={d.item} className="draft-row" role="row">
                 <input className="input" aria-label="Event title" value={d.title} onChange={(e) => edit(i, { title: e.target.value })} />
                 <input className="input" type="date" aria-label="Date" value={d.date} onChange={(e) => edit(i, { date: e.target.value })} />
                 <input className="input" type="time" aria-label="Time" value={d.time} onChange={(e) => edit(i, { time: e.target.value })} />
+                <input
+                  className="input"
+                  aria-label="Attendees"
+                  list="event-people"
+                  placeholder="name@company.com, …"
+                  value={d.attendees}
+                  onChange={(e) => edit(i, { attendees: e.target.value })}
+                />
               </div>
             ))}
           </div>
+          <datalist id="event-people">
+            {emails.map((e) => (
+              <option key={e} value={e} />
+            ))}
+          </datalist>
+          {emails.length > 0 && (
+            <div className="row wrap">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setDrafts((ds) => ds.map((d) => ({ ...d, attendees: parseAttendees([d.attendees, ...emails].join(',')).join(', ') })))}
+              >
+                Invite all {emails.length} participant{emails.length === 1 ? '' : 's'}
+              </button>
+              <span className="muted small">Invitees get the event by e-mail from your calendar server.</span>
+            </div>
+          )}
+          {drafts.some((d) => d.attendees.trim() && parseAttendees(d.attendees).length === 0) && (
+            <p className="warn small" role="alert">
+              Some invitees are not e-mail addresses.
+            </p>
+          )}
           <p className="muted small">Each event gets the meeting summary and where its transcript is, in the description.</p>
           <div className="btn-row">
             <button type="button" className="btn btn-primary" disabled={busy || drafts.some((d) => !d.title.trim() || !d.date)} onClick={() => void createAll()}>
@@ -144,6 +202,7 @@ export function EventsStep({
                 <span className="grow">
                   <strong>{ev.title}</strong>
                   <small className="muted"> · {new Date(ev.startIso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</small>
+                  {ev.attendees?.length ? <small className="muted"> · invited {ev.attendees.join(', ')}</small> : null}
                 </span>
                 <span className="pill pill-completed">added</span>
               </li>
@@ -168,6 +227,19 @@ export function EventsStep({
           </div>
           <textarea className="input" aria-label="Event description" rows={4} value={custom.description} onChange={(e) => setCustom({ ...custom, description: e.target.value })} />
           <input className="input mt-2" aria-label="Location" placeholder="Room, link… (optional)" value={custom.location} onChange={(e) => setCustom({ ...custom, location: e.target.value })} />
+          <input
+            className="input mt-2"
+            aria-label="Custom event attendees"
+            list="event-people"
+            placeholder="Invite: name@company.com, … (optional)"
+            value={customInvite}
+            onChange={(e) => setCustomInvite(e.target.value)}
+          />
+          {emails.length > 0 && (
+            <button type="button" className="link-btn mt-1" onClick={() => setCustomInvite(parseAttendees([customInvite, ...emails].join(',')).join(', '))}>
+              Invite all participants
+            </button>
+          )}
           <div className="btn-row">
             <button
               type="button"
@@ -175,8 +247,11 @@ export function EventsStep({
               disabled={busy || !custom.title.trim()}
               onClick={() => {
                 setBusy(true);
-                createCalendarEvent(m.id, custom)
-                  .then(() => setCustom(null))
+                createCalendarEvent(m.id, { ...custom, attendees: parseAttendees(customInvite) })
+                  .then(() => {
+                    setCustom(null);
+                    setCustomInvite('');
+                  })
                   .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
                   .finally(() => setBusy(false));
               }}

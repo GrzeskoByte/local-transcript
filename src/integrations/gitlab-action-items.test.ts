@@ -95,11 +95,12 @@ describe('createActionItemIssues', () => {
     expect(created).toEqual([
       {
         item: 'Anna: send the release notes (2026-10-20)',
+        project: 'team/app',
         url: 'https://git.example.com/team/app/-/issues/1',
         iid: 1,
         assignee: 'anna',
       },
-      { item: 'Unassigned: book the demo room', url: 'https://git.example.com/team/app/-/issues/2', iid: 2 },
+      { item: 'Unassigned: book the demo room', project: 'team/app', url: 'https://git.example.com/team/app/-/issues/2', iid: 2 },
     ]);
     expect(posted[0]).toMatchObject({
       title: 'send the release notes',
@@ -128,6 +129,6 @@ describe('createActionItemIssues', () => {
       .then(() => new Error('expected a failure'))
       .catch((e: unknown) => e)) as Error & { created?: unknown[] };
     expect(err.message).toContain('GitLab 403');
-    expect(err.created).toEqual([{ item: 'Anna: send the release notes (2026-10-20)', url: 'u1', iid: 1 }]);
+    expect(err.created).toEqual([{ item: 'Anna: send the release notes (2026-10-20)', project: 'team/app', url: 'u1', iid: 1 }]);
   });
 });

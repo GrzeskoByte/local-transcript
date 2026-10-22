@@ -62,6 +62,9 @@ Legacy hashes (`#/new`, `#/calendar`, old settings tabs) redirect.
 | Transcript | `.transcript` with `.sect` (agenda chapters), `.moment-row`, editable `.line-text` |
 | Wrap-up tables | `.draft-table` (issues/events), `.route-list` (action-item routing), `.format-grid` |
 | Danger window | `.card.danger-zone` |
+| Menus / pop-ups | `Popover` portal (`.popover`, `.menu-list`; Export ▾, Theme) — never clipped by a parent |
+| Summary editor | `.list-editor` / `.list-row`, `.action-row` (Owner / Task / Due) |
+| Participants | `.people` chips, `.gl-picker` (group / filter / project) |
 
 ## 5. Deviations from the canvas (deliberate)
 

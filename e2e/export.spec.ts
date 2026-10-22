@@ -52,8 +52,8 @@ async function recordMeeting(page: Page, title: string): Promise<void> {
 }
 
 async function openExport(page: Page): Promise<void> {
-  const menu = page.locator('details.menu');
-  if ((await menu.getAttribute('open')) === null) await menu.locator('summary').click();
+  const trigger = page.getByRole('button', { name: 'Export ▾' });
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
 }
 
 test('desktop: every export is saved through the shell and the app says where', async ({ page }) => {
