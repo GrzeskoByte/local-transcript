@@ -31,7 +31,9 @@ case "$TARGET" in
 esac
 
 PY=$(command -v python3 || command -v python)
-WORK=$(mktemp -d)
+# Relative path: a native Windows Python cannot open Git Bash paths like /tmp/….
+WORK=".diarize-work-$$"
+mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$OUT"
 
@@ -50,11 +52,24 @@ else:
 PY
 }
 
-check() { echo "$1  $2" | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -); }
+# sha256 via Python (Windows Git Bash has no shasum; PyPI digests may carry a CR there).
+check() {
+  "$PY" - "$1" "$2" <<'PY'
+import hashlib, sys
+want, path = sys.argv[1].strip().lower(), sys.argv[2]
+h = hashlib.sha256()
+with open(path, "rb") as f:
+    for block in iter(lambda: f.read(1 << 20), b""):
+        h.update(block)
+if h.hexdigest() != want:
+    sys.exit(f"{path}: sha256 {h.hexdigest()} != {want}")
+print(f"{path}: OK")
+PY
+}
 
 fetch_wheel() {
   local pkg="$1" dest="$2"
-  read -r url sha < <(wheel "$pkg")
+  read -r url sha < <(wheel "$pkg" | tr -d '\r')
   curl -fsSL --retry 3 -o "$dest" "$url"
   check "$sha" "$dest"
 }
@@ -70,7 +85,7 @@ chmod +x "$OUT/$BIN"
 
 curl -fsSL --retry 3 -o "$WORK/seg.tar.bz2" "$SEG_URL"
 check "$SEG_SHA" "$WORK/seg.tar.bz2"
-tar -xjf "$WORK/seg.tar.bz2" -C "$WORK"
+"$PY" -c "import sys, tarfile; tarfile.open(sys.argv[1]).extractall(sys.argv[2])" "$WORK/seg.tar.bz2" "$WORK"
 cp "$WORK/sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx" "$OUT/segmentation.onnx"
 cp "$WORK/sherpa-onnx-pyannote-segmentation-3-0/LICENSE" "$OUT/LICENSE-pyannote-segmentation.txt"
 curl -fsSL --retry 3 -o "$OUT/embedding.onnx" "$EMB_URL"
