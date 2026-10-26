@@ -169,6 +169,7 @@ all run on this computer. It goes online **only when you click something**:
 | Update check | You click **Check for updates**, or turn on the launch check (off by default) | GitHub releases |
 | GitLab sharing | You click Upload / Test connection / Create GitLab issues (from summary action items) | Your GitLab server |
 | Company calendar | You open Calendar, test, detect or approve an event | Your calendar server |
+| Transcription server (Open WebUI) | You turned it on in Settings → Models and click Transcribe / Test connection (or Transcribe after recording is on): the recording's speech goes there as 16 kHz WAV pieces | The server you configured |
 | LLM summary | You click Summarize (Ollama stays local; API/Open WebUI/OpenCode/Claude Code send the transcript to that provider) | The endpoint you configured |
 
 The bundled whisper.cpp engine is built without its network features
@@ -187,7 +188,7 @@ follows your operating system's own diagnostic-data settings.
 | `npm run tauri:dev` / `tauri:build` | Desktop dev / bundle |
 | `npm run build` | Typecheck + frontend build |
 | `npx tsc --noEmit` | Typecheck |
-| `npx vitest run` | Unit tests (11 files, 85 tests) |
+| `npx vitest run` | Unit tests |
 | `npx playwright test` | E2E (6 specs) |
 | `npm run bench -- --limit 3` | Transcription accuracy (WER) harness |
 | `cd src-tauri && cargo test` | Rust tests (12) |

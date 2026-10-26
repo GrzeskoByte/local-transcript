@@ -8,6 +8,7 @@ import { describeNativeRuntime } from '../../asr/model-manager.ts';
 import { MicIcon, PlusIcon, SearchIcon } from '../components/icons.tsx';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { ConfirmButton } from '../components/ConfirmButton.tsx';
+import { remoteAsrActive } from '../../integrations/remote-asr';
 import { isDesktopApp } from '../../platform/desktop.ts';
 
 const SEARCH_DEBOUNCE_MS = 200;
@@ -30,7 +31,7 @@ export function Dashboard(): React.JSX.Element {
   const {
     meetings, go, unfinished, recoverUnfinished, discardUnfinished, modelMeta, nativeStatus,
     installedModels, downloadModel, modelDownload, firstRunModel, databaseError, resetDatabase,
-    renameMeeting, deleteMeeting,
+    renameMeeting, deleteMeeting, remoteAsrConfig,
   } = useApp();
   const [filterBy, setFilterBy] = useState<StatusFilter>('all');
   const [limit, setLimit] = useState(LIST_PAGE);
@@ -133,7 +134,11 @@ export function Dashboard(): React.JSX.Element {
       <div className="page-head tint-sky">
         <div>
           <h1>My Meetings</h1>
-          <p className="muted">Your recording and transcript stay on this device.</p>
+          <p className="muted">
+            {remoteAsrActive(remoteAsrConfig)
+              ? 'Your recordings stay on this device; their speech is sent to your transcription server when you transcribe.'
+              : 'Your recording and transcript stay on this device.'}
+          </p>
         </div>
         <button className="btn btn-primary" onClick={() => go({ name: 'new' })}>
           <PlusIcon /> New Meeting
@@ -228,7 +233,7 @@ export function Dashboard(): React.JSX.Element {
         </section>
       )}
 
-      {!modelReady && nativeStatus?.available && installedModels.length === 0 && (
+      {!modelReady && !remoteAsrActive(remoteAsrConfig) && nativeStatus?.available && installedModels.length === 0 && (
         <section className="cta-red" aria-label="Local speech model">
           <span className="cta-title">Set up on-device transcription</span>
           <div>

@@ -23,6 +23,7 @@ import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { actionItemEventDraft, extractEventDraft, validateCalendarConfig } from '../../integrations/calendar';
 import type { CalendarEventDraft } from '../../integrations/calendar';
 import { claudeResumeCommand, llmConfigProblem } from '../../integrations/llm';
+import { remoteAsrActive, remoteAsrLabel } from '../../integrations/remote-asr';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { ConfirmButton } from '../components/ConfirmButton.tsx';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
@@ -37,7 +38,7 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
   const {
     detailMeeting, detailSegments, detailTracks, loadDetail, go, deleteMeeting, renameMeeting,
     txProgress, txStage, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta,
-    selectModel, language, setLanguage, nativeStatus, installedModels,
+    selectModel, language, setLanguage, nativeStatus, installedModels, remoteAsrConfig,
     uploadToGitlab, uploadSummaryToGitlab, summarizeMeeting, createCalendarEvent,
     saveAgenda, uploadAgendaToGitlab, gitlabConfig, createGitlabActionIssues, calendarConfig, summarizing, llmConfig, returnTo,
   } = useApp();
@@ -150,6 +151,8 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
   const llmBusy = !!summarizing[m.id];
   const llmProblem = llmConfigProblem(llmConfig);
   // A summary older than the transcript describes an earlier version of it.
+  // Transcribe goes to the user's server instead of the local model.
+  const remote = remoteAsrActive(remoteAsrConfig) ? remoteAsrLabel(remoteAsrConfig) : null;
   const summaryStale = !!(m.summary && m.transcriptSource && m.summary.createdAt < m.transcriptSource.createdAt);
   // One action-item list for both targets: a row is open while it still
   // lacks an issue (GitLab set up) or an event (calendar set up).
@@ -313,7 +316,11 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
           <div className="row-selects">
             <label>
               Speech model
-              {installedModels.length > 0 ? (
+              {remote ? (
+                <select className="input" aria-label="Speech model for this transcription" disabled>
+                  <option>{remote}</option>
+                </select>
+              ) : installedModels.length > 0 ? (
                 <select
                   className="input"
                   aria-label="Speech model for this transcription"
@@ -349,7 +356,16 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
               </select>
             </label>
           </div>
-          {installedModels.length === 0 && nativeStatus?.available && (
+          {remote && (
+            <p className="muted mt-2 mb-0">
+              The recording&apos;s speech is sent to your transcription server. Change it in{' '}
+              <button className="link-btn" onClick={() => go({ name: 'settings', tab: 'models' })}>
+                Settings
+              </button>
+              .
+            </p>
+          )}
+          {!remote && installedModels.length === 0 && nativeStatus?.available && (
             <p className="muted mt-2 mb-0">
               Your first transcription downloads the speech model ({firstRunModel}) once — about{' '}
               {firstRunModel.includes('q5') ? '550 MB' : '1.6 GB'}. Other models live in{' '}
@@ -359,24 +375,30 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
               .
             </p>
           )}
-          <p className="muted mb-0">
-            Desktop engine: models run natively and language auto-detection is available (whisper.cpp).
-          </p>
-          {nativeAccuracyHint(modelMeta.modelId) && (
+          {!remote && (
+            <p className="muted mb-0">
+              Desktop engine: models run natively and language auto-detection is available (whisper.cpp).
+            </p>
+          )}
+          {!remote && nativeAccuracyHint(modelMeta.modelId) && (
             <p className="muted mb-0">
               {nativeAccuracyHint(modelMeta.modelId)}
             </p>
           )}
-          <p className="muted mb-0" aria-label="Acceleration">
-            {describeNativeRuntime(nativeStatus)}
-          </p>
+          {!remote && (
+            <p className="muted mb-0" aria-label="Acceleration">
+              {describeNativeRuntime(nativeStatus)}
+            </p>
+          )}
         </div>
       )}
       <ModelDownloadProgress />
       {m.transcriptionStatus === 'not_started' && !busy && !modelDownload && (
         <div className="card">
           <p className="muted mt-0">
-            Not transcribed yet. Transcription runs fully on this device.
+            {remote
+              ? `Not transcribed yet. Transcription runs on your server: ${remote}.`
+              : 'Not transcribed yet. Transcription runs fully on this device.'}
           </p>
           <button
             className="btn btn-primary"
@@ -385,7 +407,7 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
               setupAndTranscribe(m.id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
             }}
           >
-            {installedModels.length > 0 ? 'Transcribe' : 'Download model & transcribe'}
+            {installedModels.length > 0 || remote ? 'Transcribe' : 'Download model & transcribe'}
           </button>
         </div>
       )}
@@ -436,7 +458,7 @@ export function MeetingDetail({ id, query }: { id: string; query?: string }): Re
       {m.transcriptionStatus === 'completed' && !busy && m.transcriptSource?.kind === 'live' && (
         <p className="muted" aria-label="Transcript source">
           Live transcript ({m.transcriptSource.model}), made
-          while recording. Re-transcribe redoes it from the whole recording with {modelMeta.modelId} for the best
+          while recording. Re-transcribe redoes it from the whole recording with {remote ?? modelMeta.modelId} for the best
           accuracy.
         </p>
       )}

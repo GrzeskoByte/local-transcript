@@ -36,6 +36,7 @@ import {
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import { LiveTranscriptionSettings, AutoTranscribeSettings } from '../components/LiveTranscription.tsx';
+import { RemoteTranscriptionSettings } from '../components/RemoteTranscription.tsx';
 import { nativeRecordingEnabled, setNativeRecordingEnabled } from '../../audio/native-recorder';
 import {
   getAutoCheck,
@@ -307,6 +308,7 @@ export function Settings(): React.JSX.Element {
           models appear in the transcription options.
         </p>
       </section>
+      <RemoteTranscriptionSettings />
       {isDesktopApp() && <AutoTranscribeSettings />}
       {isDesktopApp() && <LiveTranscriptionSettings />}
       </>
