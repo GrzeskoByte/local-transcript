@@ -32,6 +32,7 @@ describe('privacy: network access is limited to user-initiated features', () => 
     ).toEqual([
       'src/integrations/gitlab.ts', // GitLab sharing: only on Upload/Test, to the user's server
       'src/integrations/llm.ts', // summaries: only on click, to the user's endpoint
+      'src/integrations/remote-asr.ts', // transcription server: only when turned on + Transcribe/Test
     ]);
   });
 

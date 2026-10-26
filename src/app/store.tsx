@@ -81,6 +81,15 @@ import { getCalendarConfig, setActiveCalendarProvider, setCalendarConfig } from 
 import { createLlmClient, DEFAULT_LLM_CONFIG } from '../integrations/llm';
 import type { LlmConfig, MeetingSummary } from '../integrations/llm';
 import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
+import {
+  DEFAULT_REMOTE_ASR_CONFIG,
+  getRemoteAsrConfig,
+  remoteAsrActive,
+  remoteAsrLabel,
+  setRemoteAsrConfig,
+  type RemoteAsrConfig,
+} from '../integrations/remote-asr';
+import { RemoteASREngine } from '../asr/remote-engine';
 import { normalizeAgendaItems, type AgendaItem } from '../domain/agenda';
 import { settleWithin } from '../domain/settle';
 import { StopTrace, formatStopTrace, nextPaint } from '../domain/stop-trace';
@@ -207,6 +216,9 @@ interface AppState {
   /** Custom LLM provider settings (kept on-device in IndexedDB). */
   llmConfig: LlmConfig;
   saveLlmConfig: (config: LlmConfig) => Promise<void>;
+  /** External transcription server (Open WebUI); used when enabled. */
+  remoteAsrConfig: RemoteAsrConfig;
+  saveRemoteAsrConfig: (config: RemoteAsrConfig) => Promise<void>;
   /** Summarize a transcribed meeting with the configured LLM provider. */
   summarizeMeeting: (meetingId: string) => Promise<MeetingSummary>;
   summarizing: Record<string, true>;
@@ -327,6 +339,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [storageDir, setStorageDir] = useState<string | null>(null);
   const [gitlabConfig, setGitlabConfigState] = useState<GitlabConfig>(DEFAULT_GITLAB_CONFIG);
   const [llmConfig, setLlmConfigState] = useState<LlmConfig>(DEFAULT_LLM_CONFIG);
+  const [remoteAsrConfig, setRemoteAsrConfigState] = useState<RemoteAsrConfig>(DEFAULT_REMOTE_ASR_CONFIG);
   const [calendarConfig, setCalendarConfigState] = useState<CalendarConfig>(DEFAULT_CALENDAR_CONFIG);
   const [unfinished, setUnfinished] = useState<Meeting[]>([]);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
@@ -346,6 +359,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   /** Latest transcribe / installed-model count for the Stop flow (opt-in auto-transcribe). */
   const transcribeRef = useRef<((id: string) => Promise<void>) | null>(null);
   const installedCountRef = useRef(0);
+  const remoteActiveRef = useRef(false);
   const liveDrainRef = useRef(new Map<string, { transcriber: LiveTranscriber; done: Promise<void> }>());
   const recorderRef = useRef<MediaRecorderAudioRecorder | NativeRecorder | null>(null);
   /** Desktop: what the native recorder can capture (null: webview recording only). */
@@ -483,6 +497,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     void getGitlabConfig().then(setGitlabConfigState).catch(() => undefined);
     void getCalendarConfig().then(setCalendarConfigState).catch(() => undefined);
     void getLlmConfig().then(setLlmConfigState).catch(() => undefined);
+    void getRemoteAsrConfig().then(setRemoteAsrConfigState).catch(() => undefined);
   }, []);
 
   /** Where Meeting Detail's back link leads (the list the meeting was opened from). */
@@ -935,6 +950,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     setLlmConfigState(config);
   }, []);
 
+  const saveRemoteAsrConfig = useCallback(async (config: RemoteAsrConfig) => {
+    await setRemoteAsrConfig(config);
+    setRemoteAsrConfigState(config);
+  }, []);
+
   const saveCalendarConfig = useCallback(async (config: CalendarConfig) => {
     await setCalendarConfig(config);
     setCalendarConfigState(config);
@@ -1145,8 +1165,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     })();
     if (liveRun) drainLive(updated.id, liveRun);
     // Opt-in: start the whole-file transcription right away (never instead of
-    // a live transcript, and only with a model installed).
-    else if (autoTranscribeEnabled() && installedCountRef.current > 0) {
+    // a live transcript, and only with a model installed or the server on).
+    else if (autoTranscribeEnabled() && (installedCountRef.current > 0 || remoteActiveRef.current)) {
       void transcribeRef.current?.(updated.id).catch(() => undefined);
     }
     return updated;
@@ -1187,7 +1207,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         d && d.id === id ? { ...d, transcriptionStatus: 'processing' } : d,
       );
       try {
-        await txService.transcribe(id, modelId ?? modelMeta.modelId);
+        // The transcription server, when on, replaces the local model (an
+        // explicit model id — the first-run download — still runs locally).
+        if (!modelId && remoteAsrActive(remoteAsrConfig)) {
+          const config = remoteAsrConfig;
+          await txService.transcribe(id, remoteAsrLabel(config), () => new RemoteASREngine(config));
+        } else {
+          await txService.transcribe(id, modelId ?? modelMeta.modelId);
+        }
       } finally {
         // Drop stale progress/stage so a later visit never shows a ghost loader.
         setTxProgress((p) => {
@@ -1210,7 +1237,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         void mirrorToDisk(m ?? null);
       }
     },
-    [modelMeta.modelId, refresh, txService, mirrorToDisk],
+    [modelMeta.modelId, remoteAsrConfig, refresh, txService, mirrorToDisk],
   );
 
   const renameMeeting = useCallback(
@@ -1423,16 +1450,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   transcribeRef.current = transcribe;
   installedCountRef.current = installedModels.length;
+  remoteActiveRef.current = remoteAsrActive(remoteAsrConfig);
 
   const setupAndTranscribe = useCallback(
     async (id: string) => {
-      if (installedModels.length > 0) return transcribe(id);
+      if (installedModels.length > 0 || remoteAsrActive(remoteAsrConfig)) return transcribe(id);
       // First transcription on a fresh install: fetch the recommended model
       // (with progress), then run — no trip to Settings.
       await downloadModel(firstRunModel);
       await transcribe(id, firstRunModel);
     },
-    [installedModels, transcribe, downloadModel, firstRunModel],
+    [installedModels, remoteAsrConfig, transcribe, downloadModel, firstRunModel],
   );
 
   const value = useMemo<AppState>(
@@ -1500,6 +1528,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       createCalendarEvent,
       llmConfig,
       saveLlmConfig,
+      remoteAsrConfig,
+      saveRemoteAsrConfig,
       summarizeMeeting,
       enableGpu,
       liveEnabled,
@@ -1530,7 +1560,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, createGitlabActionIssues, saveAgenda, uploadAgendaToGitlab,
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
       updateInfo, checkUpdates,
-      llmConfig, saveLlmConfig, summarizeMeeting,
+      llmConfig, saveLlmConfig, remoteAsrConfig, saveRemoteAsrConfig, summarizeMeeting,
       unfinished, recoverUnfinished, discardUnfinished, databaseError, resetDatabase, systemAudio,
     ],
   );

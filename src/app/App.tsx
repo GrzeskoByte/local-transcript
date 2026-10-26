@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApp, ElapsedClock } from './store.tsx';
 import { modelChipLabel } from '../asr/model-manager';
+import { remoteAsrActive, remoteAsrLabel } from '../integrations/remote-asr';
 import { Dashboard } from './screens/Dashboard.tsx';
 import { NewMeeting } from './screens/NewMeeting.tsx';
 import { ActiveMeeting } from './screens/ActiveMeeting.tsx';
@@ -13,7 +14,7 @@ import { GearIcon, CalendarIcon, ListIcon, LogoMark } from './components/icons.t
 // sticker) → white icon-label rail + content column → footer band.
 function Shell(): React.JSX.Element {
   const {
-    route, go, recordingState, modelMeta, updateInfo, txStage, txProgress, meetings, pauseRecording, resumeRecording,
+    route, go, recordingState, modelMeta, remoteAsrConfig, updateInfo, txStage, txProgress, meetings, pauseRecording, resumeRecording,
   } = useApp();
   // Global keys: Ctrl/Cmd+N = new meeting (or back to the running one); P = pause/resume while recording.
   useEffect(() => {
@@ -60,6 +61,7 @@ function Shell(): React.JSX.Element {
 
   const recording = recordingState === 'RECORDING' || recordingState === 'PAUSED';
   const modelDot = modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'downloading' ? 'working' : '';
+  const remoteServer = remoteAsrActive(remoteAsrConfig) ? remoteAsrLabel(remoteAsrConfig) : null;
 
   return (
     <div className="layout">
@@ -160,11 +162,15 @@ function Shell(): React.JSX.Element {
             <button
               type="button"
               className="model-chip"
-              title={`${modelMeta.modelId} (${modelMeta.state.replace('_', ' ')}): open model settings`}
+              title={
+                remoteServer
+                  ? `Transcription server: ${remoteServer}: open model settings`
+                  : `${modelMeta.modelId} (${modelMeta.state.replace('_', ' ')}): open model settings`
+              }
               onClick={() => go({ name: 'settings', tab: 'models' })}
             >
-              <span className={`model-dot ${modelDot}`} />
-              {modelChipLabel(modelMeta)}
+              <span className={`model-dot ${remoteServer ? 'ready' : modelDot}`} />
+              {remoteServer ? 'Server · Open WebUI' : modelChipLabel(modelMeta)}
             </button>
             <div className="seal" role="img" aria-label="Local speech engine">
               <span className="seal-big">LOCAL</span>
@@ -210,7 +216,9 @@ function Shell(): React.JSX.Element {
             </div>
           )}
           <footer className="footer-band">
-            Recordings &amp; transcripts never leave this device unless you upload them.
+            {remoteServer
+              ? `Recordings stay on this device; Transcribe sends their speech to ${remoteServer}.`
+              : 'Recordings & transcripts never leave this device unless you upload them.'}
           </footer>
         </main>
       </div>
