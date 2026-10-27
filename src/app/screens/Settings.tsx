@@ -49,6 +49,7 @@ import {
 import { GitlabProjectPicker } from '../components/GitlabPicker.tsx';
 import { AppearanceSettings } from '../components/AppearanceSettings.tsx';
 import { LiveTranscriptionSettings, AutoTranscribeSettings } from '../components/LiveTranscription.tsx';
+import { RemoteTranscriptionSettings } from '../components/RemoteTranscription.tsx';
 import { nativeRecordingEnabled, setNativeRecordingEnabled } from '../../audio/native-recorder';
 import {
   getAutoCheck,
@@ -311,6 +312,7 @@ export function Settings(): React.JSX.Element {
       {tab === 'models' && (
       <>
       <EngineOverview />
+      <RemoteTranscriptionSettings />
       {isDesktopApp() && <LiveTranscriptionSettings />}
       </>
       )}

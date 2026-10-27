@@ -31,6 +31,7 @@ import { eventNow, useUpcoming, whenLabel } from '../upcoming';
 import { nextWrapStep, wrapLeftover, WRAP_STEP_LABELS } from '../../domain/wrapup';
 import { validateCalendarConfig } from '../../integrations/calendar';
 import { FirstRun } from './Setup.tsx';
+import { remoteAsrActive } from '../../integrations/remote-asr';
 
 const SOURCES: Array<{ mode: RecordingMode; name: string; blurb: string }> = [
   { mode: 'speaker', name: 'Room mic', blurb: 'Voices in the room. For in-person meetings.' },
@@ -47,6 +48,7 @@ export function Home(): React.JSX.Element {
     meetings, go, startRecording, importMeeting, storageWarning, systemAudio, nativeRecording, txProgress, txStage,
     setupAndTranscribe, installedModels, nativeStatus, modelDownload, firstRunModel, downloadModel, modelMeta,
     unfinished, recoverUnfinished, discardUnfinished, databaseError, resetDatabase, calendarConfig, recordingState,
+    remoteAsrConfig,
   } = app;
   usePrefsVersion();
   const keys = useShortcuts();
@@ -257,7 +259,7 @@ export function Home(): React.JSX.Element {
         </section>
 
         <div className="home-side">
-          {!modelMeta.state.startsWith('ready') && nativeStatus?.available && installedModels.length === 0 && (
+          {!modelMeta.state.startsWith('ready') && !remoteAsrActive(remoteAsrConfig) && nativeStatus?.available && installedModels.length === 0 && (
             <section className="cta-red" aria-label="Local speech model">
               <span className="cta-title">Set up on-device transcription</span>
               <div>One click downloads the speech model ({firstRunModel}) once. Recording already works without it.</div>

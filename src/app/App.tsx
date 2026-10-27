@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useApp, ElapsedClock } from './store.tsx';
 import { modelChipLabel } from '../asr/model-manager';
+import { remoteAsrActive, remoteAsrLabel } from '../integrations/remote-asr';
 import { Home } from './screens/Home.tsx';
 import { Library } from './screens/Library.tsx';
 import { RecordingRoom } from './screens/RecordingRoom.tsx';
@@ -29,7 +30,7 @@ export function useShortcuts(): ReturnType<typeof shortcuts> {
 // Record) → content → footer. Setup is full-screen; the recording room is ink.
 function Shell(): React.JSX.Element {
   const {
-    route, go, recordingState, modelMeta, updateInfo, txStage, txProgress, meetings, pauseRecording, resumeRecording,
+    route, go, recordingState, modelMeta, remoteAsrConfig, updateInfo, txStage, txProgress, meetings, pauseRecording, resumeRecording,
     addMoment,
   } = useApp();
   const keys = useShortcuts();
@@ -116,7 +117,10 @@ function Shell(): React.JSX.Element {
     return () => clearInterval(t);
   }, [upcoming.events, live]);
 
-  const modelReady = modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'downloading' ? 'working' : '';
+  const remoteServer = remoteAsrActive(remoteAsrConfig) ? remoteAsrLabel(remoteAsrConfig) : null;
+  const modelReady = remoteServer
+    ? 'ready'
+    : modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'downloading' ? 'working' : '';
   const onHome = route.name === 'home';
   const onLibrary = route.name === 'library' || route.name === 'detail' || route.name === 'wrapup';
 
@@ -172,10 +176,10 @@ function Shell(): React.JSX.Element {
         <button
           type="button"
           className={`cell model-chip ${modelReady}`}
-          title={`${modelMeta.modelId} (${modelMeta.state.replace('_', ' ')}): open model settings`}
+          title={remoteServer ? `Transcription server: ${remoteServer}: open model settings` : `${modelMeta.modelId} (${modelMeta.state.replace('_', ' ')}): open model settings`}
           onClick={() => go({ name: 'settings', tab: 'models' })}
         >
-          {modelChipLabel(modelMeta)}
+          {remoteServer ? 'Server · Open WebUI' : modelChipLabel(modelMeta)}
         </button>
         <ThemeQuick />
         {live ? (
@@ -250,7 +254,11 @@ function Shell(): React.JSX.Element {
           </div>
         )}
       </main>
-      <footer className="footer-band">Your recording and transcript stay on this device. Nothing leaves it unless you upload it.</footer>
+      <footer className="footer-band">
+        {remoteServer
+          ? `Your recordings stay on this device; Transcribe sends their speech to ${remoteServer}.`
+          : 'Your recording and transcript stay on this device. Nothing leaves it unless you upload it.'}
+      </footer>
     </div>
   );
 }

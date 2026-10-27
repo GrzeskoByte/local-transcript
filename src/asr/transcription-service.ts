@@ -36,13 +36,15 @@ export class TranscriptionService {
     this.createEngine = opts?.createEngine ?? (injected ? () => injected : () => new NativeASREngine());
   }
 
-  async transcribe(meetingId: string, modelId: string): Promise<void> {
+  /** `createEngine` overrides the engine for this run (e.g. the transcription
+   * server); `modelId` is then only the label kept on the transcript. */
+  async transcribe(meetingId: string, modelId: string, createEngine?: () => ASREngine): Promise<void> {
     const meeting = await getMeeting(meetingId);
     if (!meeting) throw new Error('Meeting not found');
     if (meeting.endedAt === undefined) throw new Error('Recording is not completed yet');
     if (this.running.has(meetingId)) return;
 
-    const engine = this.createEngine();
+    const engine = (createEngine ?? this.createEngine)();
     let cancelled = false;
     let finished!: () => void;
     const done = new Promise<void>((resolve) => (finished = resolve));

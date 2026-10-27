@@ -13,6 +13,7 @@ import { ExportStep } from '../components/wrap/ExportStep.tsx';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { enabledWrapSteps, usePrefsVersion, wrapPrefs } from '../preferences';
 import { folderName } from '../../features/meetings/disk-sync';
+import { remoteAsrActive } from '../../integrations/remote-asr';
 
 /**
  * After Stop (DESIGN.md "After Stop — guided wrap-up"): Transcribe → Review
@@ -23,7 +24,7 @@ import { folderName } from '../../features/meetings/disk-sync';
 export function WrapUp({ id, step }: { id: string; step?: WrapStepId }): React.JSX.Element {
   const {
     detailMeeting, detailSegments, loadDetail, go, txProgress, txStage, setupAndTranscribe, installedModels, setWrapUp,
-    summarizeMeeting, summarizing, llmConfig, gitlabConfig, calendarConfig, saveSummary, storageDir,
+    summarizeMeeting, summarizing, llmConfig, gitlabConfig, calendarConfig, saveSummary, storageDir, remoteAsrConfig,
   } = useApp();
   usePrefsVersion();
   const [error, setError] = useState<string | null>(null);
@@ -149,7 +150,7 @@ export function WrapUp({ id, step }: { id: string; step?: WrapStepId }): React.J
                     className="btn btn-primary"
                     onClick={() => void setupAndTranscribe(id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}
                   >
-                    {m.transcriptionStatus === 'failed' ? 'Retry' : installedModels.length ? 'Transcribe' : 'Download model & transcribe'}
+                    {m.transcriptionStatus === 'failed' ? 'Retry' : installedModels.length || remoteAsrActive(remoteAsrConfig) ? 'Transcribe' : 'Download model & transcribe'}
                   </button>
                 )}
                 {txDone && next && (

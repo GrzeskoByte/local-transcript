@@ -32,6 +32,7 @@ import { isTypingTarget, matches } from '../shortcuts';
 import { useShortcuts } from '../App.tsx';
 import { enabledWrapSteps, usePrefsVersion, wrapPrefs } from '../preferences';
 import { validateCalendarConfig } from '../../integrations/calendar';
+import { remoteAsrActive, remoteAsrLabel } from '../../integrations/remote-asr';
 
 const FOLLOW_PREF = 'transcript-follow';
 
@@ -503,7 +504,7 @@ function TranscriptTab({
 }): React.JSX.Element | null {
   const {
     detailMeeting: m, detailSegments, detailTracks, txProgress, txStage, setupAndTranscribe, modelDownload, cancelTranscription,
-    installedModels, modelMeta, selectModel, language, setLanguage, nativeStatus, firstRunModel, go, editSegment,
+    installedModels, modelMeta, selectModel, language, setLanguage, nativeStatus, firstRunModel, go, editSegment, remoteAsrConfig,
     renameSpeaker, detectSpeakers, diarizing,
   } = useApp();
   const [filter, setFilter] = useState(initialQuery ?? '');
@@ -518,12 +519,14 @@ function TranscriptTab({
   }, []);
   if (!m) return null;
 
+  // Transcribe goes to the user's server instead of the local model.
+  const remote = remoteAsrActive(remoteAsrConfig) ? remoteAsrLabel(remoteAsrConfig) : null;
   const progress = txProgress[m.id];
   const stage: TranscriptionStage = (txStage[m.id] as TranscriptionStage) ?? 'transcribing';
   const busy = m.transcriptionStatus === 'processing' || (m.transcriptionStatus === 'not_started' && txStage[m.id] !== undefined);
   const stageLabel: Record<TranscriptionStage, string> = {
     queued: 'Waiting for the current transcription to finish…',
-    'loading-model': 'Loading local model…',
+    'loading-model': remote ? 'Connecting to the transcription server…' : 'Loading local model…',
     'decoding-audio': 'Decoding audio…',
     transcribing: 'Transcribing…',
     saving: 'Saving transcript…',
@@ -542,7 +545,11 @@ function TranscriptTab({
           <div className="row-selects mt-0">
             <label>
               Speech model
-              {installedModels.length > 0 ? (
+              {remote ? (
+                <select className="input" aria-label="Speech model for this transcription" disabled>
+                  <option>{remote}</option>
+                </select>
+              ) : installedModels.length > 0 ? (
                 <select className="input" aria-label="Speech model for this transcription" value={modelMeta.modelId} onChange={(e) => void selectModel(e.target.value)}>
                   {installedModels.map((opt) => (
                     <option key={opt.id} value={opt.id}>
@@ -568,7 +575,16 @@ function TranscriptTab({
               </select>
             </label>
           </div>
-          {installedModels.length === 0 && nativeStatus?.available && (
+          {remote && (
+            <p className="muted mt-2 mb-0">
+              The recording&apos;s speech is sent to your transcription server. Change it in{' '}
+              <button className="link-btn" onClick={() => go({ name: 'settings', tab: 'models' })}>
+                Settings
+              </button>
+              .
+            </p>
+          )}
+          {!remote && installedModels.length === 0 && nativeStatus?.available && (
             <p className="muted mt-2 mb-0">
               Your first transcription downloads the speech model ({firstRunModel}) once — about{' '}
               {firstRunModel.includes('q5') ? '550 MB' : '1.6 GB'}. Other models live in{' '}
@@ -578,21 +594,25 @@ function TranscriptTab({
               .
             </p>
           )}
-          {nativeAccuracyHint(modelMeta.modelId) && <p className="muted mb-0">{nativeAccuracyHint(modelMeta.modelId)}</p>}
-          <p className="muted mb-0" aria-label="Acceleration">
-            {describeNativeRuntime(nativeStatus)}
-          </p>
+          {!remote && nativeAccuracyHint(modelMeta.modelId) && <p className="muted mb-0">{nativeAccuracyHint(modelMeta.modelId)}</p>}
+          {!remote && (
+            <p className="muted mb-0" aria-label="Acceleration">
+              {describeNativeRuntime(nativeStatus)}
+            </p>
+          )}
         </section>
       )}
       <ModelDownloadProgress />
       {m.transcriptionStatus === 'not_started' && !busy && !modelDownload && (
         <section className="card">
           <p className="muted mt-0">
-            {m.audioRemovedAt ? 'The audio was removed, so this meeting cannot be transcribed.' : 'Not transcribed yet. Transcription runs fully on this device.'}
+            {m.audioRemovedAt ? 'The audio was removed, so this meeting cannot be transcribed.' : remote
+                ? `Not transcribed yet. Transcription runs on your server: ${remote}.`
+                : 'Not transcribed yet. Transcription runs fully on this device.'}
           </p>
           {!m.audioRemovedAt && (
             <button className="btn btn-primary" onClick={run}>
-              {installedModels.length > 0 ? 'Transcribe' : 'Download model & transcribe'}
+              {installedModels.length > 0 || remote ? 'Transcribe' : 'Download model & transcribe'}
             </button>
           )}
         </section>
