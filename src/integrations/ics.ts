@@ -338,19 +338,21 @@ function readEvent(body: string): VEvent | null {
 function toServerEvent(ev: VEvent, provider: CalendarProvider, startMs: number, wall: Wall, occurrence: boolean): ServerEvent {
   const title = icsText(prop(ev.lines, 'SUMMARY')?.value ?? '') || '(no title)';
   const location = icsText(prop(ev.lines, 'LOCATION')?.value ?? '');
+  const description = icsText(prop(ev.lines, 'DESCRIPTION')?.value ?? '');
+  const extra = description ? { description } : {};
   const base = ev.uid || `${startMs}`;
   if (ev.start.allDay) {
     const day = dateIso(wall);
     return {
       id: `${provider}:${base}${occurrence ? `:${day}` : ''}`,
-      title, location, provider, allDay: true,
+      title, location, provider, allDay: true, ...extra,
       startIso: `${day}T09:00`,
       endIso: `${day}T09:00`,
     };
   }
   return {
     id: `${provider}:${base}${occurrence ? `:${startMs}` : ''}`,
-    title, location, provider,
+    title, location, provider, ...extra,
     startIso: localIso(startMs),
     endIso: localIso(startMs + ev.durationMs),
   };

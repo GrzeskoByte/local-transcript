@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 /**
  * Input/output selection: Settings and New Meeting share one choice, the
@@ -53,8 +53,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('microphone chosen in Settings is used for recording and shown on New Meeting', async ({ page }) => {
-  await page.goto('/#/settings');
-  await page.getByRole('tab', { name: 'Audio' }).click();
+  await page.goto('/#/settings/recording');
   const card = page.getByRole('region', { name: 'Audio devices' });
   const mic = card.getByLabel('Microphone');
   await expect(mic.locator('option')).toHaveText(['System default', 'Built-in Mic', 'USB Podcast Mic']);
@@ -62,9 +61,10 @@ test('microphone chosen in Settings is used for recording and shown on New Meeti
   await card.getByLabel('Record sound from').selectOption({ label: 'WH-1000XM4' });
 
   await page.goto('/#/new');
+  await page.getByRole('button', { name: 'Devices, agenda & live draft…' }).click();
   await expect(page.getByLabel('Microphone')).toHaveValue('mic-usb');
   await expect(page.getByLabel('Record sound from')).toHaveCount(0); // Speaker mode: no output
-  await page.getByRole('button', { name: /Mic \+ Device/ }).click();
+  await page.getByRole('radiogroup', { name: 'Recording source' }).getByText('Call', { exact: true }).click();
   await expect(page.getByLabel('Record sound from')).toHaveValue('bluez_output.AA_BB.1');
 
   await page.getByRole('button', { name: '● Start Recording' }).click();
@@ -88,6 +88,7 @@ test('an unplugged saved microphone falls back to the system default', async ({ 
     localStorage.setItem('audio-input-device', JSON.stringify({ deviceId: 'gone', label: 'Old Headset' })),
   );
   await page.reload();
+  await page.getByRole('button', { name: 'Devices, agenda & live draft…' }).click();
   await expect(page.getByLabel('Microphone')).toHaveValue('missing:gone');
   await expect(page.getByText('This microphone isn’t connected — the system default will be used.')).toBeVisible();
 

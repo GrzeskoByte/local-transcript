@@ -99,10 +99,10 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
   await page.waitForTimeout(6_000);
 
   // The live recording must never be offered for "recovery" or deletion (§15).
-  await page.getByRole('button', { name: 'Meetings' }).first().click();
-  await expect(page.getByRole('heading', { name: 'My Meetings' })).toBeVisible();
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Home' }).click();
+  await expect(page.getByRole('heading', { name: 'Record now.' })).toBeVisible();
   await expect(page.getByText('An unfinished recording was found.')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Recording…' }).first().click();
+  await page.getByRole('button', { name: /^(REC|PAUSED) / }).first().click();
 
   // Pause for 3 s: paused time is not recording time.
   await page.getByRole('button', { name: 'Pause' }).click();
@@ -114,8 +114,8 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
 
   await expect(page).toHaveURL(/#\/meeting\//);
   const id = meetingIdFromUrl(page.url());
-  const header = await page.locator('h1 + p.muted').first().textContent();
-  const recorded = seconds(header!.split(' · ')[0]!.replace('≈ ', ''));
+  const header = await page.locator('.detail-meta > span').first().textContent();
+  const recorded = seconds(header!.split(' · ')[1]!.replace('≈ ', '').trim());
   expect(recorded).toBeGreaterThanOrEqual(6);
   expect(recorded).toBeLessThanOrEqual(10); // ~8 s recorded, not ~11 s wall clock
 
@@ -174,9 +174,10 @@ test('record → stop → reopen → play → transcribe → reopen → re-trans
   await expect(page.locator('.transcript li')).toHaveCount(1);
 
   // --- delete → metadata, transcript and audio all gone (§23) ---
+  await page.getByRole('tab', { name: /Export/ }).click();
   await page.getByRole('button', { name: 'Delete meeting' }).click();
   await page.getByRole('button', { name: 'Yes, delete' }).click();
-  await expect(page.getByRole('heading', { name: 'My Meetings' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible();
   const after = await storedFor(page, id);
   expect(after).toEqual({ meeting: null, segments: [], opfs: false });
 });
@@ -246,9 +247,10 @@ test('deleting a meeting mid-transcription leaves no zombie record or orphan seg
   });
   await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
   await expect(page.getByRole('status', { name: 'Transcription in progress' })).toBeVisible();
+  await page.getByRole('tab', { name: /Export/ }).click();
   await page.getByRole('button', { name: 'Delete meeting' }).click();
   await page.getByRole('button', { name: 'Yes, delete' }).click();
-  await expect(page.getByRole('heading', { name: 'My Meetings' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible();
   // Give any straggling write time to land, then verify nothing came back.
   await page.waitForTimeout(4_000);
   expect(await storedFor(page, id)).toEqual({ meeting: null, segments: [], opfs: false });

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
 
 /**
@@ -88,5 +88,23 @@ test('meeting: "Download model & transcribe" does both in one click', async ({ p
   await expect(page.getByRole('status', { name: 'Downloading speech model' })).toBeVisible();
   await expect(page.locator('.transcript li').first()).toContainText('Heard with large-v3-turbo-q5_0', {
     timeout: 30_000,
+  });
+});
+
+test.describe('first launch', () => {
+  test.use({ e2eDefaults: false });
+
+  test('a fresh desktop install offers setup; every step can be skipped', async ({ page }) => {
+    await mockFreshInstall(page);
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: 'Your meetings. Your laptop.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Finish setup' }).click();
+    await expect(page).toHaveURL(/#\/setup\/1$/);
+    await expect(page.getByLabel('Setup steps')).toBeVisible();
+    await page.getByRole('button', { name: 'Skip setup — just record' }).click();
+    await expect(page.getByRole('heading', { name: 'Record now.' })).toBeVisible();
+    // Skipped once: the next launch goes straight to Home.
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Record now.' })).toBeVisible();
   });
 });

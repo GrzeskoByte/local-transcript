@@ -1,9 +1,10 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
-test('calendar route renders month grid with provider switcher', async ({ page }) => {
+test('library month view renders month grid with provider switcher', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Calendar' }).first().click();
-  await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible();
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Library' }).click();
+  await page.getByRole('button', { name: 'Month', exact: true }).click();
+  await expect(page).toHaveURL(/#\/library\/month$/);
   await expect(page.getByLabel('Month calendar')).toBeVisible();
   await expect(page.getByLabel('Calendar provider')).toBeVisible();
   // Month navigation works.
@@ -19,8 +20,7 @@ test('calendar view offers a manual refresh', async ({ page }) => {
 });
 
 test('settings fills the SOGo CalDAV address from host + username', async ({ page }) => {
-  await page.goto('/#/settings');
-  await page.getByRole('tab', { name: 'Calendar' }).or(page.getByRole('button', { name: 'Calendar', exact: true })).last().click();
+  await page.goto('/#/settings/integrations');
   const card = page.getByLabel('Company calendar');
   await card.getByLabel('Server host + path').fill('mail.host.com');
   await card.getByLabel('Username').fill('me@host.com');
@@ -31,8 +31,7 @@ test('settings fills the SOGo CalDAV address from host + username', async ({ pag
 });
 
 test('calendar detection explains it needs the desktop app in a browser', async ({ page }) => {
-  await page.goto('/#/settings');
-  await page.getByRole('tab', { name: 'Calendar' }).or(page.getByRole('button', { name: 'Calendar', exact: true })).last().click();
+  await page.goto('/#/settings/integrations');
   const card = page.getByLabel('Company calendar');
   await card.getByRole('button', { name: 'Find in Thunderbird' }).click();
   await expect(card.getByRole('status')).toHaveText('Detection needs the desktop app.');

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
 
 /**
@@ -51,19 +51,28 @@ async function recordMeeting(page: Page, title: string): Promise<void> {
   await expect(page).toHaveURL(/#\/meeting\//);
 }
 
+async function openExport(page: Page): Promise<void> {
+  const trigger = page.getByRole('button', { name: 'Export ▾' });
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
+}
+
 test('desktop: every export is saved through the shell and the app says where', async ({ page }) => {
   test.setTimeout(60_000);
   await mockDesktop(page);
   await recordMeeting(page, 'Export Test');
   const saved = page.getByRole('status', { name: 'Export saved' });
 
-  await page.getByRole('button', { name: 'TXT', exact: true }).click();
+  await openExport(page);
+  await page.getByRole('menuitem', { name: 'TXT', exact: true }).click();
   await expect(saved).toContainText('Saved to /home/me/Downloads/Export-Test.txt');
-  await page.getByRole('button', { name: 'Markdown', exact: true }).click();
+  await openExport(page);
+  await page.getByRole('menuitem', { name: 'Markdown', exact: true }).click();
   await expect(saved).toContainText('Export-Test.md');
-  await page.getByRole('button', { name: 'JSON', exact: true }).click();
+  await openExport(page);
+  await page.getByRole('menuitem', { name: 'JSON', exact: true }).click();
   await expect(saved).toContainText('Export-Test.json');
-  await page.getByRole('button', { name: 'Audio file', exact: true }).click();
+  await openExport(page);
+  await page.getByRole('menuitem', { name: 'Audio file', exact: true }).click();
   await expect(saved).toContainText(/Export-Test\.(webm|mp4|ogg)/);
   await saved.getByRole('button', { name: 'Show in folder' }).click();
 
@@ -86,9 +95,10 @@ test('desktop: every export is saved through the shell and the app says where', 
 test('browser: exports stay regular downloads', async ({ page }) => {
   test.setTimeout(60_000);
   await recordMeeting(page, 'Browser Export');
+  await openExport(page);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Markdown', exact: true }).click(),
+    page.getByRole('menuitem', { name: 'Markdown', exact: true }).click(),
   ]);
   expect(download.suggestedFilename()).toBe('Browser-Export.md');
   await expect(page.getByRole('status', { name: 'Export saved' })).toHaveCount(0);

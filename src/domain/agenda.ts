@@ -12,6 +12,9 @@ export interface AgendaItem {
   /** Who leads the topic. */
   owner?: string;
   notes?: string;
+  /** Recorded time (ms) the topic started / was ticked off while recording. */
+  startedMs?: number;
+  doneMs?: number;
 }
 
 export interface MeetingAgenda {
@@ -40,6 +43,8 @@ export function normalizeAgendaItems(items: AgendaItem[]): AgendaItem[] {
         ...(minutes !== undefined ? { minutes } : {}),
         ...(owner ? { owner } : {}),
         ...(notes ? { notes } : {}),
+        ...(i.startedMs !== undefined ? { startedMs: i.startedMs } : {}),
+        ...(i.doneMs !== undefined ? { doneMs: i.doneMs } : {}),
       };
     })
     .filter((i) => i.title.length > 0);

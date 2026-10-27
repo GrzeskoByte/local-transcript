@@ -1,6 +1,6 @@
 import { autoTranscribeEnabled } from './auto-transcribe';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { Meeting, RecordingMode, RecordingState } from '../domain/meeting';
+import type { Meeting, Participant, RecordingMode, RecordingState } from '../domain/meeting';
 import { estimateDurationFromChunks, formatDuration, newMeetingId } from '../domain/meeting';
 import { DeviceAudioSource } from '../audio/device-audio';
 import { SystemAudioSource, systemAudioStatus } from '../audio/system-audio';
@@ -71,20 +71,21 @@ import { desktopStorageDir, openDesktopStorageDir } from '../platform/desktop-st
 import { LiveAudioMirror, audioMirrorPath, mirrorMeetingToDisk, type MirrorAudio } from '../features/meetings/disk-sync';
 import { importAudioFile } from '../features/meetings/import-audio';
 import { actionItemsOf, createGitlabClient, DEFAULT_GITLAB_CONFIG } from '../integrations/gitlab';
-import type { ActionIssueResult, GitlabConfig, GitlabUploadResult } from '../integrations/gitlab';
+import type { ActionIssueResult, GitlabConfig, GitlabUploadResult, IssueOverride } from '../integrations/gitlab';
 import { getGitlabConfig, setGitlabConfig } from '../integrations/gitlab-store';
 import { buildTransport, DEFAULT_CALENDAR_CONFIG, eventUid } from '../integrations/calendar';
 import type { CalendarConfig, CalendarCreateResult, CalendarEventDraft, CalendarProvider, ServerEvent } from '../integrations/calendar';
 import { fetchServerEvents } from '../integrations/calendar';
 import { getCalendarConfig, setActiveCalendarProvider, setCalendarConfig } from '../integrations/calendar-store';
 
-import { createLlmClient, DEFAULT_LLM_CONFIG } from '../integrations/llm';
+import { createLlmClient, DEFAULT_LLM_CONFIG, summaryDestination } from '../integrations/llm';
 import type { LlmConfig, MeetingSummary } from '../integrations/llm';
 import { getLlmConfig, setLlmConfig } from '../integrations/llm-store';
 import {
   DEFAULT_REMOTE_ASR_CONFIG,
   getRemoteAsrConfig,
   remoteAsrActive,
+  remoteAsrEndpoint,
   remoteAsrLabel,
   setRemoteAsrConfig,
   type RemoteAsrConfig,
@@ -92,8 +93,20 @@ import {
 import { RemoteASREngine } from '../asr/remote-engine';
 import { normalizeAgendaItems, type AgendaItem } from '../domain/agenda';
 import { settleWithin } from '../domain/settle';
+import type { ExportFormat, Moment, WrapStepId, WrapUp } from '../domain/meeting';
+import { issueStateKey, newWrapUp } from '../domain/wrapup';
+import { updateSegment } from '../storage/transcripts';
+import { detectSpeakers } from '../features/meetings/diarize';
+import { namedSegments } from '../domain/speakers';
+import { keepAwake } from '../platform/system';
+import { logNetwork } from '../platform/network-log';
+import { recordingPrefs, wrapPrefs, keepAudio, calendarPrefs } from './preferences';
 import { StopTrace, formatStopTrace, nextPaint } from '../domain/stop-trace';
 
+/**
+ * Where a summary request goes, for the network log: null when it stays on
+ * this computer (Ollama/Open WebUI on localhost, local agents' own engine).
+ */
 /** Longest wait for one best-effort teardown step when a recording stops. */
 const STOP_STEP_TIMEOUT_MS = 3000;
 
@@ -104,17 +117,92 @@ function reportStopTrace(trace: StopTrace): void {
   if (isDesktopApp()) void invokeDesktop('native_log', { message: line }).catch(() => undefined);
 }
 
-export type SettingsTab = 'models' | 'calendar' | 'sharing' | 'ai' | 'audio' | 'app';
-const SETTINGS_TABS: SettingsTab[] = ['models', 'calendar', 'sharing', 'ai', 'audio', 'app'];
+export type SettingsTab =
+  | 'models'
+  | 'recording'
+  | 'after'
+  | 'summaries'
+  | 'integrations'
+  | 'storage'
+  | 'appearance'
+  | 'app';
+const SETTINGS_TABS: SettingsTab[] = ['models', 'recording', 'after', 'summaries', 'integrations', 'storage', 'appearance', 'app'];
+/** Settings tabs before the redesign (old links keep working). */
+const LEGACY_TABS: Record<string, SettingsTab> = {
+  calendar: 'integrations',
+  sharing: 'integrations',
+  ai: 'summaries',
+  audio: 'recording',
+};
+
+/** Meeting screen tabs (the wrap-up steps, revisited). */
+export type MeetingTab = 'transcript' | 'summary' | 'gitlab' | 'calendar' | 'export';
+const MEETING_TABS: MeetingTab[] = ['transcript', 'summary', 'gitlab', 'calendar', 'export'];
 
 export type Route =
-  | { name: 'dashboard' }
-  | { name: 'new' }
+  | { name: 'home' }
+  | { name: 'library'; view?: 'list' | 'month'; q?: string }
   | { name: 'active' }
-  /** `q`: a search to pre-fill the transcript filter with (Dashboard hits). */
-  | { name: 'detail'; id: string; q?: string }
+  /** `q`: a search to pre-fill the transcript filter with (Library hits). */
+  | { name: 'detail'; id: string; q?: string; tab?: MeetingTab }
+  /** The guided wrap-up after Stop (or "Continue wrap-up"). */
+  | { name: 'wrapup'; id: string; step?: WrapStepId }
   | { name: 'settings'; tab?: SettingsTab }
-  | { name: 'calendar' };
+  /** First-run setup (steps 1–7). */
+  | { name: 'setup'; step?: number };
+
+/** The route a location hash names. */
+export function routeFromHash(h: string): Route {
+  if (h.startsWith('#/meeting/')) {
+    const [path, rawQuery] = h.slice(10).split('?q=');
+    const [rawId, rawTab] = (path ?? '').split('/');
+    const q = rawQuery ? decodeURIComponent(rawQuery) : undefined;
+    const tab = MEETING_TABS.includes(rawTab as MeetingTab) ? (rawTab as MeetingTab) : undefined;
+    return { name: 'detail', id: decodeURIComponent(rawId ?? ''), ...(q ? { q } : {}), ...(tab ? { tab } : {}) };
+  }
+  if (h.startsWith('#/wrapup/')) {
+    const [rawId, rawStep] = h.slice(9).split('/');
+    const step = (['transcribe', 'summary', 'gitlab', 'calendar', 'export'] as const).find((x) => x === rawStep);
+    return { name: 'wrapup', id: decodeURIComponent(rawId ?? ''), ...(step ? { step } : {}) };
+  }
+  if (h === '#/active') return { name: 'active' };
+  if (h === '#/library' || h.startsWith('#/library?q=')) {
+    const q = h.includes('?q=') ? decodeURIComponent(h.split('?q=')[1] ?? '') : undefined;
+    return { name: 'library', view: 'list', ...(q ? { q } : {}) };
+  }
+  if (h === '#/library/month' || h === '#/calendar') return { name: 'library', view: 'month' };
+  if (h === '#/settings') return { name: 'settings' };
+  if (h.startsWith('#/settings/')) {
+    const raw = h.slice(11);
+    const tab = LEGACY_TABS[raw] ?? (SETTINGS_TABS.includes(raw as SettingsTab) ? (raw as SettingsTab) : undefined);
+    return tab ? { name: 'settings', tab } : { name: 'settings' };
+  }
+  if (h.startsWith('#/setup')) {
+    const step = Number(h.slice(8)) || 1;
+    return { name: 'setup', step };
+  }
+  // '#/', '#/new' (New Meeting now lives on Home) and anything else.
+  return { name: 'home' };
+}
+
+export function hashOf(r: Route): string {
+  switch (r.name) {
+    case 'home':
+      return '#/';
+    case 'active':
+      return '#/active';
+    case 'library':
+      return r.view === 'month' ? '#/library/month' : `#/library${r.q ? `?q=${encodeURIComponent(r.q)}` : ''}`;
+    case 'settings':
+      return r.tab ? `#/settings/${r.tab}` : '#/settings';
+    case 'setup':
+      return `#/setup/${r.step ?? 1}`;
+    case 'wrapup':
+      return `#/wrapup/${encodeURIComponent(r.id)}${r.step ? `/${r.step}` : ''}`;
+    case 'detail':
+      return `#/meeting/${encodeURIComponent(r.id)}${r.tab ? `/${r.tab}` : ''}${r.q ? `?q=${encodeURIComponent(r.q)}` : ''}`;
+  }
+}
 
 /** One playable track of a recording (single-track recordings have track ''). */
 export interface AudioTrackView {
@@ -141,7 +229,36 @@ interface AppState {
   /** Audio problems detected so far in the running recording (live). */
   recordingIssues: AudioIssue[];
   storageWarning: string | null;
-  startRecording: (title: string, mode: RecordingMode, agenda?: AgendaItem[]) => Promise<void>;
+  startRecording: (
+    title: string,
+    mode: RecordingMode,
+    agenda?: AgendaItem[],
+    extra?: { calendarSource?: Meeting['calendarSource'] },
+  ) => Promise<void>;
+  /** Mark a moment in the running recording (press M); returns it. */
+  addMoment: (label?: string) => Promise<Moment | null>;
+  /** Label (or relabel) a moment of a meeting. */
+  labelMoment: (meetingId: string, momentId: string, label: string) => Promise<void>;
+  /** While recording: start an agenda topic or tick it off. */
+  markAgenda: (itemId: string, what: 'start' | 'done' | 'undo') => Promise<void>;
+  /** Fix one transcript line. */
+  editSegment: (segmentId: string, text: string) => Promise<void>;
+  /** Give a detected speaker a name in this meeting. */
+  renameSpeaker: (meetingId: string, speaker: string, name: string) => Promise<void>;
+  /** Run local speaker detection; progress in `diarizing`. */
+  detectSpeakers: (meetingId: string, speakers?: number) => Promise<void>;
+  /** Speaker detection runs by meeting id (0..1). */
+  diarizing: Record<string, number>;
+  /** Update the guided wrap-up state of a meeting. */
+  setWrapUp: (meetingId: string, change: (w: WrapUp) => WrapUp) => Promise<Meeting | undefined>;
+  /** Remember a file the Export step / tab saved. */
+  recordExport: (meetingId: string, format: ExportFormat, path?: string) => Promise<void>;
+  /** Remove every meeting (Settings → Storage: Delete everything). */
+  deleteAllMeetings: () => Promise<number>;
+  /** Live input levels of the running recording (0..1; microphone first). Polled by the recording screen. */
+  recordingLevels: () => Array<{ role: 'microphone' | 'device'; level: number }>;
+  /** Remove the audio of meetings past the Keep audio setting; returns how many. */
+  applyRetention: (dryRun?: boolean) => Promise<Meeting[]>;
   /** Replace a meeting's agenda (empty list removes it). */
   saveAgenda: (meetingId: string, items: AgendaItem[]) => Promise<Meeting | undefined>;
   /** Upload a meeting's agenda to GitLab (agenda.md / wiki page / issue). */
@@ -205,7 +322,23 @@ interface AppState {
 
   uploadSummaryToGitlab: (meetingId: string) => Promise<GitlabUploadResult>;
   /** One GitLab issue per selected summary action item (their text). */
-  createGitlabActionIssues: (meetingId: string, items: string[]) => Promise<ActionIssueResult[]>;
+  createGitlabActionIssues: (
+    meetingId: string,
+    items: string[],
+    overrides?: Record<string, IssueOverride>,
+    /** Project path to create them in (default: the configured project). */
+    project?: string,
+  ) => Promise<ActionIssueResult[]>;
+  /** Open/closed state of a meeting's issues, keyed by `issueStateKey`, with when it was read. */
+  issueStates: Record<string, { at: number; states: Record<string, 'opened' | 'closed'> }>;
+  /** The meeting's participants (owners, assignees, invitees). */
+  meetingParticipants: (meetingId: string) => Participant[];
+  setParticipants: (meetingId: string, people: Participant[]) => Promise<void>;
+  /** Members of a GitLab project or group as participants (with public e-mails). */
+  loadGitlabPeople: (from: { project: string } | { groupId: number; name: string }) => Promise<Participant[]>;
+  refreshIssueStates: (meetingId: string) => Promise<void>;
+  /** Post the summary to the wiki page Meetings/<date>-<title>. */
+  postSummaryToWiki: (meetingId: string) => Promise<GitlabUploadResult>;
 
   calendarConfig: CalendarConfig;
   saveCalendarConfig: (config: CalendarConfig) => Promise<void>;
@@ -216,6 +349,8 @@ interface AppState {
   /** Custom LLM provider settings (kept on-device in IndexedDB). */
   llmConfig: LlmConfig;
   saveLlmConfig: (config: LlmConfig) => Promise<void>;
+  /** Save an edited / reviewed summary (wrap-up "Review summary", Summary tab). */
+  saveSummary: (meetingId: string, summary: NonNullable<Meeting['summary']>) => Promise<void>;
   /** External transcription server (Open WebUI); used when enabled. */
   remoteAsrConfig: RemoteAsrConfig;
   saveRemoteAsrConfig: (config: RemoteAsrConfig) => Promise<void>;
@@ -223,7 +358,7 @@ interface AppState {
   summarizeMeeting: (meetingId: string) => Promise<MeetingSummary>;
   summarizing: Record<string, true>;
   /** The list Meeting Detail was opened from (its back link). */
-  returnTo: 'dashboard' | 'calendar';
+  returnTo: 'home' | 'library' | 'month';
   /** Result of the last update check (desktop only; null before any check). */
   updateInfo: UpdateInfo | null;
   /** Ask GitHub for a newer release (never installs anything). */
@@ -289,7 +424,7 @@ export function useApp(): AppState {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const [route, setRoute] = useState<Route>({ name: 'dashboard' });
+  const [route, setRoute] = useState<Route>({ name: 'home' });
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [recordingState, setRecordingState] = useState<RecordingState>('IDLE');
   const [recordingError, setRecordingError] = useState<string | null>(null);
@@ -309,6 +444,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
   const checkUpdates = useCallback(async (): Promise<UpdateInfo> => {
+    logNetwork('github.com', 'Checked for updates', 'App version');
     const info = await checkForUpdate();
     setLastCheck(Date.now());
     setUpdateInfo(info);
@@ -423,20 +559,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     // Hash routing so navigation survives reloads.
     const sync = () => {
       const h = window.location.hash;
-      if (h.startsWith('#/meeting/')) {
-        const [rawId, rawQuery] = h.slice(10).split('?q=');
-        const q = rawQuery ? decodeURIComponent(rawQuery) : undefined;
-        setRoute({ name: 'detail', id: decodeURIComponent(rawId ?? ''), ...(q ? { q } : {}) });
+      const r = routeFromHash(h);
+      // Old links (#/new, #/calendar, old settings tabs) show their new address.
+      if (/^#\/(new|calendar)$/.test(h) || (h.startsWith('#/settings/') && hashOf(r) !== h)) {
+        history.replaceState(null, '', hashOf(r));
       }
-      else if (h === '#/new') setRoute({ name: 'new' });
-      else if (h === '#/active') setRoute({ name: 'active' });
-      else if (h === '#/settings') setRoute({ name: 'settings' });
-      else if (h.startsWith('#/settings/')) {
-        const tab = h.slice(11) as SettingsTab;
-        setRoute(SETTINGS_TABS.includes(tab) ? { name: 'settings', tab } : { name: 'settings' });
-      }
-      else if (h === '#/calendar') setRoute({ name: 'calendar' });
-      else setRoute({ name: 'dashboard' });
+      setRoute(r);
     };
     sync();
     window.addEventListener('hashchange', sync);
@@ -501,19 +629,15 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, []);
 
   /** Where Meeting Detail's back link leads (the list the meeting was opened from). */
-  const [returnTo, setReturnTo] = useState<'dashboard' | 'calendar'>('dashboard');
-  const routeNameRef = useRef<Route['name']>('dashboard');
-  routeNameRef.current = route.name;
+  const [returnTo, setReturnTo] = useState<'home' | 'library' | 'month'>('library');
+  const routeRef = useRef<Route>({ name: 'home' });
+  routeRef.current = route;
   const go = useCallback((r: Route) => {
-    if (r.name === 'detail' && (routeNameRef.current === 'calendar' || routeNameRef.current === 'dashboard')) {
-      setReturnTo(routeNameRef.current);
+    const from = routeRef.current;
+    if (r.name === 'detail' && (from.name === 'home' || from.name === 'library')) {
+      setReturnTo(from.name === 'library' ? (from.view === 'month' ? 'month' : 'library') : 'home');
     }
-    if (r.name === 'dashboard') window.location.hash = '#/';
-    else if (r.name === 'new') window.location.hash = '#/new';
-    else if (r.name === 'active') window.location.hash = '#/active';
-    else if (r.name === 'settings') window.location.hash = r.tab ? `#/settings/${r.tab}` : '#/settings';
-    else if (r.name === 'calendar') window.location.hash = '#/calendar';
-    else window.location.hash = `#/meeting/${encodeURIComponent(r.id)}${r.q ? `?q=${encodeURIComponent(r.q)}` : ''}`;
+    window.location.hash = hashOf(r);
     setRoute(r);
   }, []);
 
@@ -659,7 +783,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, []);
 
   const startRecording = useCallback(
-    async (title: string, mode: RecordingMode, agenda: AgendaItem[] = []) => {
+    async (
+      title: string,
+      mode: RecordingMode,
+      agenda: AgendaItem[] = [],
+      extra: { calendarSource?: Meeting['calendarSource'] } = {},
+    ) => {
       setRecordingError(null);
       // Storage estimate check (§19).
       const est = await estimateStorage().catch(() => ({}));
@@ -685,6 +814,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       };
       const agendaItems = normalizeAgendaItems(agenda);
       if (agendaItems.length > 0) meeting.agenda = { items: agendaItems, updatedAt: now };
+      if (extra.calendarSource) meeting.calendarSource = extra.calendarSource;
+      // Settings → Recording: keep the computer awake while recording (best-effort).
+      if (recordingPrefs().keepAwake) void keepAwake(true);
       const watch = (recorder: MediaRecorderAudioRecorder | NativeRecorder) =>
         recorder.onState((s) => {
           setRecordingState(s);
@@ -856,7 +988,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     async (meetingId: string): Promise<GitlabUploadResult> => {
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw new Error('Meeting not found');
-      const segments = await getSegments(meetingId);
+      const segments = namedSegments(await getSegments(meetingId), meeting.speakerNames);
+      logNetwork(gitlabConfig.url, `Uploaded the transcript of "${meeting.title}"`, `Transcript (${segments.length} lines)`);
       const result = await createGitlabClient(gitlabConfig).uploadMeeting(meeting, segments);
       const updated = await updateMeeting(meetingId, {
         gitlab: { url: result.url, target: result.target, uploadedAt: Date.now() },
@@ -871,6 +1004,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     async (meetingId: string): Promise<GitlabUploadResult> => {
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw new Error('Meeting not found');
+      logNetwork(gitlabConfig.url, `Posted the summary of "${meeting.title}"`, 'Summary only');
       const result = await createGitlabClient(gitlabConfig).uploadSummary(meeting);
       const updated = await updateMeeting(meetingId, {
         gitlabSummary: { url: result.url, target: result.target, uploadedAt: Date.now() },
@@ -887,7 +1021,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
    * later one fails (the error carries them as `created`).
    */
   const createGitlabActionIssues = useCallback(
-    async (meetingId: string, items: string[]): Promise<ActionIssueResult[]> => {
+    async (meetingId: string, items: string[], overrides?: Record<string, IssueOverride>, project?: string): Promise<ActionIssueResult[]> => {
+      const target = (project || gitlabConfig.project).trim();
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw new Error('Meeting not found');
       const wanted = actionItemsOf(meeting).filter((a) => items.includes(a.text));
@@ -901,14 +1036,58 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         }));
         if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
       };
+      logNetwork(
+        gitlabConfig.url,
+        `Created ${wanted.length} issue${wanted.length === 1 ? '' : 's'} in ${target} from "${meeting.title}"`,
+        `${wanted.length} title${wanted.length === 1 ? '' : 's'}, ${wanted.length} quote${wanted.length === 1 ? '' : 's'}`,
+      );
       try {
-        const created = await createGitlabClient(gitlabConfig).createActionItemIssues(meeting, wanted);
+        const segments = await getSegments(meetingId).catch(() => [] as TranscriptSegment[]);
+        const created = await createGitlabClient({ ...gitlabConfig, project: target }).createActionItemIssues(meeting, wanted, { overrides, segments });
         await record(created);
         return created;
       } catch (err) {
         await record((err as { created?: ActionIssueResult[] }).created ?? []);
         throw err;
       }
+    },
+    [gitlabConfig],
+  );
+
+  const [issueStates, setIssueStates] = useState<AppState['issueStates']>({});
+  const refreshIssueStates = useCallback(
+    async (meetingId: string) => {
+      const meeting = await getMeeting(meetingId);
+      const issues = (meeting?.gitlabActionIssues ?? []).filter((i) => i.iid !== undefined);
+      if (!meeting || issues.length === 0) return;
+      logNetwork(gitlabConfig.url, `Refreshed issue status for "${meeting.title}"`, `${issues.length} issue numbers`);
+      const byProject = new Map<string, number[]>();
+      for (const i of issues) {
+        const p = (i.project || gitlabConfig.project).trim();
+        byProject.set(p, [...(byProject.get(p) ?? []), i.iid!]);
+      }
+      const client = createGitlabClient(gitlabConfig);
+      const states: Record<string, 'opened' | 'closed'> = {};
+      for (const [project, iids] of byProject) {
+        const got = await client.issueStates(iids, project);
+        for (const [iid, st] of Object.entries(got)) states[issueStateKey({ project, iid: Number(iid) }, gitlabConfig.project)] = st;
+      }
+      setIssueStates((cur) => ({ ...cur, [meetingId]: { at: Date.now(), states } }));
+    },
+    [gitlabConfig],
+  );
+
+  const postSummaryToWiki = useCallback(
+    async (meetingId: string): Promise<GitlabUploadResult> => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error('Meeting not found');
+      logNetwork(gitlabConfig.url, `Posted the summary of "${meeting.title}" to the wiki`, 'Summary only');
+      const result = await createGitlabClient(gitlabConfig).postSummaryToWiki(meeting);
+      const updated = await updateMeeting(meetingId, {
+        gitlabSummary: { url: result.url, target: 'wiki', uploadedAt: Date.now() },
+      });
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      return result;
     },
     [gitlabConfig],
   );
@@ -935,6 +1114,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     async (meetingId: string): Promise<GitlabUploadResult> => {
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw new Error('Meeting not found');
+      logNetwork(gitlabConfig.url, `Uploaded the agenda of "${meeting.title}"`, 'Agenda only');
       const result = await createGitlabClient(gitlabConfig).uploadAgenda(meeting);
       const updated = await updateMeeting(meetingId, {
         gitlabAgenda: { url: result.url, target: result.target, uploadedAt: Date.now() },
@@ -968,6 +1148,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const fetchCalendarEvents = useCallback(
     async (start: Date, end: Date): Promise<ServerEvent[]> => {
       if (!isDesktopApp()) return [];
+      logNetwork(calendarConfig.serverUrl || 'graph.microsoft.com', 'Listed calendar events', 'Account + date range');
       return fetchServerEvents(calendarConfig, start, end);
     },
     [calendarConfig],
@@ -982,7 +1163,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       const createdAt = Math.max(Date.now(), lastEventAtRef.current + 1);
       lastEventAtRef.current = createdAt;
       const uid = eventUid(meetingId, createdAt);
-      const transport = buildTransport(calendarConfig, draft, uid);
+      // Settings → GitLab & calendar: "Add follow-ups to" another calendar of the account.
+      const followup = calendarPrefs().followupCalendar.trim();
+      const target = followup && calendarConfig.provider === 'caldav' ? { ...calendarConfig, calendarUrl: followup } : calendarConfig;
+      const transport = buildTransport(target, draft, uid);
+      logNetwork(calendarConfig.serverUrl || 'graph.microsoft.com', `Added "${draft.title}" to the calendar`, `Event title, time, description${draft.attendees?.length ? `, ${draft.attendees.length} invitee e-mail${draft.attendees.length === 1 ? '' : 's'}` : ''}`);
       await invokeDesktop<string>('native_calendar_create', { request: transport });
       const record = {
         uid,
@@ -991,6 +1176,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         startIso: draft.startIso,
         createdAt,
         ...(item ? { item } : {}),
+        ...(draft.attendees?.length ? { attendees: draft.attendees } : {}),
       };
       const updated = await updateMeeting(meetingId, (cur) => ({
         ...cur,
@@ -1013,9 +1199,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       setSummarizing((cur) => ({ ...cur, [meetingId]: true }));
       let result: Awaited<ReturnType<ReturnType<typeof createLlmClient>['summarize']>>;
       try {
-        const segments = await getSegments(meetingId);
+        const segments = namedSegments(await getSegments(meetingId), meeting.speakerNames);
         const markdown = segmentsToMarkdown(meeting.title, meeting.startedAt, segments);
         const client = createLlmClient(llmConfig);
+        const where = summaryDestination(llmConfig);
+        if (where) logNetwork(where, `Summarized "${meeting.title}"`, `Full transcript (${segments.length} lines)`);
         result = await client.summarize(meeting.title, markdown);
       } finally {
         setSummarizing((cur) => {
@@ -1028,6 +1216,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         text: result.summary,
         keyPoints: result.keyPoints,
         actionItems: result.actionItems,
+        ...(result.decisions ? { decisions: result.decisions } : {}),
+        ...(result.openQuestions ? { openQuestions: result.openQuestions } : {}),
         model: llmConfig.model.trim(),
         createdAt: Date.now(),
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),
@@ -1038,6 +1228,14 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     },
     [llmConfig],
   );
+
+  const saveSummary = useCallback(async (meetingId: string, summary: NonNullable<Meeting['summary']>) => {
+    const updated = await updateMeeting(meetingId, { summary });
+    if (updated) {
+      setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      setMeetings((list) => list.map((x) => (x.id === meetingId ? updated : x)));
+    }
+  }, []);
 
   /**
    * After Stop: transcribe the utterances still queued, then save the live
@@ -1153,9 +1351,17 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     liveMirrorRef.current = null;
     const nativeMirror = recorder instanceof NativeRecorder && nativeMirrorRef.current && recorder.mirrorComplete();
     nativeMirrorRef.current = false;
-    // The recording is saved: open it right away. Everything else (meeting
+    void keepAwake(false);
+    // The recording is saved: open it right away — in the guided wrap-up
+    // when it is on (Settings → After recording). Everything else (meeting
     // list, disk mirror, live transcript) finishes in the background.
-    go({ name: 'detail', id: updated.id });
+    if (wrapPrefs().guide) {
+      const wrapped = { ...updated, wrapUp: newWrapUp() };
+      void updateMeeting(updated.id, { wrapUp: wrapped.wrapUp }).catch(() => undefined);
+      go({ name: 'wrapup', id: updated.id });
+    } else {
+      go({ name: 'detail', id: updated.id });
+    }
     void refresh().catch(() => undefined);
     // The audio is already on disk when the live mirror kept up; otherwise
     // copy it (in slices) from storage.
@@ -1211,6 +1417,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         // explicit model id — the first-run download — still runs locally).
         if (!modelId && remoteAsrActive(remoteAsrConfig)) {
           const config = remoteAsrConfig;
+          const title = (await getMeeting(id))?.title ?? 'a meeting';
+          logNetwork(remoteAsrEndpoint(config), `Transcribed "${title}" on the transcription server`, 'Speech audio (16 kHz WAV pieces, no silence)');
           await txService.transcribe(id, remoteAsrLabel(config), () => new RemoteASREngine(config));
         } else {
           await txService.transcribe(id, modelId ?? modelMeta.modelId);
@@ -1306,6 +1514,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         .catch(() => undefined);
     }, 500);
     try {
+      logNetwork('huggingface.co', `Downloaded ${meta.modelId}`, 'Nothing (download)');
       await nativeDownloadModel(meta.modelId);
       meta = { ...meta, state: 'ready', progress: 1 };
       await persist(meta);
@@ -1428,6 +1637,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           .catch(() => undefined);
       }, 500);
       try {
+        logNetwork('huggingface.co', `Downloaded ${name}`, 'Nothing (download)');
         await nativeDownloadModel(name);
         await refreshNativeStatus();
       } finally {
@@ -1463,6 +1673,205 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [installedModels, remoteAsrConfig, transcribe, downloadModel, firstRunModel],
   );
 
+
+  // ---- moments, agenda progress, transcript edits, speakers ---------------
+
+  const activeRef = useRef<Meeting | null>(null);
+  activeRef.current = activeMeeting;
+
+  const addMoment = useCallback(async (label = ''): Promise<Moment | null> => {
+    const cur = activeRef.current;
+    const recorder = recorderRef.current;
+    if (!cur || !recorder) return null;
+    const moment: Moment = { id: newMeetingId(), atMs: recorder.getElapsedMs(), label: label.trim() };
+    const moments = [...(cur.moments ?? []), moment];
+    setActiveMeeting((a) => (a && a.id === cur.id ? { ...a, moments } : a));
+    await updateMeeting(cur.id, (m) => ({ ...m, moments: [...(m.moments ?? []), moment] })).catch(() => undefined);
+    return moment;
+  }, []);
+
+  const labelMoment = useCallback(async (meetingId: string, momentId: string, label: string) => {
+    const relabel = (list: Moment[] | undefined) =>
+      (list ?? []).map((x) => (x.id === momentId ? { ...x, label: label.trim() } : x));
+    setActiveMeeting((a) => (a && a.id === meetingId ? { ...a, moments: relabel(a.moments) } : a));
+    const updated = await updateMeeting(meetingId, (m) => ({ ...m, moments: relabel(m.moments) }));
+    if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+  }, []);
+
+  const markAgenda = useCallback(async (itemId: string, what: 'start' | 'done' | 'undo') => {
+    const cur = activeRef.current;
+    const at = recorderRef.current?.getElapsedMs() ?? 0;
+    if (!cur?.agenda) return;
+    const items = cur.agenda.items.map((i) => {
+      if (i.id === itemId) {
+        if (what === 'start') return { ...i, startedMs: i.startedMs ?? at, doneMs: undefined };
+        if (what === 'done') return { ...i, startedMs: i.startedMs ?? at, doneMs: at };
+        const { startedMs: _s, doneMs: _d, ...rest } = i;
+        return rest;
+      }
+      // Starting a topic finishes the one in progress.
+      if (what === 'start' && i.startedMs !== undefined && i.doneMs === undefined) return { ...i, doneMs: at };
+      return i;
+    });
+    const agenda = { items, updatedAt: Date.now() };
+    setActiveMeeting((a) => (a && a.id === cur.id ? { ...a, agenda } : a));
+    await updateMeeting(cur.id, { agenda }).catch(() => undefined);
+  }, []);
+
+  const editSegment = useCallback(async (segmentId: string, text: string) => {
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (!clean) return;
+    const updated = await updateSegment(segmentId, { text: clean });
+    if (!updated) return;
+    setDetailSegments((cur) => cur.map((s) => (s.id === segmentId ? updated : s)));
+    const m = await getMeeting(updated.meetingId).catch(() => undefined);
+    if (m?.transcriptionStatus === 'completed') void mirrorToDisk(m);
+  }, [mirrorToDisk]);
+
+  const renameSpeaker = useCallback(async (meetingId: string, speaker: string, name: string) => {
+    const updated = await updateMeeting(meetingId, (m) => {
+      const names = { ...(m.speakerNames ?? {}) };
+      if (name.trim()) names[speaker] = name.trim();
+      else delete names[speaker];
+      return { ...m, speakerNames: names };
+    });
+    if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+  }, []);
+
+  const meetingParticipants = useCallback(
+    (meetingId: string): Participant[] =>
+      (detailMeeting?.id === meetingId ? detailMeeting : meetings.find((x) => x.id === meetingId))?.participants ?? [],
+    [detailMeeting, meetings],
+  );
+  const setParticipants = useCallback(async (meetingId: string, people: Participant[]) => {
+    const updated = await updateMeeting(meetingId, { participants: people });
+    if (updated) {
+      setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      setMeetings((list) => list.map((x) => (x.id === meetingId ? updated : x)));
+    }
+  }, []);
+  const loadGitlabPeople = useCallback(
+    async (from: { project: string } | { groupId: number; name: string }): Promise<Participant[]> => {
+      logNetwork(gitlabConfig.url, `Loaded the members of ${'project' in from ? from.project : from.name}`, 'Nothing (read only)');
+      const people = await createGitlabClient(gitlabConfig).listPeople('project' in from ? { project: from.project } : { groupId: from.groupId });
+      return people.map((p) => ({ name: p.name, username: p.username, ...(p.email ? { email: p.email } : {}), source: 'gitlab' as const }));
+    },
+    [gitlabConfig],
+  );
+
+  const [diarizing, setDiarizing] = useState<Record<string, number>>({});
+  const detectSpeakersFor = useCallback(async (meetingId: string, speakers = 0) => {
+    setDiarizing((p) => ({ ...p, [meetingId]: 0 }));
+    try {
+      const updated = await detectSpeakers(meetingId, speakers, (r) =>
+        setDiarizing((p) => (meetingId in p ? { ...p, [meetingId]: r } : p)),
+      );
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      if (detailIdRef.current === meetingId) setDetailSegments(await getSegments(meetingId));
+      if (updated) void mirrorToDisk(updated);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const updated = await updateMeeting(meetingId, (m) => ({
+        ...m,
+        diarization: { at: Date.now(), speakers: m.diarization?.speakers ?? 0, error: msg },
+      })).catch(() => undefined);
+      if (updated) setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      throw err;
+    } finally {
+      setDiarizing((p) => {
+        const next = { ...p };
+        delete next[meetingId];
+        return next;
+      });
+    }
+  }, [mirrorToDisk]);
+
+  const recordingLevels = useCallback((): Array<{ role: 'microphone' | 'device'; level: number }> => {
+    const recorder = recorderRef.current;
+    const mode = activeRef.current?.mode;
+    if (recorder instanceof NativeRecorder) {
+      const roles: Array<'microphone' | 'device'> = mode === 'device' ? ['device'] : mode === 'dual' ? ['microphone', 'device'] : ['microphone'];
+      const lv = recorder.levels();
+      return roles.map((role, i) => ({ role, level: Math.min(1, lv[i] ?? 0) }));
+    }
+    return diagRef.current?.collector.liveLevels() ?? [];
+  }, []);
+
+  // ---- wrap-up and exports ---------------------------------------------------
+
+  const setWrapUp = useCallback(async (meetingId: string, change: (w: WrapUp) => WrapUp) => {
+    const updated = await updateMeeting(meetingId, (m) => ({
+      ...m,
+      wrapUp: { ...change(m.wrapUp ?? newWrapUp()), updatedAt: Date.now() },
+    }));
+    if (updated) {
+      setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      setMeetings((list) => list.map((x) => (x.id === meetingId ? updated : x)));
+    }
+    return updated;
+  }, []);
+
+  const recordExport = useCallback(async (meetingId: string, format: ExportFormat, path?: string) => {
+    const updated = await updateMeeting(meetingId, (m) => ({
+      ...m,
+      exports: { ...(m.exports ?? {}), [format]: { at: Date.now(), ...(path ? { path } : {}) } },
+    }));
+    if (updated) {
+      setDetailMeeting((d) => (d && d.id === meetingId ? updated : d));
+      setMeetings((list) => list.map((x) => (x.id === meetingId ? updated : x)));
+    }
+  }, []);
+
+  // ---- storage ---------------------------------------------------------------
+
+  const deleteAllMeetings = useCallback(async (): Promise<number> => {
+    const all = await listMeetings();
+    let n = 0;
+    for (const m of all) {
+      if (m.id === activeIdRef.current) continue;
+      await txService.cancelAndWait(m.id);
+      await deleteMeetingEverywhere(m.id);
+      n += 1;
+    }
+    setDetailMeeting(null);
+    await refresh();
+    return n;
+  }, [refresh, txService]);
+
+  /**
+   * Keep audio (Settings → Storage): "30 days" removes the audio of
+   * transcribed meetings older than 30 days; "Until exported" removes it once
+   * the audio was exported (Export step, or a complete local-files copy).
+   * Transcripts always stay. `dryRun` only lists what would go.
+   */
+  const applyRetention = useCallback(async (dryRun = false): Promise<Meeting[]> => {
+    const rule = keepAudio();
+    if (rule === 'always') return [];
+    const now = Date.now();
+    const all = await listMeetings().catch(() => [] as Meeting[]);
+    const due = all.filter(
+      (m) =>
+        !m.audioRemovedAt &&
+        !m.unfinished &&
+        m.id !== activeIdRef.current &&
+        m.transcriptionStatus === 'completed' &&
+        (rule === '30d' ? now - m.createdAt > 30 * 24 * 3600 * 1000 : !!m.exports?.audio),
+    );
+    if (dryRun) return due;
+    for (const m of due) {
+      await deleteRecording(m.id).catch(() => undefined);
+      await updateMeeting(m.id, { audioRemovedAt: now }).catch(() => undefined);
+    }
+    if (due.length) await refresh();
+    return due;
+  }, [refresh]);
+
+  // Apply the Keep audio rule once per launch (after the list loaded).
+  useEffect(() => {
+    const t = window.setTimeout(() => void applyRetention().catch(() => undefined), 8000);
+    return () => window.clearTimeout(t);
+  }, [applyRetention]);
+
   const value = useMemo<AppState>(
     () => ({
       route,
@@ -1478,6 +1887,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       recordingIssues,
       storageWarning,
       startRecording,
+      addMoment,
+      labelMoment,
+      markAgenda,
+      editSegment,
+      renameSpeaker,
+      meetingParticipants,
+      setParticipants,
+      loadGitlabPeople,
+      detectSpeakers: detectSpeakersFor,
+      diarizing,
+      setWrapUp,
+      recordExport,
+      deleteAllMeetings,
+      applyRetention,
+      recordingLevels,
       pauseRecording,
       resumeRecording,
       retrySaving,
@@ -1516,6 +1940,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       importMeeting,
       gitlabConfig,
       createGitlabActionIssues,
+      postSummaryToWiki,
+      issueStates,
+      refreshIssueStates,
       saveGitlabConfig,
       uploadToGitlab,
       uploadSummaryToGitlab,
@@ -1531,6 +1958,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       remoteAsrConfig,
       saveRemoteAsrConfig,
       summarizeMeeting,
+      saveSummary,
       enableGpu,
       liveEnabled,
       setLiveTranscription,
@@ -1550,17 +1978,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     }),
     [
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
-      recordingIssues, storageWarning, startRecording, pauseRecording, resumeRecording, retrySaving, deleteMeeting, renameMeeting,
+      recordingIssues, storageWarning, startRecording, addMoment, labelMoment, markAgenda, editSegment, renameSpeaker, meetingParticipants, setParticipants, loadGitlabPeople,
+      detectSpeakersFor, diarizing, setWrapUp, recordExport, deleteAllMeetings, applyRetention, recordingLevels, pauseRecording, resumeRecording, retrySaving, deleteMeeting, renameMeeting,
       stopRecording, stopping, nativeDevices, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, summarizing, returnTo, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,
       liveDownload, downloadLiveModel, live,
       saveToDisk, setSaveToDisk, storageDir, openStorageDir, importMeeting,
-      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, createGitlabActionIssues, saveAgenda, uploadAgendaToGitlab,
+      gitlabConfig, saveGitlabConfig, uploadToGitlab, uploadSummaryToGitlab, createGitlabActionIssues, postSummaryToWiki, issueStates, refreshIssueStates, saveAgenda, uploadAgendaToGitlab,
       calendarConfig, saveCalendarConfig, switchCalendarProvider, fetchCalendarEvents, createCalendarEvent,
       updateInfo, checkUpdates,
-      llmConfig, saveLlmConfig, remoteAsrConfig, saveRemoteAsrConfig, summarizeMeeting,
+      llmConfig, saveLlmConfig, remoteAsrConfig, saveRemoteAsrConfig, summarizeMeeting, saveSummary,
       unfinished, recoverUnfinished, discardUnfinished, databaseError, resetDatabase, systemAudio,
     ],
   );

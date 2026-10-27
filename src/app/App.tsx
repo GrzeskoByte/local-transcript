@@ -1,42 +1,77 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useApp, ElapsedClock } from './store.tsx';
 import { modelChipLabel } from '../asr/model-manager';
 import { remoteAsrActive, remoteAsrLabel } from '../integrations/remote-asr';
-import { Dashboard } from './screens/Dashboard.tsx';
-import { NewMeeting } from './screens/NewMeeting.tsx';
-import { ActiveMeeting } from './screens/ActiveMeeting.tsx';
-import { MeetingDetail } from './screens/MeetingDetail.tsx';
+import { Home } from './screens/Home.tsx';
+import { Library } from './screens/Library.tsx';
+import { RecordingRoom } from './screens/RecordingRoom.tsx';
+import { MeetingScreen } from './screens/MeetingScreen.tsx';
+import { WrapUp } from './screens/WrapUp.tsx';
 import { Settings } from './screens/Settings.tsx';
-import { CalendarView } from './screens/CalendarView.tsx';
-import { GearIcon, CalendarIcon, ListIcon, LogoMark } from './components/icons.tsx';
+import { Setup } from './screens/Setup.tsx';
+import { ThemeQuick } from './components/ThemeQuick.tsx';
+import { isTypingTarget, keyParts, matches, shortcuts, subscribeShortcuts } from './shortcuts';
+import { useQuickRecord } from './quick-record';
+import { remindToRecord, usePrefsVersion } from './preferences';
+import { useUpcoming } from './upcoming';
 
-// Layout per DESIGN.md: black page frame → top banner (wordmark, phone-callout,
-// sticker) → white icon-label rail + content column → footer band.
+/** Keys as <kbd> chips ("Ctrl N"). */
+export function Keys({ binding }: { binding: string }): React.JSX.Element {
+  return <kbd>{keyParts(binding).join(' ')}</kbd>;
+}
+
+export function useShortcuts(): ReturnType<typeof shortcuts> {
+  const raw = useSyncExternalStore(subscribeShortcuts, () => JSON.stringify(shortcuts()));
+  return useMemo(() => JSON.parse(raw) as ReturnType<typeof shortcuts>, [raw]);
+}
+
+// Layout per DESIGN.md (Halftone Window): dotted desk → nav window (wordmark,
+// Home / Library / Settings, background-run cells, model status, theme, REC /
+// Record) → content → footer. Setup is full-screen; the recording room is ink.
 function Shell(): React.JSX.Element {
   const {
     route, go, recordingState, modelMeta, remoteAsrConfig, updateInfo, txStage, txProgress, meetings, pauseRecording, resumeRecording,
+    addMoment,
   } = useApp();
-  // Global keys: Ctrl/Cmd+N = new meeting (or back to the running one); P = pause/resume while recording.
+  const keys = useShortcuts();
+  const quickRecord = useQuickRecord();
+  usePrefsVersion();
+  const live = recordingState === 'RECORDING' || recordingState === 'PAUSED';
+
+  // Global keys (Settings → App & updates lets the user rebind them).
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const el = e.target as HTMLElement | null;
-      const typing = !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
-      const live = recordingState === 'RECORDING' || recordingState === 'PAUSED';
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+      const typing = isTypingTarget(e.target);
+      if (matches(e, keys.record)) {
         e.preventDefault();
-        go({ name: live ? 'active' : 'new' });
+        if (live) go({ name: 'active' });
+        else void quickRecord();
         return;
       }
-      if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'p' && route.name === 'active') {
+      if (matches(e, keys.search) && route.name !== 'detail') {
+        e.preventDefault();
+        if (route.name !== 'library') go({ name: 'library' });
+        requestAnimationFrame(() => document.querySelector<HTMLInputElement>('#library-search')?.focus());
+        return;
+      }
+      if (typing || route.name !== 'active') return;
+      if (matches(e, keys.pause)) {
+        e.preventDefault();
         if (recordingState === 'RECORDING') void pauseRecording();
         else if (recordingState === 'PAUSED') void resumeRecording();
+      } else if (matches(e, keys.moment) && live) {
+        e.preventDefault();
+        void addMoment().then(() =>
+          requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.moment-label:last-of-type')?.focus()),
+        );
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [go, route.name, recordingState, pauseRecording, resumeRecording]);
-  // Transcriptions run in the background: show them in the rail, and say
-  // when one finishes while the user is elsewhere.
+  }, [go, route.name, recordingState, pauseRecording, resumeRecording, addMoment, keys, live, quickRecord]);
+
+  // Transcriptions run in the background: show them in the nav window, and
+  // say when one finishes while the user is elsewhere.
   const running = Object.keys(txStage);
   const titleOf = (id: string): string => meetings.find((m) => m.id === id)?.title ?? 'Meeting';
   const [finished, setFinished] = useState<{ id: string; ok: boolean } | null>(null);
@@ -53,179 +88,195 @@ function Shell(): React.JSX.Element {
       const status = meeting?.transcriptionStatus;
       // Cancelled runs (back to not_started) and deleted meetings need no notice.
       if (status !== 'completed' && status !== 'failed') continue;
-      if (route.name === 'detail' && route.id === id) continue;
+      if ((route.name === 'detail' || route.name === 'wrapup') && route.id === id) continue;
       setFinished({ id, ok: status === 'completed' });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running.join(','), meetings]);
 
-  const recording = recordingState === 'RECORDING' || recordingState === 'PAUSED';
-  const modelDot = modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'downloading' ? 'working' : '';
+  // Remind to record when a calendar meeting starts (Home → Coming up).
+  const upcoming = useUpcoming();
+  const [reminder, setReminder] = useState<{ id: string; title: string } | null>(null);
+  const reminded = useRef(new Set<string>());
+  useEffect(() => {
+    if (!remindToRecord() || upcoming.events.length === 0) return;
+    const check = (): void => {
+      if (live) return;
+      const now = Date.now();
+      const due = upcoming.events.find((e) => {
+        const s = new Date(e.startIso).getTime();
+        return !reminded.current.has(e.id) && s <= now + 60_000 && s > now - 5 * 60_000;
+      });
+      if (due) {
+        reminded.current.add(due.id);
+        setReminder({ id: due.id, title: due.title });
+      }
+    };
+    check();
+    const t = setInterval(check, 20_000);
+    return () => clearInterval(t);
+  }, [upcoming.events, live]);
+
   const remoteServer = remoteAsrActive(remoteAsrConfig) ? remoteAsrLabel(remoteAsrConfig) : null;
+  const modelReady = remoteServer
+    ? 'ready'
+    : modelMeta.state === 'ready' ? 'ready' : modelMeta.state === 'downloading' ? 'working' : '';
+  const onHome = route.name === 'home';
+  const onLibrary = route.name === 'library' || route.name === 'detail' || route.name === 'wrapup';
+
+  if (route.name === 'setup') return <Setup step={route.step ?? 1} />;
 
   return (
-    <div className="layout">
-      <header className="topbar">
-        <button type="button" className="brand" onClick={() => go({ name: 'dashboard' })}>
-          <span className="brand-mark">
-            <LogoMark />
+    <div className={`layout${route.name === 'active' ? ' is-room' : ''}`}>
+      <nav className="topbar" aria-label="Main">
+        <button type="button" className="brand" title="Home" onClick={() => go({ name: 'home' })}>
+          <span className="dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
           </span>
-          <span className="brand-text">
-            <span className="brand-name">Local Transcriber</span>
-            <span className="brand-sub">Record now. Transcribe later. On this computer.</span>
-          </span>
+          <span className="brand-name">local-transcriber</span>
         </button>
-        <div className="topbar-right">
-          {recording ? (
-            <button
-              type="button"
-              className={`phone-callout live${recordingState === 'PAUSED' ? ' paused' : ''}`}
-              title="Open the recording in progress"
-              onClick={() => go({ name: 'active' })}
-            >
-              <span className="rec-lamp" aria-hidden="true" />
-              {recordingState === 'PAUSED' ? 'PAUSED' : 'REC'} <ElapsedClock />
-            </button>
-          ) : (
-            <span className="phone-callout">ON-DEVICE</span>
-          )}
+        <button type="button" className={`navlink${onHome ? ' active' : ''}`} aria-current={onHome ? 'page' : undefined} onClick={() => go({ name: 'home' })}>
+          Home
+        </button>
+        <button
+          type="button"
+          className={`navlink${onLibrary ? ' active' : ''}`}
+          aria-current={onLibrary ? 'page' : undefined}
+          onClick={() => go({ name: 'library' })}
+        >
+          Library
+        </button>
+        <button
+          type="button"
+          className={`navlink${route.name === 'settings' ? ' active' : ''}`}
+          aria-current={route.name === 'settings' ? 'page' : undefined}
+          onClick={() => go({ name: 'settings' })}
+        >
+          Settings
+        </button>
+        <span className="topbar-fill" aria-hidden="true" />
+        {running.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className="cell busy-chip"
+            title={`Open ${titleOf(id)}`}
+            onClick={() => go({ name: 'detail', id })}
+          >
+            {txStage[id] === 'queued' ? 'Queued' : `Transcribing ${Math.round((txProgress[id] ?? 0) * 100)}%`} · {titleOf(id)}
+          </button>
+        ))}
+        {updateInfo?.available && (
+          <button type="button" className="cell update-chip" onClick={() => go({ name: 'settings', tab: 'app' })}>
+            Update available · v{updateInfo.version}
+          </button>
+        )}
+        <button
+          type="button"
+          className={`cell model-chip ${modelReady}`}
+          title={remoteServer ? `Transcription server: ${remoteServer}: open model settings` : `${modelMeta.modelId} (${modelMeta.state.replace('_', ' ')}): open model settings`}
+          onClick={() => go({ name: 'settings', tab: 'models' })}
+        >
+          {remoteServer ? 'Server · Open WebUI' : modelChipLabel(modelMeta)}
+        </button>
+        <ThemeQuick />
+        {live ? (
           <button
             type="button"
-            className="sticker sticker-cta"
-            title="New meeting (Ctrl+N)"
-            onClick={() => go({ name: 'new' })}
+            className={`cell live${recordingState === 'PAUSED' ? ' paused' : ''}`}
+            title="Open the recording in progress"
+            onClick={() => go({ name: 'active' })}
           >
-            New meeting
+            <span className="lamp" aria-hidden="true" />
+            {recordingState === 'PAUSED' ? 'PAUSED' : 'REC'} <ElapsedClock />
           </button>
-        </div>
-      </header>
+        ) : (
+          <button type="button" className="cell record" title="Start recording" onClick={() => void quickRecord()}>
+            ● Record <Keys binding={keys.record} />
+          </button>
+        )}
+      </nav>
 
-      <div className="frame-body">
-        <aside className="sidebar">
-          <nav className="nav" aria-label="Main">
-            <button
-              className={`nav-item${route.name === 'dashboard' || route.name === 'detail' ? ' active' : ''}`}
-              onClick={() => go({ name: 'dashboard' })}
-            >
-              <ListIcon />
-              Meetings
-            </button>
-            {recording && (
-              <button
-                className={`nav-item${route.name === 'active' ? ' active' : ''}`}
-                onClick={() => go({ name: 'active' })}
-              >
-                <span className="live-dot" />
-                Recording…
-              </button>
-            )}
-            <button
-              className={`nav-item${route.name === 'calendar' ? ' active' : ''}`}
-              onClick={() => go({ name: 'calendar' })}
-            >
-              <CalendarIcon />
-              Calendar
-            </button>
-            <button
-              className={`nav-item${route.name === 'settings' ? ' active' : ''}`}
-              onClick={() => go({ name: 'settings' })}
-            >
-              <GearIcon />
-              Settings
-            </button>
-          </nav>
-          <div className="sidebar-footer">
-            {running.map((id) => (
-              <button
-                key={id}
-                type="button"
-                className="model-chip busy-chip"
-                title={`Open ${titleOf(id)}`}
-                onClick={() => go({ name: 'detail', id })}
-              >
-                <span className="model-dot working" />
-                {txStage[id] === 'queued'
-                  ? 'Queued'
-                  : `Transcribing ${Math.round((txProgress[id] ?? 0) * 100)}%`}{' '}
-                · {titleOf(id)}
-              </button>
-            ))}
-            {updateInfo?.available && (
-              <button
-                type="button"
-                className="update-chip"
-                onClick={() => go({ name: 'settings', tab: 'app' })}
-              >
-                Update available · v{updateInfo.version}
-              </button>
-            )}
+      <main className="main">
+        <div className={`container${route.name === 'home' || route.name === 'library' || route.name === 'detail' || route.name === 'active' || route.name === 'settings' || route.name === 'wrapup' ? ' wide' : ''}`}>
+          {route.name === 'active' ? (
+            <RecordingRoom />
+          ) : route.name === 'detail' ? (
+            <MeetingScreen id={route.id} query={route.q} tab={route.tab} />
+          ) : route.name === 'wrapup' ? (
+            <WrapUp id={route.id} step={route.step} />
+          ) : route.name === 'settings' ? (
+            <Settings />
+          ) : route.name === 'library' ? (
+            <Library view={route.view ?? 'list'} initialQuery={route.q} />
+          ) : (
+            <Home />
+          )}
+        </div>
+        {finished && (
+          <div className="notice-toast" role="status">
+            <span>
+              {finished.ok ? 'Transcript ready' : 'Transcription failed'}: {titleOf(finished.id)}
+            </span>
             <button
               type="button"
-              className="model-chip"
-              title={
-                remoteServer
-                  ? `Transcription server: ${remoteServer}: open model settings`
-                  : `${modelMeta.modelId} (${modelMeta.state.replace('_', ' ')}): open model settings`
-              }
-              onClick={() => go({ name: 'settings', tab: 'models' })}
+              className="btn btn-sm btn-primary"
+              onClick={() => {
+                go({ name: 'detail', id: finished.id });
+                setFinished(null);
+              }}
             >
-              <span className={`model-dot ${remoteServer ? 'ready' : modelDot}`} />
-              {remoteServer ? 'Server · Open WebUI' : modelChipLabel(modelMeta)}
+              Open
             </button>
-            <div className="seal" role="img" aria-label="Local speech engine">
-              <span className="seal-big">LOCAL</span>
-              <span className="seal-small">speech engine</span>
-            </div>
+            <button type="button" className="btn btn-sm" onClick={() => setFinished(null)}>
+              Dismiss
+            </button>
           </div>
-        </aside>
-
-        <main className="main">
-          <div className="container">
-            {route.name === 'new' ? (
-              <NewMeeting />
-            ) : route.name === 'active' ? (
-              <ActiveMeeting />
-            ) : route.name === 'detail' ? (
-              <MeetingDetail id={route.id} query={route.q} />
-            ) : route.name === 'settings' ? (
-              <Settings />
-            ) : route.name === 'calendar' ? (
-              <CalendarView />
-            ) : (
-              <Dashboard />
-            )}
+        )}
+        {reminder && !finished && (
+          <div className="notice-toast" role="status" aria-label="Meeting starting">
+            <span>{reminder.title} starts now.</span>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => {
+                setReminder(null);
+                void quickRecord(reminder.id);
+              }}
+            >
+              ● Record
+            </button>
+            <button type="button" className="btn btn-sm" onClick={() => setReminder(null)}>
+              Dismiss
+            </button>
           </div>
-          {finished && (
-            <div className="notice-toast" role="status">
-              <span>
-                {finished.ok ? 'Transcript ready' : 'Transcription failed'}: {titleOf(finished.id)}
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                onClick={() => {
-                  go({ name: 'detail', id: finished.id });
-                  setFinished(null);
-                }}
-              >
-                Open
-              </button>
-              <button type="button" className="btn btn-sm" onClick={() => setFinished(null)}>
-                Dismiss
-              </button>
-            </div>
-          )}
-          <footer className="footer-band">
-            {remoteServer
-              ? `Recordings stay on this device; Transcribe sends their speech to ${remoteServer}.`
-              : 'Recordings & transcripts never leave this device unless you upload them.'}
-          </footer>
-        </main>
-      </div>
+        )}
+      </main>
+      <footer className="footer-band">
+        {remoteServer
+          ? `Your recordings stay on this device; Transcribe sends their speech to ${remoteServer}.`
+          : 'Your recording and transcript stay on this device. Nothing leaves it unless you upload it.'}
+      </footer>
     </div>
   );
 }
 
 export function App(): React.JSX.Element {
   return <Shell />;
+}
+
+/** Shared by screens that need to wait for a click before a long action. */
+export function useBusy(): [string | null, (what: string, work: () => Promise<unknown>) => void, string | null, (e: string | null) => void] {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const run = useCallback((what: string, work: () => Promise<unknown>) => {
+    setBusy(what);
+    setError(null);
+    work()
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null));
+  }, []);
+  return [busy, run, error, setError];
 }

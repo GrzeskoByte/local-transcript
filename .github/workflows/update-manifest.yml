@@ -36,6 +36,9 @@ jobs:
           gh api --paginate "repos/${{ github.repository }}/releases" > releases.json
           node scripts/updater-manifest.mjs releases.json latest.json
           cat latest.json
+          # "Include test releases": canary pre-releases + stable, newest wins.
+          node scripts/updater-manifest.mjs --canary releases.json latest-canary.json
+          cat latest-canary.json
 
       - name: Upload to the `updater` release
         run: |
@@ -43,4 +46,4 @@ jobs:
             gh release create updater --title "In-app update manifest" \
               --notes "latest.json for the app's built-in updater. Do not delete." --latest=false
           fi
-          gh release upload updater latest.json --clobber
+          gh release upload updater latest.json latest-canary.json --clobber

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 /**
  * Recording diagnostics in a real engine: the inputs are synthetic so the
@@ -86,7 +86,7 @@ test('Mic + Device recording reports clipping, speaker bleed and a headset switc
   });
 
   await page.goto('/#/new');
-  await page.getByRole('button', { name: /Mic \+ Device/ }).click();
+  await page.getByRole('radiogroup', { name: 'Recording source' }).getByText('Call', { exact: true }).click();
   await page.locator('#meeting-title').fill('Diagnostics');
   await page.getByRole('button', { name: '● Start Recording' }).click();
   await expect(page.getByLabel('Recording in progress')).toBeVisible();

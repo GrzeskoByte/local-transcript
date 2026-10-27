@@ -6,11 +6,12 @@ import { readRecordingBlob } from '../../storage/recordings';
 import { getSegments } from '../../storage/transcripts';
 import { diskFileSize, saveBlobToDisk, saveFileToDisk } from '../../platform/desktop-storage';
 import { Mp4StreamRepair } from '../../audio/mp4-repair';
+import { namedSegments } from '../../domain/speakers';
 
 const encoder = new TextEncoder();
 
 /** `"Weekly planning-1a2b3c4d"` — readable, collision-proof enough. */
-function folderName(meeting: Pick<Meeting, 'id' | 'title'>): string {
+export function folderName(meeting: Pick<Meeting, 'id' | 'title'>): string {
   const base =
     (meeting.title || 'meeting')
       .replace(/[^\w\s-]+/g, '')
@@ -70,7 +71,7 @@ export async function mirrorMeetingToDisk(
     );
   }
 
-  const segments = await getSegments(meeting.id);
+  const segments = namedSegments(await getSegments(meeting.id), meeting.speakerNames);
   written.push(
     await saveFileToDisk(`${folder}/transcript.txt`, encoder.encode(segmentsToText(segments, agenda))),
   );

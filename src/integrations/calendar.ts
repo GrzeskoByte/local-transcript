@@ -68,6 +68,26 @@ export interface CalendarEventDraft {
   endIso: string;
   description: string;
   location: string;
+  /** Attendee e-mail addresses; the server sends them invitations. */
+  attendees?: string[];
+}
+
+const EMAIL = /^[^\s@<>,;:"]+@[^\s@<>,;:"]+\.[^\s@<>,;:"]+$/;
+
+/** Split "a@x.com, B <b@y.org>; c@z.io" into valid, unique, lower-cased addresses. */
+export function parseAttendees(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split(/[,;\n]+/)) {
+    const m = raw.match(/<([^>]+)>/);
+    const addr = (m ? m[1]! : raw).trim().toLowerCase();
+    if (EMAIL.test(addr) && !out.includes(addr)) out.push(addr);
+  }
+  return out;
+}
+
+/** The attendees that are valid e-mail addresses (what the builders send). */
+export function validAttendees(draft: CalendarEventDraft): string[] {
+  return parseAttendees((draft.attendees ?? []).join(','));
 }
 
 export interface CalendarCreateResult {
@@ -195,9 +215,16 @@ export function nextWorkingDay(from: Date): Date {
  */
 export function actionItemEventDraft(meeting: Meeting, item: ActionItem): CalendarEventDraft {
   let start: Date;
+  // "Mon Oct 26 10:00" → that time; a date alone → 09:00.
+  const time = item.due?.match(/\b(\d{1,2})[:.](\d{2})\b/);
+  const hh = time ? Math.min(23, Number(time[1])) : 9;
+  const mm = time ? Math.min(59, Number(time[2])) : 0;
   if (item.dueDate) {
     const [y, mo, d] = item.dueDate.split('-').map(Number);
-    start = new Date(y!, mo! - 1, d!, 9, 0);
+    start = new Date(y!, mo! - 1, d!, hh, mm);
+  } else if (time) {
+    start = nextWorkingDay(new Date(meeting.startedAt));
+    start.setHours(hh, mm, 0, 0);
   } else {
     start = nextWorkingDay(new Date(meeting.startedAt));
     start.setHours(10, 0, 0, 0);
@@ -227,8 +254,10 @@ function icsFold(line: string): string {
   return parts.join('\r\n');
 }
 
-/** Full .ics file for a CalDAV PUT. */
-export function buildIcsEvent(draft: CalendarEventDraft, uid: string): string {
+/** Full .ics file for a CalDAV PUT. With attendees it carries ORGANIZER (the account, when it is an e-mail) so the server invites them. */
+export function buildIcsEvent(draft: CalendarEventDraft, uid: string, organizer?: string): string {
+  const attendees = validAttendees(draft);
+  const org = organizer && EMAIL.test(organizer.trim()) ? organizer.trim().toLowerCase() : null;
   const stamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   const dt = (iso: string) => iso.replace(/[-:]/g, '') + '00';
   const lines = [
@@ -243,6 +272,8 @@ export function buildIcsEvent(draft: CalendarEventDraft, uid: string): string {
     `SUMMARY:${icsEscape(draft.title)}`,
     `DESCRIPTION:${icsEscape(draft.description)}`,
     ...(draft.location ? [`LOCATION:${icsEscape(draft.location)}`] : []),
+    ...(attendees.length && org ? [`ORGANIZER:mailto:${org}`] : []),
+    ...attendees.map((a) => `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${a}`),
     'END:VEVENT',
     'END:VCALENDAR',
   ];
@@ -257,11 +288,15 @@ export function buildGraphEvent(draft: CalendarEventDraft): string {
     start: { dateTime: draft.startIso, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
     end: { dateTime: draft.endIso, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
     ...(draft.location ? { location: { displayName: draft.location } } : {}),
+    ...(validAttendees(draft).length
+      ? { attendees: validAttendees(draft).map((address) => ({ emailAddress: { address }, type: 'required' })) }
+      : {}),
   });
 }
 
-/** SOAP envelope for EWS CreateItem (CalendarItem, no attendees). */
+/** SOAP envelope for EWS CreateItem (CalendarItem; attendees get invitations). */
 export function buildEwsCreateItem(draft: CalendarEventDraft): string {
+  const attendees = validAttendees(draft);
   const esc = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return `<?xml version="1.0" encoding="utf-8"?>` +
@@ -269,7 +304,7 @@ export function buildEwsCreateItem(draft: CalendarEventDraft): string {
     `xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" ` +
     `xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">` +
     `<soap:Header><t:RequestServerVersion Version="Exchange2013"/></soap:Header>` +
-    `<soap:Body><m:CreateItem SendMeetingInvitations="SendToNone">` +
+    `<soap:Body><m:CreateItem SendMeetingInvitations="${attendees.length ? 'SendToAllAndSaveCopy' : 'SendToNone'}">` +
     `<m:SavedItemFolderId><t:DistinguishedFolderId Id="calendar"/></m:SavedItemFolderId>` +
     `<m:Items><t:CalendarItem>` +
     `<t:Subject>${esc(draft.title)}</t:Subject>` +
@@ -277,6 +312,9 @@ export function buildEwsCreateItem(draft: CalendarEventDraft): string {
     `<t:Start>${esc(draft.startIso)}:00</t:Start>` +
     `<t:End>${esc(draft.endIso)}:00</t:End>` +
     (draft.location ? `<t:Location>${esc(draft.location)}</t:Location>` : '') +
+    (attendees.length
+      ? `<t:RequiredAttendees>${attendees.map((a) => `<t:Attendee><t:Mailbox><t:EmailAddress>${esc(a)}</t:EmailAddress></t:Mailbox></t:Attendee>`).join('')}</t:RequiredAttendees>`
+      : '') +
     `</t:CalendarItem></m:Items></m:CreateItem></soap:Body></soap:Envelope>`;
 }
 
@@ -320,7 +358,7 @@ export function buildTransport(
       endpoint: `${base}/${uid}.ics`,
       method: 'PUT',
       contentType: 'text/calendar; charset=utf-8',
-      body: buildIcsEvent(draft, uid),
+      body: buildIcsEvent(draft, uid, config.username),
       headers: [],
       ...authOf(config),
     };
@@ -413,6 +451,17 @@ export interface ServerEvent {
   provider: CalendarProvider;
   /** All-day event (start/end carry the date; time is a placeholder). */
   allDay?: boolean;
+  /** Event description (its agenda, when "Use event agendas" is on). */
+  description?: string;
+  /** A video-call link in the location/description (Zoom, Meet, Teams…). */
+  hasCallLink?: boolean;
+}
+
+const CALL_LINK = /https?:\/\/[^\s"<>]*(zoom\.us|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|webex\.com|whereby\.com|jit\.si)/i;
+
+/** Mark events with a video-call link (they start as "Call" recordings). */
+export function withCallLink<T extends { location: string; description?: string }>(e: T): T & { hasCallLink: boolean } {
+  return { ...e, hasCallLink: CALL_LINK.test(`${e.location} ${e.description ?? ''}`) };
 }
 
 /** `Date` → UTC `20261005T090000Z` for CalDAV time-range filters. */
@@ -452,7 +501,7 @@ export function parseCaldavReport(xml: string, range?: IcsRange): ServerEvent[] 
 
 /** Graph `{"value":[{subject,start:{dateTime},…}]}` → events. */
 export function parseGraphEvents(payload: string): ServerEvent[] {
-  let json: { value?: Array<{ id?: string; subject?: string; start?: { dateTime?: string }; end?: { dateTime?: string }; location?: { displayName?: string } }> };
+  let json: { value?: Array<{ id?: string; subject?: string; bodyPreview?: string; start?: { dateTime?: string }; end?: { dateTime?: string }; location?: { displayName?: string } }> };
   try {
     json = JSON.parse(payload);
   } catch {
@@ -464,6 +513,7 @@ export function parseGraphEvents(payload: string): ServerEvent[] {
     startIso: (e.start?.dateTime ?? '').slice(0, 16),
     endIso: (e.end?.dateTime ?? e.start?.dateTime ?? '').slice(0, 16),
     location: e.location?.displayName ?? '',
+    ...(e.bodyPreview ? { description: e.bodyPreview } : {}),
     provider: 'graph' as CalendarProvider,
   })).filter((e) => e.startIso);
 }

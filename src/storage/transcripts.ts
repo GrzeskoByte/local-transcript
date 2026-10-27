@@ -46,3 +46,39 @@ export async function deleteSegments(meetingId: string): Promise<void> {
     await db.delete(STORE, row.id);
   }
 }
+
+/**
+ * Change one line's text (the user fixed a word) or its speaker. No-op when
+ * the line is gone. Returns the updated line.
+ */
+export async function updateSegment(
+  id: string,
+  patch: Partial<Pick<TranscriptSegment, 'text' | 'speaker'>>,
+): Promise<TranscriptSegment | undefined> {
+  let updated: TranscriptSegment | undefined;
+  await db.transaction([STORE], 'readwrite', (t) => {
+    const segs = t.objectStore(STORE);
+    const req = segs.get(id);
+    req.onsuccess = () => {
+      const cur = req.result as TranscriptSegment | undefined;
+      if (!cur) return;
+      updated = { ...cur, ...patch };
+      segs.put(updated);
+    };
+  });
+  return updated;
+}
+
+/** Replace the speaker of every line at once (speaker detection result). */
+export async function setSegmentSpeakers(meetingId: string, speakers: Map<string, string>): Promise<void> {
+  await db.transaction([STORE], 'readwrite', (t) => {
+    const segs = t.objectStore(STORE);
+    const req = segs.index('by-meeting').getAll(meetingId);
+    req.onsuccess = () => {
+      for (const s of req.result as TranscriptSegment[]) {
+        const sp = speakers.get(s.id);
+        if (sp !== undefined) segs.put({ ...s, speaker: sp });
+      }
+    };
+  });
+}

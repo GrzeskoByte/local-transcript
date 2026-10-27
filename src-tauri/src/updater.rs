@@ -12,6 +12,9 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 const RELEASES_URL: &str = "https://github.com/GrzeskoByte/local-transcript/releases";
+/// Test releases (Settings → App: "Include test releases"): canary builds
+/// and stable ones, whichever is newer. Built next to `latest.json`.
+const CANARY_MANIFEST: &str = "https://github.com/GrzeskoByte/local-transcript/releases/download/updater/latest-canary.json";
 
 #[derive(Default)]
 pub struct UpdateState {
@@ -72,11 +75,18 @@ fn set_progress(app: &AppHandle, f: impl FnOnce(&mut UpdateProgress)) {
 pub async fn native_update_check(
     app: AppHandle,
     state: State<'_, UpdateState>,
+    channel: Option<String>,
 ) -> Result<UpdateInfo, String> {
     let current_version = app.package_info().version.to_string();
-    let updater = app
-        .updater()
-        .map_err(|e| format!("Updater unavailable: {e}"))?;
+    let updater = if channel.as_deref() == Some("canary") {
+        let url = tauri::Url::parse(CANARY_MANIFEST).map_err(|e| e.to_string())?;
+        app.updater_builder()
+            .endpoints(vec![url])
+            .and_then(|b| b.build())
+            .map_err(|e| format!("Updater unavailable: {e}"))?
+    } else {
+        app.updater().map_err(|e| format!("Updater unavailable: {e}"))?
+    };
     let update = updater
         .check()
         .await
@@ -111,6 +121,7 @@ pub async fn native_update_check(
 pub async fn native_update_install(
     app: AppHandle,
     state: State<'_, UpdateState>,
+    relaunch: Option<bool>,
 ) -> Result<(), String> {
     if !can_self_update() {
         return Err("This installation cannot update itself; download the new version instead.".into());
@@ -143,9 +154,20 @@ pub async fn native_update_install(
         });
         return Err(msg);
     }
+    // "On next launch": the new version is installed and starts next time.
+    if relaunch == Some(false) {
+        set_progress(&app, |p| p.stage = "installed".into());
+        return Ok(());
+    }
     set_progress(&app, |p| p.stage = "restarting".into());
     crate::relaunch::relaunch(&app);
     Ok(())
+}
+
+/// Restart into an update installed with "On next launch".
+#[tauri::command]
+pub fn native_relaunch(app: AppHandle) {
+    crate::relaunch::relaunch(&app);
 }
 
 #[tauri::command]

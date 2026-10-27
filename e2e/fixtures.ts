@@ -10,7 +10,14 @@ import { join } from 'node:path';
  * specs run in a persistent context (fresh profile per test). Other engines
  * keep Playwright's default context.
  */
-export const test = base.extend({
+export const test = base.extend<{ e2eDefaults: boolean }>({
+  /**
+   * Most specs test one feature and start from a known state: first-run setup
+   * skipped and the after-Stop wrap-up off (Stop opens the meeting). Specs for
+   * those flows turn it off with `test.use({ e2eDefaults: false })`. Applied
+   * once per tab (sessionStorage guard) so a spec can still change the prefs.
+   */
+  e2eDefaults: [true, { option: true }],
   context: async ({ context, browserName, playwright }, use, testInfo) => {
     if (browserName !== 'webkit') {
       await use(context);
@@ -35,14 +42,23 @@ export const test = base.extend({
       await rm(dir, { recursive: true, force: true });
     }
   },
-  page: async ({ context, browserName, page }, use) => {
+  page: async ({ context, browserName, page, e2eDefaults }, use) => {
     // The default page belongs to the default context; on WebKit use one of
     // the persistent context instead.
-    if (browserName !== 'webkit') {
-      await use(page);
-      return;
+    const p = browserName !== 'webkit' ? page : (context.pages()[0] ?? (await context.newPage()));
+    if (e2eDefaults) {
+      await p.addInitScript(() => {
+        try {
+          if (sessionStorage.getItem('e2e-defaults')) return;
+          sessionStorage.setItem('e2e-defaults', '1');
+          localStorage.setItem('setup-skipped', 'true');
+          if (!localStorage.getItem('wrapup-prefs')) localStorage.setItem('wrapup-prefs', JSON.stringify({ guide: false }));
+        } catch {
+          /* storage unavailable */
+        }
+      });
     }
-    await use(context.pages()[0] ?? (await context.newPage()));
+    await use(p);
   },
 });
 

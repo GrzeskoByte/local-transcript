@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page, Route } from '@playwright/test';
 
 /**
@@ -69,7 +69,7 @@ async function configure(page: Page): Promise<void> {
   await card.getByLabel('Use the transcription server').check();
   await card.getByRole('button', { name: 'Save server settings' }).click();
   await expect(card.getByRole('status')).toContainText('Transcribe now uses the transcription server');
-  await expect(card.getByText('On', { exact: true })).toBeVisible();
+  await expect(card.getByText('[x] On', { exact: true })).toBeVisible();
 }
 
 test('settings: test, save and survive a reload', async ({ page }) => {

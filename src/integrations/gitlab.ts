@@ -30,6 +30,40 @@ export interface GitlabConfig {
   target: GitlabTarget;
   /** Branch used for the `file` target. */
   branch: string;
+  /** Labels on issues made from action items (comma-separated). */
+  labels?: string;
+  /** Assign the issue when the owner's name matches one project member. */
+  assignByName?: boolean;
+  /** Quote the transcript line (with its timestamp) the item came from. */
+  linkBack?: boolean;
+  /** Post each summary to the wiki page `Meetings/<date>-<title>`. */
+  wikiSummaries?: boolean;
+  /** Project/group pickers list only those the user is a member of (default true). */
+  membersOnly?: boolean;
+}
+
+/** A project the token can see (for the project pickers). */
+export interface GitlabProject {
+  id: number;
+  path: string;
+  name: string;
+  webUrl: string;
+}
+
+/** A group the token can see. */
+export interface GitlabGroup {
+  id: number;
+  path: string;
+  name: string;
+}
+
+/** A person from a project or group member list (meeting participants, assignees, attendees). */
+export interface GitlabPerson {
+  id: number;
+  username: string;
+  name: string;
+  /** Public e-mail from the user's profile, when they set one. */
+  email?: string;
 }
 
 export const DEFAULT_GITLAB_CONFIG: GitlabConfig = {
@@ -38,7 +72,41 @@ export const DEFAULT_GITLAB_CONFIG: GitlabConfig = {
   token: '',
   target: 'wiki',
   branch: 'main',
+  labels: 'local-transcribe, action-item',
+  assignByName: true,
+  linkBack: true,
+  wikiSummaries: true,
 };
+
+/** Per-issue changes made in the wrap-up's GitLab step. */
+export interface IssueOverride {
+  title?: string;
+  /** Project member id; 0 = nobody; undefined = match by name. */
+  assigneeId?: number;
+  /** Comma-separated; replaces the default labels. */
+  labels?: string;
+}
+
+/** The transcript line an action item came from (most shared words), for "Link back". */
+export function quoteFor(item: ActionItem, segments: TranscriptSegment[]): TranscriptSegment | null {
+  const words = (t: string) => new Set(t.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? []);
+  const want = words(item.task);
+  if (want.size === 0) return null;
+  let best: TranscriptSegment | null = null;
+  let bestScore = 0;
+  for (const s of segments) {
+    let score = 0;
+    for (const w of words(s.text)) if (want.has(w)) score += 1;
+    if (score > bestScore) [best, bestScore] = [s, score];
+  }
+  return bestScore >= Math.min(2, want.size) ? best : null;
+}
+
+/** "Meetings/2026-10-21-q4-roadmap-sync" (wiki page for "Post summaries to the wiki"). */
+export function wikiSummaryTitle(meeting: Meeting): string {
+  const date = new Date(meeting.startedAt).toISOString().slice(0, 10);
+  return `Meetings/${date}-${slugify(meeting.title || 'meeting')}`;
+}
 
 export const GITLAB_TARGET_LABELS: Record<GitlabTarget, string> = {
   wiki: 'Wiki page',
@@ -139,9 +207,14 @@ export function agendaMarkdown(meeting: Meeting): string {
 }
 
 /** Issue title + description for one action item. */
-export function actionItemIssue(meeting: Meeting, item: ActionItem): { title: string; description: string } {
+export function actionItemIssue(
+  meeting: Meeting,
+  item: ActionItem,
+  quote?: TranscriptSegment | null,
+): { title: string; description: string } {
   const date = new Date(meeting.startedAt).toISOString().slice(0, 10);
   const title = item.task.length > 250 ? `${item.task.slice(0, 247)}…` : item.task;
+  const at = quote ? `${String(Math.floor(quote.startMs / 60000)).padStart(2, '0')}:${String(Math.floor((quote.startMs % 60000) / 1000)).padStart(2, '0')}` : '';
   const description = [
     item.task,
     '',
@@ -149,6 +222,7 @@ export function actionItemIssue(meeting: Meeting, item: ActionItem): { title: st
     ...(item.due ? [`**Due:** ${item.due}`] : []),
     ...(item.owner || item.due ? [''] : []),
     `From the meeting **${meeting.title || 'Untitled'}** (${date}).`,
+    ...(quote ? ['', `> ${quote.speaker ? `${quote.speaker}: ` : ''}${quote.text.trim()} _(at ${at})_`] : []),
     ...(meeting.summary?.text ? ['', '> ' + meeting.summary.text.replace(/\n+/g, ' ')] : []),
     '',
     '_Created by Local Transcribe from the meeting summary._',
@@ -162,6 +236,8 @@ export interface ActionIssueResult {
   iid?: number;
   /** GitLab username the issue was assigned to. */
   assignee?: string;
+  /** Project path the issue lives in. */
+  project?: string;
 }
 
 export function meetingPageTitle(meeting: Meeting): string {
@@ -272,19 +348,35 @@ export class GitlabClient {
    * calendar date. Items are created in order; the first failure stops the
    * run and is thrown with what was created so far (`created`).
    */
-  async createActionItemIssues(meeting: Meeting, items: ActionItem[]): Promise<ActionIssueResult[]> {
+  async createActionItemIssues(
+    meeting: Meeting,
+    items: ActionItem[],
+    opts: { overrides?: Record<string, IssueOverride>; segments?: TranscriptSegment[] } = {},
+  ): Promise<ActionIssueResult[]> {
     const project = encodeProject(this.config.project);
     const created: ActionIssueResult[] = [];
+    const defaultLabels = (this.config.labels ?? DEFAULT_GITLAB_CONFIG.labels!).split(',').map((l) => l.trim()).filter(Boolean).join(',');
     for (const item of items) {
       try {
-        const assignee = item.owner ? await this.findMember(item.owner) : null;
-        const { title, description } = actionItemIssue(meeting, item);
+        const o = opts.overrides?.[item.text] ?? {};
+        const assignee =
+          o.assigneeId !== undefined
+            ? o.assigneeId > 0
+              ? { id: o.assigneeId, username: (await this.memberName(o.assigneeId)) ?? '' }
+              : null
+            : item.owner && this.config.assignByName !== false
+              ? await this.findMember(item.owner)
+              : null;
+        const quote = this.config.linkBack !== false && opts.segments ? quoteFor(item, opts.segments) : null;
+        const built = actionItemIssue(meeting, item, quote);
+        const title = o.title?.trim() || built.title;
+        const labels = o.labels !== undefined ? o.labels.split(',').map((l) => l.trim()).filter(Boolean).join(',') : defaultLabels;
         const issue = await this.request<{ web_url?: string; iid?: number }>(`/projects/${project}/issues`, {
           method: 'POST',
           body: JSON.stringify({
             title,
-            description,
-            labels: 'local-transcribe,action-item',
+            description: built.description,
+            labels,
             ...(item.dueDate ? { due_date: item.dueDate } : {}),
             ...(assignee ? { assignee_ids: [assignee.id] } : {}),
           }),
@@ -292,6 +384,7 @@ export class GitlabClient {
         const path = this.config.project.trim().replace(/^\/+|\/+$/g, '');
         created.push({
           item: item.text,
+          project: path,
           url: issue.web_url ?? `${instanceRoot(this.config.url)}/${path}/-/issues/${issue.iid}`,
           ...(issue.iid !== undefined ? { iid: issue.iid } : {}),
           ...(assignee ? { assignee: assignee.username } : {}),
@@ -302,6 +395,93 @@ export class GitlabClient {
       }
     }
     return created;
+  }
+
+  /** Project members (for the assignee picker). */
+  async listMembers(project = this.config.project): Promise<Array<{ id: number; username: string; name: string }>> {
+    return this.request(`/projects/${encodeProject(project)}/members/all?per_page=100`);
+  }
+
+  /** Projects for the pickers: the user's own (membership) or every one they can see, optionally filtered. */
+  async listProjects(opts: { search?: string; groupId?: number } = {}): Promise<GitlabProject[]> {
+    const q = new URLSearchParams({ simple: 'true', per_page: '100', order_by: 'last_activity_at' });
+    if (opts.search?.trim()) q.set('search', opts.search.trim());
+    let path: string;
+    if (opts.groupId !== undefined) {
+      q.set('include_subgroups', 'true');
+      path = `/groups/${opts.groupId}/projects?${q}`;
+    } else {
+      if (this.config.membersOnly !== false) q.set('membership', 'true');
+      path = `/projects?${q}`;
+    }
+    const list = await this.request<{ id: number; path_with_namespace: string; name_with_namespace: string; web_url: string }[]>(path);
+    return list.map((p) => ({ id: p.id, path: p.path_with_namespace, name: p.name_with_namespace, webUrl: p.web_url }));
+  }
+
+  /** Groups for the pickers (only those the user belongs to unless `membersOnly` is off). */
+  async listGroups(search?: string): Promise<GitlabGroup[]> {
+    const q = new URLSearchParams({ per_page: '100', order_by: 'name' });
+    if (this.config.membersOnly !== false) q.set('min_access_level', '10');
+    if (search?.trim()) q.set('search', search.trim());
+    const list = await this.request<{ id: number; full_path: string; full_name: string }[]>(`/groups?${q}`);
+    return list.map((g) => ({ id: g.id, path: g.full_path, name: g.full_name }));
+  }
+
+  /**
+   * Members of a project or group (inherited ones included), with the public
+   * e-mail of each when their profile shows one (one request per person,
+   * best-effort, first 50).
+   */
+  async listPeople(from: { project: string } | { groupId: number }): Promise<GitlabPerson[]> {
+    const base = 'project' in from ? `/projects/${encodeProject(from.project)}` : `/groups/${from.groupId}`;
+    const members = await this.request<{ id: number; username: string; name: string; state?: string; email?: string; public_email?: string }[]>(
+      `${base}/members/all?per_page=100`,
+    );
+    const active = members.filter((m) => m.state !== 'blocked' && !/^(project|group)_\d+_bot/.test(m.username));
+    const out: GitlabPerson[] = [];
+    for (const [i, m] of active.entries()) {
+      let email = m.email || m.public_email || undefined;
+      if (!email && i < 50) {
+        try {
+          const u = await this.request<{ public_email?: string | null }>(`/users/${m.id}`);
+          email = u.public_email || undefined;
+        } catch {
+          /* a hidden profile is fine */
+        }
+      }
+      out.push({ id: m.id, username: m.username, name: m.name, ...(email ? { email } : {}) });
+    }
+    return out;
+  }
+
+  /** Project labels (for the label picker). */
+  async listLabels(): Promise<string[]> {
+    const labels = await this.request<{ name: string }[]>(`/projects/${encodeProject(this.config.project)}/labels?per_page=100`);
+    return labels.map((l) => l.name);
+  }
+
+  /** Open/closed state of issues by iid (the meeting's GitLab tab). */
+  async issueStates(iids: number[], project = this.config.project): Promise<Record<number, 'opened' | 'closed'>> {
+    if (iids.length === 0) return {};
+    const query = iids.map((i) => `iids[]=${i}`).join('&');
+    const issues = await this.request<{ iid: number; state: 'opened' | 'closed' }[]>(
+      `/projects/${encodeProject(project)}/issues?${query}&per_page=100`,
+    );
+    return Object.fromEntries(issues.map((i) => [i.iid, i.state]));
+  }
+
+  /** Post the summary to the wiki page `Meetings/<date>-<title>` (create or update). */
+  async postSummaryToWiki(meeting: Meeting): Promise<GitlabUploadResult> {
+    return this.uploadWiki(wikiSummaryTitle(meeting), summaryMarkdown(meeting));
+  }
+
+  private async memberName(id: number): Promise<string | null> {
+    try {
+      const m = await this.request<{ username: string }>(`/projects/${encodeProject(this.config.project)}/members/all/${id}`);
+      return m.username;
+    } catch {
+      return null;
+    }
   }
 
   /** The project member an owner name means, when exactly one matches. */

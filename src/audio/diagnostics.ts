@@ -312,6 +312,16 @@ export class RecordingDiagnosticsCollector {
     }
   }
 
+  /** Current peak (0..1) of each tapped input, for the recording screen's level bars. */
+  liveLevels(): Array<{ role: ProbeRole; level: number }> {
+    return this.probes.map((p) => {
+      p.analyser.getFloatTimeDomainData(p.time);
+      let peak = 0;
+      for (const v of p.time) peak = Math.max(peak, Math.abs(v));
+      return { role: p.role, level: Math.min(1, peak) };
+    });
+  }
+
   private poll(): void {
     const t = this.atMs() / 1000;
     const sampleRate = this.ctx?.sampleRate ?? 48000;

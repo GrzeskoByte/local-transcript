@@ -12,6 +12,7 @@
 mod capture;
 mod dsp;
 mod engine;
+pub mod monitor;
 mod ogg;
 mod stats;
 
@@ -169,6 +170,8 @@ fn start_blocking(app_root: std::path::PathBuf, mirror_root: Option<std::path::P
     if lock(session()).is_some() {
         return Err("A recording is already running.".into());
     }
+    // The level monitor (Home, setup) holds the devices: release them first.
+    monitor::shutdown();
     let roles: Vec<Role> = match req.mode.as_str() {
         "speaker" => vec![Role::Microphone],
         "device" => vec![Role::Device],
@@ -255,6 +258,11 @@ fn stop_blocking() -> Result<StopReply, String> {
         mirror_ok: engine.store.mirror_ok,
         diagnostics: engine.diagnostics(),
     })
+}
+
+/// A recording is running (the level monitor stays off meanwhile).
+pub fn is_recording() -> bool {
+    lock(session()).is_some()
 }
 
 /// Stop and save a running recording when the app quits.

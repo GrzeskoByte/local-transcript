@@ -119,6 +119,7 @@ export class NativeRecorder {
   private accumulatedMs = 0;
   private runningSince: number | null = null;
   private lastDiagnostics: NativeDiagnostics | null = null;
+  private lastLevels: number[] = [];
   private mirrorOk = true;
   private resumeState: 'RECORDING' | 'PAUSED' = 'RECORDING';
 
@@ -153,6 +154,11 @@ export class NativeRecorder {
   }
 
   /** Recorded time, excluding pauses (the clock the UI shows). */
+  /** Peak level (0..1) per input from the last poll (microphone first, then system sound). */
+  levels(): number[] {
+    return this.lastLevels;
+  }
+
   getElapsedMs(): number {
     return this.accumulatedMs + (this.runningSince !== null ? Date.now() - this.runningSince : 0);
   }
@@ -194,6 +200,7 @@ export class NativeRecorder {
       const s = await invokeDesktop<NativeStatus>('native_recorder_poll', { diagnostics: withDiag });
       if (!s || s.state === 'idle') return;
       if (s.diagnostics) this.lastDiagnostics = s.diagnostics;
+      if (Array.isArray(s.levels)) this.lastLevels = s.levels;
       this.mirrorOk = s.mirrorOk !== false;
       if (s.state === 'error' && this.state !== 'ERROR' && this.state !== 'STOPPING') {
         this.error = new Error(s.error ?? 'Recording error');

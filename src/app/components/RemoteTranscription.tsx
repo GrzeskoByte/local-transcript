@@ -5,16 +5,25 @@ import {
   REMOTE_ASR_DEFAULT_PATH,
   remoteAsrConfigProblem,
   remoteAsrEndpoint,
+  type RemoteAsrConfig,
 } from '../../integrations/remote-asr';
+import { logNetwork } from '../../platform/network-log';
 
 /** Settings → Models: transcribe on the user's Open WebUI server instead of this computer. */
 export function RemoteTranscriptionSettings(): React.JSX.Element {
   const { remoteAsrConfig, saveRemoteAsrConfig } = useApp();
   const [draft, setDraft] = useState(remoteAsrConfig);
+  const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  // The stored config loads after first render.
-  useEffect(() => setDraft(remoteAsrConfig), [remoteAsrConfig]);
+  // The stored config loads after first render; never overwrite typing.
+  useEffect(() => {
+    if (!dirty) setDraft(remoteAsrConfig);
+  }, [remoteAsrConfig, dirty]);
+  const edit = (patch: Partial<RemoteAsrConfig>): void => {
+    setDirty(true);
+    setDraft((d) => ({ ...d, ...patch }));
+  };
 
   const problem = remoteAsrConfigProblem(draft);
   const on = remoteAsrConfig.enabled && remoteAsrConfigProblem(remoteAsrConfig) === null;
@@ -32,7 +41,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
     <section className="card" aria-label="Transcription server">
       <div className="model-title">
         <strong>Transcription server (Open WebUI)</strong>
-        {on && <span className="badge badge-ok">On</span>}
+        {on && <span className="badge badge-ok">[x] On</span>}
       </div>
       <div className="muted">
         Optional: transcribe recordings on your own Open WebUI server instead of this computer. When it is on,
@@ -43,7 +52,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
         <input
           type="checkbox"
           checked={draft.enabled}
-          onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+          onChange={(e) => edit({ enabled: e.target.checked })}
         />
         Use the transcription server
       </label>
@@ -52,7 +61,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
         id="remote-asr-url"
         className="input"
         value={draft.baseUrl}
-        onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
+        onChange={(e) => edit({ baseUrl: e.target.value })}
         placeholder="https://chat.example.com"
         inputMode="url"
         autoComplete="off"
@@ -62,7 +71,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
         id="remote-asr-path"
         className="input"
         value={draft.path}
-        onChange={(e) => setDraft({ ...draft, path: e.target.value })}
+        onChange={(e) => edit({ path: e.target.value })}
         placeholder={REMOTE_ASR_DEFAULT_PATH}
       />
       <label className="field-label" htmlFor="remote-asr-key">API key</label>
@@ -71,7 +80,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
         className="input"
         type="password"
         value={draft.apiKey}
-        onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
+        onChange={(e) => edit({ apiKey: e.target.value })}
         placeholder="Open WebUI → Settings → Account → API keys"
         autoComplete="off"
       />
@@ -80,7 +89,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
         id="remote-asr-model"
         className="input"
         value={draft.model}
-        onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+        onChange={(e) => edit({ model: e.target.value })}
         placeholder="Leave empty to use the server's speech-to-text setting"
       />
       <p className="muted small mb-0" aria-label="Transcription endpoint">
@@ -94,6 +103,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
           onClick={() =>
             run(async () => {
               await saveRemoteAsrConfig({ ...draft, baseUrl: draft.baseUrl.trim(), path: draft.path.trim() || REMOTE_ASR_DEFAULT_PATH });
+              setDirty(false);
               return draft.enabled
                 ? 'Saved. Transcribe now uses the transcription server.'
                 : 'Saved. Transcription runs on this computer.';
@@ -107,6 +117,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
           disabled={busy || problem !== null}
           onClick={() =>
             run(async () => {
+              logNetwork(remoteAsrEndpoint(draft), 'Tested the transcription server', '1 s of silence');
               await new RemoteAsrClient(draft).testConnection();
               return 'Transcription server answered.';
             })

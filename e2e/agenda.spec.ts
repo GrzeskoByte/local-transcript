@@ -1,9 +1,9 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
 
 /**
  * Agenda: planned on New Meeting, visible while recording, editable on
- * Meeting Detail, included in exports. Also: the sidebar model chip reflects
+ * Meeting Detail, included in exports. Also: the nav model chip reflects
  * a model that is already on disk. Only the Tauri bridge is mocked.
  */
 async function mockInstalledModel(page: Page): Promise<void> {
@@ -40,10 +40,10 @@ async function mockInstalledModel(page: Page): Promise<void> {
   });
 }
 
-test('sidebar shows the installed model even without a saved selection', async ({ page }) => {
+test('nav shows the installed model even without a saved selection', async ({ page }) => {
   await mockInstalledModel(page);
   await page.goto('/');
-  await expect(page.locator('.sidebar .model-chip')).toHaveText('Model: base.en');
+  await expect(page.locator('.topbar .model-chip')).toHaveText('Model: base.en');
 });
 
 test('agenda: plan, record, edit and export', async ({ page }) => {
@@ -52,6 +52,7 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await mockInstalledModel(page);
   await page.goto('/#/new');
   await page.locator('#meeting-title').fill('Agenda Meeting');
+  await page.getByRole('button', { name: 'Devices, agenda & live draft…' }).click();
   await page.getByRole('button', { name: '+ Add agenda' }).click();
   await page.getByLabel('Topic 1', { exact: true }).fill('Status update');
   await page.getByLabel('Minutes for topic 1').fill('10');
@@ -67,6 +68,7 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await page.getByRole('button', { name: '■ Stop & save' }).click();
   await page.getByRole('button', { name: 'Yes, stop & save' }).click();
   await expect(page).toHaveURL(/#\/meeting\//);
+  await page.getByRole('tab', { name: /Summary/ }).click();
 
   const card = page.getByRole('region', { name: 'Meeting agenda' });
   await expect(card).toContainText('3 topics');
@@ -80,7 +82,8 @@ test('agenda: plan, record, edit and export', async ({ page }) => {
   await page.reload();
   await expect(page.getByRole('region', { name: 'Meeting agenda' })).toContainText('@anna · 15 min');
 
-  await page.getByRole('button', { name: 'Agenda file', exact: true }).click();
+  await page.getByRole('button', { name: 'Export ▾' }).click();
+  await page.getByRole('menuitem', { name: 'Agenda file', exact: true }).click();
   await expect(page.getByRole('status', { name: 'Export saved' })).toContainText(
     'Saved to /home/me/Downloads/Agenda-Meeting-agenda.md',
   );

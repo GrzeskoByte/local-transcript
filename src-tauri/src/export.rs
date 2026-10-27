@@ -80,7 +80,9 @@ pub async fn native_reveal_export(app: AppHandle, path: String) -> Result<(), St
     let dir = export_dir(&app)?;
     let target = PathBuf::from(&path);
     let parent = target.parent().ok_or("Invalid path")?;
-    if parent != dir || !target.is_file() {
+    // Exports land in Downloads, or (Export step) in a meeting folder of the local-files folder.
+    let in_storage = crate::storage::storage_root(&app).is_ok_and(|root| parent.starts_with(&root) && !path.contains(".."));
+    if (parent != dir && !in_storage) || !target.is_file() {
         return Err("Not an exported file".into());
     }
     let opener = if cfg!(target_os = "macos") {

@@ -6,11 +6,19 @@
 # Each release also carries SHA256SUMS.txt.
 #
 # Every build bundles the whisper.cpp CLI (scripts/build-engine.sh → sidecar
-# `lt-whisper`), so a fresh install transcribes without installing anything.
+# `lt-whisper`), so a fresh install transcribes without installing anything,
+# and the sherpa-onnx speaker-detection runtime (scripts/fetch-diarizer.sh →
+# resource `diarize/`).
 #
 # Trigger: push a tag `v<version>` matching package.json / tauri.conf.json /
 # Cargo.toml, or run manually (Actions → Release → Run workflow).
 # Releases are created as DRAFTS by default: review, then publish.
+#
+# Canary (Actions → Release → Run workflow, channel = canary, any branch):
+# publishes PRE-RELEASES tagged v<next-patch>-canary.<run>-<platform> straight
+# away (never drafts). The app inside reports <next>-<run>; `latest.json`
+# only reads v<x.y.z>-<platform> tags, so stable users are never offered a
+# canary, while `latest-canary.json` ("Include test releases") offers both.
 name: Release
 
 on:
@@ -18,8 +26,13 @@ on:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
     inputs:
+      channel:
+        description: stable = v<version>-<platform>; canary = pre-release v<next>-canary.<run>-<platform>, published at once
+        type: choice
+        options: [stable, canary]
+        default: stable
       draft:
-        description: Create the releases as drafts (review before publishing)
+        description: Create the releases as drafts (review before publishing; ignored for canary)
         type: boolean
         default: true
       prerelease:
@@ -48,6 +61,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      label: ${{ steps.version.outputs.label }}
+      appver: ${{ steps.version.outputs.appver }}
+      canary: ${{ steps.version.outputs.canary }}
       build-matrix: ${{ steps.matrix.outputs.build }}
       publish-matrix: ${{ steps.matrix.outputs.publish }}
     steps:
@@ -66,6 +82,19 @@ jobs:
             echo "::error::Tag ${GITHUB_REF_NAME} does not match version v$pkg."; exit 1
           fi
           echo "version=$pkg" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.channel }}" = "canary" ]; then
+            next=$(node -p "const [a,b,c]='$pkg'.split('.').map(Number); [a,b,c+1].join('.')")
+            echo "label=$next-canary.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            # The app inside reports <next>-<run> (numeric pre-release: MSI accepts
+            # it, and semver puts it before <next>), so the updater can tell
+            # canaries apart and still moves to the stable <next>.
+            echo "appver=$next-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "canary=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "label=$pkg" >> "$GITHUB_OUTPUT"
+            echo "appver=$pkg" >> "$GITHUB_OUTPUT"
+            echo "canary=false" >> "$GITHUB_OUTPUT"
+          fi
       - id: matrix
         name: Select platforms
         env:
@@ -142,6 +171,18 @@ jobs:
         shell: bash
         run: scripts/build-engine.sh ${{ matrix.target }} "$WHISPER_CPP_VERSION"
 
+      - name: Cache speaker-detection runtime
+        id: diarize-cache
+        uses: actions/cache@v5
+        with:
+          path: src-tauri/diarize
+          key: lt-diarize-${{ matrix.target }}-${{ hashFiles('scripts/fetch-diarizer.sh') }}
+
+      - name: Fetch speaker-detection runtime (sherpa-onnx)
+        if: steps.diarize-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/fetch-diarizer.sh ${{ matrix.target }}
+
       - name: Build app bundles
         shell: bash
         env:
@@ -181,13 +222,17 @@ jobs:
           if [ "${{ matrix.platform }}" = "ubuntu" ]; then
             extra+=(--config src-tauri/tauri.appimage.conf.json)
           fi
+          if [ "${{ needs.prepare.outputs.canary }}" = "true" ]; then
+            echo '{"version": "${{ needs.prepare.outputs.appver }}"}' > src-tauri/tauri.version.conf.json
+            extra+=(--config src-tauri/tauri.version.conf.json)
+          fi
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             extra+=(--config src-tauri/tauri.updater.conf.json)
           else
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set — building without in-app update artifacts."
           fi
           npm run tauri:build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
-            --config src-tauri/tauri.engine.conf.json "${extra[@]}"
+            --config src-tauri/tauri.engine.conf.json --config src-tauri/tauri.diarize.conf.json "${extra[@]}"
 
       - name: Collect installers
         shell: bash
@@ -196,7 +241,7 @@ jobs:
           [ "$os_name" = "ubuntu" ] && os_name=linux
           node scripts/collect-release.mjs \
             "src-tauri/target/${{ matrix.target }}/release/bundle" release \
-            "${{ needs.prepare.outputs.version }}" "$os_name" "${{ matrix.arch }}"
+            "${{ needs.prepare.outputs.label }}" "$os_name" "${{ matrix.arch }}"
 
       - uses: actions/upload-artifact@v6
         with:
@@ -233,21 +278,28 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
-          sed "s/{{VERSION}}/${{ needs.prepare.outputs.version }}/g" \
-            ".github/release-notes/${{ matrix.platform }}.md" > notes.md
+          if [ "${{ needs.prepare.outputs.canary }}" = "true" ]; then
+            {
+              echo "> **Canary build** of \`${{ github.ref_name }}\` @ ${GITHUB_SHA::7} — a preview, not a stable release."
+              echo "> The app reports version ${{ needs.prepare.outputs.version }} and updates to the next stable release."
+              echo
+            } > notes.md
+          fi
+          sed "s/{{VERSION}}/${{ needs.prepare.outputs.label }}/g" \
+            ".github/release-notes/${{ matrix.platform }}.md" >> notes.md
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - uses: softprops/action-gh-release@v3
         if: steps.files.outputs.skip == 'false'
         with:
-          tag_name: v${{ needs.prepare.outputs.version }}-${{ matrix.platform }}
-          name: Local Transcriber ${{ needs.prepare.outputs.version }} — ${{ matrix.title }}
+          tag_name: v${{ needs.prepare.outputs.label }}-${{ matrix.platform }}
+          name: Local Transcriber ${{ needs.prepare.outputs.label }} — ${{ matrix.title }}
           target_commitish: ${{ github.sha }}
           body_path: notes.md
           files: release/*
           fail_on_unmatched_files: true
-          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || github.event_name == 'push' }}
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
+          draft: ${{ needs.prepare.outputs.canary != 'true' && (github.event_name == 'workflow_dispatch' && inputs.draft || github.event_name == 'push') }}
+          prerelease: ${{ needs.prepare.outputs.canary == 'true' || (github.event_name == 'workflow_dispatch' && inputs.prerelease) }}
 
   update-manifest:
     name: Refresh in-app update manifest

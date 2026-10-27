@@ -15,6 +15,8 @@ mod export;
 mod calendar_detect;
 mod claude_code;
 mod updater;
+mod diarize;
+mod system;
 
 pub use native_asr::AppState;
 
@@ -42,7 +44,9 @@ fn use_own_gstreamer_registry() {
 /// long each step of Stop took), so a slow step can be reported.
 #[tauri::command]
 async fn native_log(message: String) {
-    eprintln!("[local-transcribe] {}", log_line(&message));
+    let line = log_line(&message);
+    system::remember(&line);
+    eprintln!("[local-transcribe] {line}");
 }
 
 /// One bounded line: newlines flattened, at most 2000 characters.
@@ -63,6 +67,7 @@ pub fn run() {
         .manage(settings::SettingsLock::default())
         .manage(updater::UpdateState::default())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         // WebKitGTK denies any media request the embedder does not handle, so
         // without this handler getUserMedia/getDisplayMedia always fail inside
         // the desktop shell (the cryptic NotAllowedError). Allow exactly the
@@ -87,6 +92,20 @@ pub fn run() {
             recorder::native_recorder_live_take,
             recorder::native_recorder_stop,
             recorder::native_audio_decode,
+            recorder::monitor::native_level_monitor_start,
+            recorder::monitor::native_level_monitor_poll,
+            recorder::monitor::native_level_monitor_stop,
+            diarize::native_diarize_status,
+            diarize::native_diarize_run,
+            diarize::native_diarize_progress,
+            diarize::native_diarize_cancel,
+            system::native_system_info,
+            system::native_storage_usage,
+            system::native_pick_folder,
+            system::native_set_storage_dir,
+            system::native_keep_awake,
+            system::native_open_privacy_settings,
+            system::native_logs,
             audio_diag::native_audio_diag_start,
             audio_diag::native_audio_diag_peek,
             audio_diag::native_audio_diag_stop,
@@ -125,6 +144,7 @@ pub fn run() {
             updater::native_update_check,
             updater::native_update_install,
             updater::native_update_progress,
+            updater::native_relaunch,
             system_audio::native_system_audio_status,
             system_audio::native_system_audio_start,
             system_audio::native_system_audio_outputs,
@@ -135,6 +155,8 @@ pub fn run() {
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 recorder::shutdown();
+                recorder::monitor::shutdown();
+                system::shutdown();
                 system_audio::remove_sources();
                 audio_diag::shutdown();
             }

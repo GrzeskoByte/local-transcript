@@ -166,11 +166,16 @@ all run on this computer. It goes online **only when you click something**:
 | What | When | Where |
 | --- | --- | --- |
 | Speech model download | You click Download / Set up transcription | Hugging Face (`ggerganov/whisper.cpp`) |
-| Update check | You click **Check for updates**, or turn on the launch check (off by default) | GitHub releases |
-| GitLab sharing | You click Upload / Test connection / Create GitLab issues (from summary action items) | Your GitLab server |
-| Company calendar | You open Calendar, test, detect or approve an event | Your calendar server |
+| Update check | You click **Check for updates**, or turn on the launch check (off by default); **Include test releases** reads the canary manifest | GitHub releases |
+| GitLab sharing | You click Upload / Test connection / Create GitLab issues / Post to wiki / Load my projects & groups / Load members; the issue step also lists project members and refreshes issue states | Your GitLab server |
+| Company calendar | You open Calendar, test, detect or approve an event (invitees you typed get the server's invitation e-mail) | Your calendar server |
 | Transcription server (Open WebUI) | You turned it on in Settings → Models and click Transcribe / Test connection (or Transcribe after recording is on): the recording's speech goes there as 16 kHz WAV pieces | The server you configured |
 | LLM summary | You click Summarize (Ollama stays local; API/Open WebUI/OpenCode/Claude Code send the transcript to that provider) | The endpoint you configured |
+
+Settings → Storage & privacy → **Network activity** lists every connection the
+app made in the last 30 days (where, why, what was sent). Speaker detection
+(sherpa-onnx) runs on this computer: the diarizer and its two models are
+downloaded at build time with pinned checksums, never by the app.
 
 The bundled whisper.cpp engine is built without its network features
 (`WHISPER_CURL=OFF`, `GGML_RPC=OFF`, no server). The desktop app records with
@@ -241,6 +246,12 @@ download link. Installing is disabled while recording or transcribing.
   contents; `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` only if it has one). Without it
   releases still build, just without in-app update artifacts. Losing the private
   key means installed apps can no longer update — keep a backup.
+
+**Canary builds:** run **Actions → Release** on any branch with *channel = canary*.
+It publishes pre-releases tagged `v<next-patch>-canary.<run>-<platform>` at once
+(no drafts). The app inside keeps its stable version, so the in-app updater moves
+canary users to the next stable release, and `latest.json` ignores canary tags —
+stable users are never offered a canary.
 
 Run it manually from **Actions → Release** to test (drafts by default). Builds are
 not code-signed or notarized yet; the release notes (`.github/release-notes/`)

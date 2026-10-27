@@ -17,7 +17,8 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-export function CalendarView(): React.JSX.Element {
+/** Library → Month: recorded meetings and company-calendar events on a month grid. */
+export function MonthView(): React.JSX.Element {
   const { meetings, go, calendarConfig, switchCalendarProvider, fetchCalendarEvents } = useApp();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
@@ -123,27 +124,12 @@ export function CalendarView(): React.JSX.Element {
   const selectedEvents = serverByDay.get(selected) ?? [];
 
   return (
-    <div>
-      <div className="page-head tint-lime">
-        <h1>Calendar</h1>
-        <div className="row">
-          <label className="muted" htmlFor="cal-provider">Provider</label>
-          <select
-            id="cal-provider"
-            className="input"
-            aria-label="Calendar provider"
-            value={calendarConfig.provider}
-            onChange={(e) => switchProvider(e.target.value as CalendarProvider)}
-          >
-            {CALENDAR_PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
+    <div className="month-view">
       <section className="card" aria-label="Month calendar">
-        <div className="row between mb-3">
+        <div className="card-title">
+          <strong>{MONTHS[month]} {year}</strong>
+        </div>
+        <div className="row between wrap mb-3">
           <div className="row">
             <button className="btn" type="button" onClick={() => shift(-1)} aria-label="Previous month">‹</button>
             <button
@@ -164,7 +150,20 @@ export function CalendarView(): React.JSX.Element {
               Refresh
             </button>
           </div>
-          <strong>{MONTHS[month]} {year}</strong>
+          <div className="row">
+            <label className="muted small" htmlFor="cal-provider">Provider</label>
+            <select
+              id="cal-provider"
+              className="input"
+              aria-label="Calendar provider"
+              value={calendarConfig.provider}
+              onChange={(e) => switchProvider(e.target.value as CalendarProvider)}
+            >
+              {CALENDAR_PROVIDERS.map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
         {loading && <p className="muted">Loading server events…</p>}
         {fetchError && <p className="warn" role="alert">{fetchError}</p>}
@@ -213,7 +212,7 @@ export function CalendarView(): React.JSX.Element {
       </section>
 
       <section className="card" aria-label="Selected day">
-        <div className="model-title"><strong>{selected}</strong></div>
+        <div className="model-title"><strong>{new Date(`${selected}T12:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</strong></div>
         {selectedMeetings.length === 0 && selectedEvents.length === 0 && (
           <p className="muted">Nothing on this day.</p>
         )}
