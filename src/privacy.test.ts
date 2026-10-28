@@ -36,6 +36,14 @@ describe('privacy: network access is limited to user-initiated features', () => 
     ]);
   });
 
+  it('the web build\'s service worker only serves the app\'s own files', async () => {
+    const { serviceWorkerSource } = await import('../scripts/pwa.mjs');
+    const sw = serviceWorkerSource(['./'], 'x');
+    // Cross-origin requests (transcription server, GitLab, LLM) pass through untouched.
+    expect(sw).toContain('new URL(request.url).origin !== self.location.origin) return;');
+    expect(sw).not.toMatch(/fetch\((?!request\))/);
+  });
+
   it('native code runs curl only for clicked downloads and the configured calendar', () => {
     expect(matching('src-tauri/src', /\.rs$/, /command\("curl"\)|"curl"/)).toEqual([
       'src-tauri/src/calendar.rs', // calendar the user configured

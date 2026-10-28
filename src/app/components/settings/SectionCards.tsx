@@ -22,6 +22,8 @@ import { LevelBars, useLevelMonitor } from '../LevelMeter.tsx';
 import { getMicrophoneDevice } from '../../../audio/devices';
 import { playbackContext } from '../../../audio/player';
 import { isDesktopApp } from '../../../platform/desktop';
+import { isWebBuild } from '../../../platform/pwa';
+import { InstallAppCard } from '../InstallApp.tsx';
 import {
   appLogs,
   diarizeStatus,
@@ -704,6 +706,7 @@ export function AppCards(): React.JSX.Element {
 
   return (
     <>
+      {isWebBuild() && <InstallAppCard onTranscription={() => go({ name: 'settings', tab: 'models' })} />}
       <section className="card" aria-label="Setup and diagnostics">
         <div className="card-title">
           <strong>Setup &amp; diagnostics</strong>

@@ -5,6 +5,7 @@
  * pre-recording level monitor and local speaker detection.
  */
 import { invokeDesktop, invokeDesktopRaw, isDesktopApp } from './desktop';
+import { screenWakeLock } from './pwa';
 
 export interface SystemInfo {
   os: string;
@@ -42,9 +43,9 @@ export function setStorageDir(path: string, moveFiles: boolean): Promise<string>
   return invokeDesktop<string>('native_set_storage_dir', { path, moveFiles });
 }
 
-/** Keep the computer awake while a recording runs (best-effort; false outside the shell). */
+/** Keep the computer awake while a recording runs (best-effort; outside the shell: the screen wake lock). */
 export async function keepAwake(on: boolean): Promise<boolean> {
-  if (!isDesktopApp()) return false;
+  if (!isDesktopApp()) return screenWakeLock(on);
   return invokeDesktop<boolean>('native_keep_awake', { on }).catch(() => false);
 }
 

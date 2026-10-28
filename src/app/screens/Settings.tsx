@@ -33,6 +33,7 @@ import {
   type MailAccount,
 } from '../../integrations/calendar-detect';
 import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
+import { isWebBuild } from '../../platform/pwa';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import {
   AfterRecordingCards,
@@ -83,6 +84,7 @@ const SECTIONS: Array<[SettingsTab, string, string]> = [
 ];
 
 export function Settings(): React.JSX.Element {
+  const webBuild = isWebBuild();
   const {
     go,
     nativeStatus,
@@ -311,7 +313,7 @@ export function Settings(): React.JSX.Element {
       <div className="settings-body">
       {tab === 'models' && (
       <>
-      <EngineOverview />
+      {!webBuild && <EngineOverview />}
       <RemoteTranscriptionSettings />
       {isDesktopApp() && <LiveTranscriptionSettings />}
       </>
@@ -1119,7 +1121,7 @@ export function Settings(): React.JSX.Element {
       {/* GPU belongs with the models it speeds up. */}
       {tab === 'models' && (
       <>
-      {(!nativeStatus || nativeStatus.backend === 'voxtype') && (
+      {!webBuild && (!nativeStatus || nativeStatus.backend === 'voxtype') && (
         <section className="card" aria-label="GPU acceleration">
         <div className="model-title">
           <strong>GPU acceleration</strong>
@@ -1171,7 +1173,12 @@ export function Settings(): React.JSX.Element {
           Native whisper.cpp can auto-detect the language.
         </p>
       </section>
+      </>
+      )}
 
+      {/* The web / phone build has no local engine: no model catalog. */}
+      {tab === 'models' && !webBuild && (
+      <>
       <h2>Models</h2>
       <p className="muted mt-0">
         Tiered from best (S) to fastest (D). Download the tier you need; only downloaded

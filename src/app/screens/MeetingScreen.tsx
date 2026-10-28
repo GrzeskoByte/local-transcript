@@ -33,6 +33,7 @@ import { useShortcuts } from '../App.tsx';
 import { enabledWrapSteps, usePrefsVersion, wrapPrefs } from '../preferences';
 import { validateCalendarConfig } from '../../integrations/calendar';
 import { remoteAsrActive, remoteAsrLabel } from '../../integrations/remote-asr';
+import { isWebBuild } from '../../platform/pwa';
 
 const FOLLOW_PREF = 'transcript-follow';
 
@@ -521,6 +522,8 @@ function TranscriptTab({
 
   // Transcribe goes to the user's server instead of the local model.
   const remote = remoteAsrActive(remoteAsrConfig) ? remoteAsrLabel(remoteAsrConfig) : null;
+  // Web / phone build: no local engine, so only the server can transcribe.
+  const webOnly = !remote && isWebBuild();
   const progress = txProgress[m.id];
   const stage: TranscriptionStage = (txStage[m.id] as TranscriptionStage) ?? 'transcribing';
   const busy = m.transcriptionStatus === 'processing' || (m.transcriptionStatus === 'not_started' && txStage[m.id] !== undefined);
@@ -608,9 +611,16 @@ function TranscriptTab({
           <p className="muted mt-0">
             {m.audioRemovedAt ? 'The audio was removed, so this meeting cannot be transcribed.' : remote
                 ? `Not transcribed yet. Transcription runs on your server: ${remote}.`
-                : 'Not transcribed yet. Transcription runs fully on this device.'}
+                : webOnly
+                  ? 'Not transcribed yet. On this device, transcription runs on your transcription server (the on-device engine is in the desktop app).'
+                  : 'Not transcribed yet. Transcription runs fully on this device.'}
           </p>
-          {!m.audioRemovedAt && (
+          {!m.audioRemovedAt && webOnly && (
+            <button className="btn btn-primary" onClick={() => go({ name: 'settings', tab: 'models' })}>
+              Set up transcription server
+            </button>
+          )}
+          {!m.audioRemovedAt && !webOnly && (
             <button className="btn btn-primary" onClick={run}>
               {installedModels.length > 0 || remote ? 'Transcribe' : 'Download model & transcribe'}
             </button>

@@ -65,6 +65,7 @@ Legacy hashes (`#/new`, `#/calendar`, old settings tabs) redirect.
 | Menus / pop-ups | `Popover` portal (`.popover`, `.menu-list`; Export ▾, Theme) — never clipped by a parent |
 | Summary editor | `.list-editor` / `.list-row`, `.action-row` (Owner / Task / Due) |
 | Participants | `.people` chips, `.gl-picker` (group / filter / project) |
+| Install (web / phone build only) | `InstallAppCard` in Settings → App & updates: a normal `.card` with `.set-row`s (install, keep recordings, transcription server) |
 
 ## 5. Deviations from the canvas (deliberate)
 

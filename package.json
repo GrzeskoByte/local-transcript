@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "build:web": "tsc --noEmit && vite build --mode web --base ./ --outDir dist-web",
+    "preview:web": "vite preview --mode web --base ./ --outDir dist-web",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",

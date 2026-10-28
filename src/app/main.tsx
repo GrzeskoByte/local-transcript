@@ -4,6 +4,7 @@ import { App } from './App';
 import { AppProvider } from './store';
 import { loadNativeSettings } from '../platform/native-settings';
 import { applyAppearance, loadAppearance } from './theme';
+import { setupWebApp } from '../platform/pwa';
 import '@fontsource/archivo-black/400.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
@@ -17,6 +18,9 @@ const settingsReady = Promise.race([
   loadNativeSettings(),
   new Promise((resolve) => setTimeout(resolve, 2000)),
 ]);
+
+// Web / phone build only: offline service worker + install prompt.
+setupWebApp();
 
 void settingsReady.then(() => {
   applyAppearance(loadAppearance());

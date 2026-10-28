@@ -99,6 +99,7 @@ import { updateSegment } from '../storage/transcripts';
 import { detectSpeakers } from '../features/meetings/diarize';
 import { namedSegments } from '../domain/speakers';
 import { keepAwake } from '../platform/system';
+import { isWebBuild, WEB_TRANSCRIPTION_HINT } from '../platform/pwa';
 import { logNetwork } from '../platform/network-log';
 import { recordingPrefs, wrapPrefs, keepAudio, calendarPrefs } from './preferences';
 import { StopTrace, formatStopTrace, nextPaint } from '../domain/stop-trace';
@@ -816,7 +817,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       if (agendaItems.length > 0) meeting.agenda = { items: agendaItems, updatedAt: now };
       if (extra.calendarSource) meeting.calendarSource = extra.calendarSource;
       // Settings → Recording: keep the computer awake while recording (best-effort).
-      if (recordingPrefs().keepAwake) void keepAwake(true);
+      // The phone/web app always keeps the screen on: a locked phone may pause the mic.
+      if (recordingPrefs().keepAwake || isWebBuild()) void keepAwake(true);
       const watch = (recorder: MediaRecorderAudioRecorder | NativeRecorder) =>
         recorder.onState((s) => {
           setRecordingState(s);
@@ -1665,6 +1667,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const setupAndTranscribe = useCallback(
     async (id: string) => {
       if (installedModels.length > 0 || remoteAsrActive(remoteAsrConfig)) return transcribe(id);
+      // The web / phone build has no local engine: only the server can transcribe.
+      if (isWebBuild()) throw new Error(WEB_TRANSCRIPTION_HINT);
       // First transcription on a fresh install: fetch the recommended model
       // (with progress), then run — no trip to Settings.
       await downloadModel(firstRunModel);

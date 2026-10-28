@@ -1,6 +1,6 @@
 # AGENTS.md — local-transcribe
 
-Spec source of truth: `/home/gsierock/obsidian_vaults/gs_n/local-transcribe/MVP.md`. The app is **Tauri-only** — there is no PWA and no in-browser ASR engine. Scaffolded: Vite React-TS + Tauri v2 (see README.md).
+Spec source of truth: `/home/gsierock/obsidian_vaults/gs_n/local-transcribe/MVP.md`. The app is a Tauri desktop app with no in-browser ASR engine; the same frontend also builds as an installable **web / phone app (PWA, user-requested)** — see "Web / phone build" below. Scaffolded: Vite React-TS + Tauri v2 (see README.md).
 
 ## Response style
 - **Be concise. Every response.** Short sentences, bullet points, no filler, no restating the request, no play-by-play of tool calls. State what changed and the command/result that verified it. Skip optional commentary unless asked.
@@ -43,6 +43,11 @@ Spec source of truth: `/home/gsierock/obsidian_vaults/gs_n/local-transcribe/MVP.
   `native_asr.rs` (generic `ggml-*.bin` download from Hugging Face via curl with
   a Windows PowerShell fallback; `valid_model_name` guards the URL/path).
   The Settings GPU card renders only for the voxtype backend (`nativeStatus.backend`).
+
+## Web / phone build (PWA, user-requested; not deployed)
+- `npm run build:web` = `vite build --mode web --base ./ --outDir dist-web` (`preview:web` serves it). `scripts/pwa.mjs` (Vite plugin, **only in the `web` mode** — the desktop `dist/` is unchanged) emits `manifest.webmanifest` (relative paths, icons in `public/pwa/` made from `src-tauri/icons/icon.png`, maskable + apple-touch), injects the manifest/theme/iOS meta tags, and generates `sw.js`: precaches every built file (cache name = hash of the files), navigations → cached `index.html`, `ignoreVary` (vite preview sends `Vary: Origin`, which made module scripts miss offline), **same-origin GETs only** (pinned by `src/privacy.test.ts`, `scripts/pwa.test.mjs`), **no skipWaiting** (an update never reloads a recording page).
+- Runtime: `src/platform/pwa.ts` — `isWebBuild()` (`import.meta.env.MODE === 'web'` and not in the shell), `setupWebApp()` (SW registration + `beforeinstallprompt`, called from `main.tsx`), `requestPersistentStorage()`, `screenWakeLock()` (`keepAwake` falls back to it outside the shell; the web build always holds it while recording). Settings → App **Install on this device** card (`components/InstallApp.tsx`). Settings → Engine & models hides the engine, GPU and catalog in the web build; transcription there is the Transcription server only (`setupAndTranscribe` throws `WEB_TRANSCRIPTION_HINT` otherwise; Meeting shows **Set up transcription server**).
+- Verified by hand with Playwright on `dist-web` (Pixel 7 emulation: SW controls the page, offline reload renders, record → stop works, no horizontal overflow); the e2e suite keeps testing the desktop `dist/`.
 
 ## In-app updates (desktop)
 - `src-tauri/src/updater.rs` wraps `tauri-plugin-updater` as `native_update_check` / `native_update_install` / `native_update_progress` (polled, like model downloads; no `@tauri-apps/api`). Frontend: `src/platform/updater.ts`, store `updateInfo`/`checkUpdates` (launch check only when the `update-auto-check` pref is `true` — opt-in, off by default: the app never goes online on its own), nav-window **Update available** cell → `#/settings/app`, Settings → App **Updates** card.
