@@ -58,7 +58,7 @@ export function nativeAccuracyHint(
   model: string,
   opts?: { parakeet?: boolean },
 ): string | null {
-  const top = /^(large-v3|large-v3-turbo)$/i.test(model) || /^parakeet/i.test(model);
+  const top = /^(large-v3|large-v3-turbo)$/i.test(model) || /^(parakeet|phonon)/i.test(model);
   if (top) return null;
   const alt = opts?.parakeet === false ? '' : ' or parakeet-tdt-0.6b-v3';
   return `For maximum accuracy on desktop, switch to large-v3-turbo (Whisper)${alt}.`;

@@ -58,6 +58,14 @@ auto-detects either and lists its models. With a `whisper-cli` backend, model
 **Download** buttons fetch `ggml-*.bin` straight from Hugging Face into the
 platform model folder (`WHISPER_MODEL_DIR` overrides it).
 
+**Phonon-2 (optional, English):** [FermionResearch/Phonon-2](https://huggingface.co/FermionResearch/Phonon-2)
+is a 164 MB Parakeet TDT build with near-Parakeet accuracy. Install its CLI
+once — `pipx install fermion-research` (Python 3.10+; on Apple silicon add
+`mlx mlx-audio mlx-lm soundfile scipy zstandard`) — and `phonon-2` appears in
+Settings → Models next to the Whisper models, whatever the main engine is.
+**Download** fetches and verifies the model through the CLI; transcription runs
+offline. `PHONON_CLI_PATH` points the app at a CLI outside `PATH` (e.g. a venv).
+
 > `npm install` must be run with `--ignore-scripts` here (a transitive native
 > dependency fails to build and is not needed at runtime).
 
@@ -166,6 +174,7 @@ all run on this computer. It goes online **only when you click something**:
 | What | When | Where |
 | --- | --- | --- |
 | Speech model download | You click Download / Set up transcription | Hugging Face (`ggerganov/whisper.cpp`) |
+| Phonon-2 model download (only with the Phonon CLI installed) | You click Download on `phonon-2` in Settings → Models; transcription itself runs offline (`HF_HUB_OFFLINE=1`) | Hugging Face (`FermionResearch/Phonon-2`), via the Phonon CLI |
 | Update check | You click **Check for updates**, or turn on the launch check (off by default); **Include test releases** reads the canary manifest | GitHub releases |
 | GitLab sharing | You click Upload / Test connection / Create GitLab issues / Post to wiki / Load my projects & groups / Load members; the issue step also lists project members and refreshes issue states | Your GitLab server |
 | Company calendar | You open Calendar, test, detect or approve an event (invitees you typed get the server's invitation e-mail) | Your calendar server |

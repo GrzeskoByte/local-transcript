@@ -3,6 +3,7 @@ mod live_asr;
 mod models;
 mod native_asr;
 mod opencode;
+mod phonon;
 mod proc;
 mod recorder;
 mod recordings;

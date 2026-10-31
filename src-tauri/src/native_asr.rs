@@ -83,6 +83,21 @@ fn build_status() -> NativeAsrStatus {
             models: models_list,
             install_hint: None,
         },
+        // Only the Phonon CLI: it is the engine, Phonon-2 the model.
+        None if crate::phonon::discover().is_some() => NativeAsrStatus {
+            available: true,
+            backend: "phonon".to_string(),
+            binary_path: crate::phonon::discover().map(|p| p.to_string_lossy().to_string()),
+            version: None,
+            engines: vec!["phonon".to_string()],
+            acceleration: None,
+            gpu: models::GpuInfo::default(),
+            model_dir: crate::phonon::model_dir().map(|d| d.to_string_lossy().to_string()),
+            models: models_list,
+            install_hint: None,
+            bundled: false,
+            recommended_model: Some(crate::phonon::MODEL.to_string()),
+        },
         None => NativeAsrStatus {
             available: false,
             backend: "none".to_string(),
@@ -233,6 +248,10 @@ pub struct DownloadProgress {
 /// Poll a model download started by `native_asr_download_model`.
 #[tauri::command]
 pub fn native_asr_download_progress(name: String) -> Result<DownloadProgress, String> {
+    if crate::phonon::is_phonon_model(Some(&name)) {
+        let (received, total, done) = crate::phonon::download_progress();
+        return Ok(DownloadProgress { received, total, done });
+    }
     if !valid_model_name(&name) {
         return Err("Invalid model name".to_string());
     }
@@ -351,6 +370,10 @@ pub async fn native_asr_download_model(name: String) -> Result<(), String> {
 }
 
 fn download_model_blocking(name: &str) -> Result<(), String> {
+    if crate::phonon::is_phonon_model(Some(name)) {
+        let cli = crate::phonon::discover().ok_or_else(|| crate::phonon::INSTALL_HINT.to_string())?;
+        return crate::phonon::download(&cli);
+    }
     let backend = models::discover_backend();
     if backend.as_ref().map(|b| b.name != "voxtype").unwrap_or(true) {
         // whisper.cpp backends (including the bundled engine): fetch the ggml
@@ -418,8 +441,20 @@ pub(crate) fn transcribe_blocking(
     slot: &Arc<Mutex<Option<Child>>>,
     request: TranscribeRequest,
 ) -> Result<Vec<NativeSegment>, String> {
-    let backend = models::discover_backend()
-        .ok_or_else(|| "No transcription backend available".to_string())?;
+    // Phonon-2 runs through its own CLI, whatever the main backend is.
+    let phonon_cli = if crate::phonon::is_phonon_model(request.model.as_deref()) {
+        Some(crate::phonon::discover().ok_or_else(|| crate::phonon::INSTALL_HINT.to_string())?)
+    } else {
+        None
+    };
+    let backend = if phonon_cli.is_some() {
+        None
+    } else {
+        Some(
+            models::discover_backend()
+                .ok_or_else(|| "No transcription backend available".to_string())?,
+        )
+    };
 
     let raw = base64::engine::general_purpose::STANDARD
         .decode(request.samples_base64.as_bytes())
@@ -446,6 +481,10 @@ pub(crate) fn transcribe_blocking(
     let artifacts = TempArtifacts::create();
     write_wav(&artifacts.wav, &resampled)?;
 
+    if let Some(cli) = phonon_cli {
+        return crate::phonon::transcribe(slot, &cli, &artifacts.wav);
+    }
+    let backend = backend.expect("set when not Phonon");
     match backend.name.as_str() {
         "voxtype" => transcribe_voxtype(slot, &backend.path, &artifacts.wav, &request, duration_ms),
         _ => transcribe_whisper_cli(slot, &backend, &artifacts.wav, &artifacts.base, &request),
@@ -718,10 +757,10 @@ fn strip_ansi(input: &str) -> String {
 // Child process runner (killable, with timeout)
 // ---------------------------------------------------------------------------
 
-struct ChildOutput {
-    #[allow(dead_code)]
-    success: bool,
-    stdout: String,
+pub(crate) struct ChildOutput {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 fn run_child(
@@ -730,8 +769,17 @@ fn run_child(
     args: &[String],
 ) -> Result<ChildOutput, String> {
     let mut command = crate::proc::command(program);
+    command.args(args);
+    run_command(slot, command, program)
+}
+
+/// Run a prepared command in the cancellable child slot, with the timeout.
+pub(crate) fn run_command(
+    slot: &Arc<Mutex<Option<Child>>>,
+    mut command: std::process::Command,
+    program: &str,
+) -> Result<ChildOutput, String> {
     command
-        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -810,12 +858,12 @@ fn run_child(
     let stdout = stdout_handle
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
-    let _stderr = stderr_handle
+    let stderr = stderr_handle
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
     let success = status.map(|s| s.success()).unwrap_or(false);
 
-    Ok(ChildOutput { success, stdout })
+    Ok(ChildOutput { success, stdout, stderr })
 }
 
 // ---------------------------------------------------------------------------

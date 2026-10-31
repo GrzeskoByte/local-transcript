@@ -72,6 +72,16 @@ describe('privacy: network access is limited to user-initiated features', () => 
     }
   });
 
+  it('Phonon-2 goes online only from the Download button', () => {
+    const source = readFileSync(join(ROOT, 'src-tauri/src/phonon.rs'), 'utf8');
+    expect(source).not.toMatch(/curl|TcpStream|reqwest/);
+    // Every child gets the Hugging Face telemetry opt-out; transcription runs offline.
+    expect(source).toMatch(/HF_HUB_DISABLE_TELEMETRY", "1"/);
+    const transcribe = source.split('pub fn transcribe(')[1]!.split('\n}\n')[0]!;
+    expect(transcribe).toMatch(/HF_HUB_OFFLINE", "1"/);
+    expect(transcribe).not.toMatch(/download-only/);
+  });
+
   it('speaker detection runs offline on bundled models', () => {
     const source = readFileSync(join(ROOT, 'src-tauri/src/diarize.rs'), 'utf8');
     expect(source).not.toMatch(/curl|TcpStream|reqwest|https?:\/\//);

@@ -10,6 +10,7 @@ import {
   pickDefaultNativeModel,
 } from './model-manager';
 import type { NativeAsrStatus, NativeModelInfo } from './native-types';
+import { chunkModeForBackend, isPhononModel } from './native-engine';
 
 function model(over: Partial<NativeModelInfo> & { name: string }): NativeModelInfo {
   return {
@@ -88,6 +89,22 @@ describe('nativeAccuracyHint', () => {
     expect(nativeAccuracyHint('large-v3-turbo')).toBeNull();
     expect(nativeAccuracyHint('large-v3')).toBeNull();
     expect(nativeAccuracyHint('parakeet-tdt-0.6b-v3')).toBeNull();
+    expect(nativeAccuracyHint('phonon-2')).toBeNull();
+  });
+});
+
+describe('chunkModeForBackend', () => {
+  it('cuts by speech for text-only voxtype, by windows otherwise', () => {
+    expect(chunkModeForBackend('voxtype')).toBe('speech');
+    expect(chunkModeForBackend('whisper-cli')).toBe('windows');
+    expect(chunkModeForBackend('phonon')).toBe('windows');
+  });
+
+  it('sends Phonon-2 windows even when voxtype is the main backend', () => {
+    expect(chunkModeForBackend('voxtype', 'phonon-2')).toBe('windows');
+    expect(chunkModeForBackend('voxtype', 'large-v3-turbo')).toBe('speech');
+    expect(isPhononModel('Phonon-2')).toBe(true);
+    expect(isPhononModel('parakeet-tdt-0.6b-v3')).toBe(false);
   });
 });
 

@@ -31,8 +31,15 @@ const TEXT_ONLY_BACKENDS = new Set(['voxtype']);
  */
 export type NativeChunkMode = 'windows' | 'speech';
 
-export function chunkModeForBackend(backend: string | undefined): NativeChunkMode {
+export function chunkModeForBackend(backend: string | undefined, model?: string): NativeChunkMode {
+  // Phonon-2 runs through its own CLI (timestamped JSON), whatever the main backend is.
+  if (model && isPhononModel(model)) return 'windows';
   return backend && TEXT_ONLY_BACKENDS.has(backend) ? 'speech' : 'windows';
+}
+
+/** Phonon-2 (FermionResearch/Phonon-2) through the `phonon` CLI. */
+export function isPhononModel(model: string | undefined): boolean {
+  return !!model && /^phonon-2$/i.test(model);
 }
 
 /** Fixed-size windows covering the whole recording. */
@@ -91,7 +98,7 @@ export class NativeASREngine implements ASREngine {
           'No desktop transcription engine found. Install whisper.cpp (whisper-cli) or voxtype.',
       );
     }
-    this.mode = chunkModeForBackend(status.backend);
+    this.mode = chunkModeForBackend(status.backend, this.modelId);
     onProgress?.(1);
   }
 

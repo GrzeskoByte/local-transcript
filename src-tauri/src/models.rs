@@ -604,6 +604,12 @@ pub fn collect_models(backend: Option<&Backend>) -> (Vec<String>, Vec<NativeMode
         }
     }
 
+    // Phonon-2 runs through its own CLI next to the main backend.
+    if !seen.contains(crate::phonon::MODEL) {
+        seen.insert(crate::phonon::MODEL.to_string());
+        models.push(crate::phonon::catalog_model(crate::phonon::discover().as_deref()));
+    }
+
     // Append on-disk models that the catalog did not know about.
     for model in &disk {
         if seen.contains(&model.name) {
