@@ -39,7 +39,7 @@ export function AuditSettings(): React.JSX.Element {
                 <tr key={r.id}>
                   <td className="n">{formatWhen(r.at)}</td>
                   <td>{r.action}</td>
-                  <td className="break-all">{r.detail || '—'}</td>
+                  <td className="break-all">{formatDetail(r.detail)}</td>
                 </tr>
               ))}
             </tbody>
@@ -48,4 +48,13 @@ export function AuditSettings(): React.JSX.Element {
       )}
     </section>
   );
+}
+
+/** `detail` is whatever JSON the server attached: show `key: value` pairs. */
+function formatDetail(detail: unknown): string {
+  if (detail === null || detail === undefined || detail === '') return '—';
+  if (typeof detail !== 'object') return String(detail);
+  return Object.entries(detail as Record<string, unknown>)
+    .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+    .join(', ');
 }

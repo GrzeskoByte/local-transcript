@@ -26,6 +26,7 @@ use crate::{
 
 const MAX_COMMAND_BYTES: usize = 256 * 1024 * 1024;
 const CSP: &str = "default-src 'self'; connect-src 'self' https:; media-src blob:; \
+                   img-src 'self' data: blob:; font-src 'self' data:; \
                    worker-src 'self' blob:; object-src 'none'; base-uri 'none'; \
                    frame-ancestors 'none'; form-action 'self'";
 

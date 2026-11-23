@@ -128,7 +128,8 @@ export interface AuditRow {
   userId?: string | null;
   actorId?: string | null;
   action: string;
-  detail?: string | null;
+  /** Free-form JSON the server attached to the entry (never meeting content). */
+  detail?: unknown;
 }
 
 export const listUsers = (): Promise<AdminUser[]> => serverApi<AdminUser[]>('GET', '/api/admin/users');
