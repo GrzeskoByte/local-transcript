@@ -22,6 +22,8 @@ interface Fake {
   invokes: string[];
   badCsrf: string[];
   logoutRedirect?: string;
+  /** Last body PUT to /api/admin/settings. */
+  savedAdminSettings?: Record<string, unknown>;
   models: boolean;
 }
 
@@ -129,15 +131,21 @@ async function fakeServer(page: Page, init: Partial<Fake> = {}): Promise<Fake> {
         return json(route, { url: '/invite/tok-abc', expiresAt: 1_800_000_000 });
       }
       if (pathname === '/api/admin/invites') return json(route, []);
+      if (pathname === '/api/admin/settings' && method === 'PUT') {
+        fake.savedAdminSettings = req.postDataJSON() as Record<string, unknown>;
+        return json(route, null);
+      }
       if (pathname === '/api/admin/settings') {
         return json(route, {
           localLogin: true,
-          oidc: { issuer: 'https://sso.example.com', clientId: 'lt', clientSecretSet: true, scopes: 'openid email profile', providerName: 'Keycloak', adminGroup: 'lt-admins', allowedGroups: [], allowedDomains: ['example.com'] },
+          oidc: { issuer: 'https://sso.example.com', clientId: 'lt', clientSecretSet: true, scopes: ['openid', 'email', 'profile'], providerName: 'Keycloak', adminGroup: 'lt-admins', allowedGroups: [], allowedDomains: ['example.com'] },
           locked: ['oidc.issuer'],
         });
       }
       if (pathname === '/api/admin/audit') {
-        return json(route, [{ id: 1, at: 1_700_000_000, userId: 'u-mia', actorId: 'u-admin', action: 'user.disable', detail: 'mia@example.com' }]);
+        return json(route, [{ id: 1, at: 1_700_000_000, userId: 'u-mia', actorId: 'u-admin', action: 'user.disable', detail: 'mia@example.com' },
+          { id: 2, at: 1_700_000_001, userId: 'u-mia', actorId: 'u-admin', action: 'user.role', detail: { from: 'member', to: 'admin', groups: ['a', 'b'] } },
+        ]);
       }
     }
 
@@ -167,6 +175,20 @@ async function fakeServer(page: Page, init: Partial<Fake> = {}): Promise<Fake> {
           const has = fake.meetings.has(value.id as string);
           if (has) fake.meetings.set(value.id as string, value);
           return json(route, has);
+        }
+        case 'server_db_patch': {
+          const current = fake.meetings.get(args.key as string);
+          if (!current) return json(route, null);
+          const merged = { ...current, ...(args.patch as Record<string, unknown>) };
+          fake.meetings.set(args.key as string, merged);
+          return json(route, merged);
+        }
+        case 'server_db_put_if_unchanged': {
+          const value = args.value as Record<string, unknown>;
+          const current = fake.meetings.get(value.id as string);
+          const same = JSON.stringify(current) === JSON.stringify(args.expected);
+          if (same) fake.meetings.set(value.id as string, value);
+          return json(route, same);
         }
         case 'server_db_delete_meeting': fake.meetings.delete(args.id as string); return json(route, null);
         case 'native_recording_write': {
@@ -228,9 +250,12 @@ test('an expired session (401) returns to the sign-in screen', async ({ page }) 
   await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
   // Any call now answers 401: the app drops back to the sign-in screen.
   fake.signedIn = false;
-  await page.evaluate(() => {
-    window.location.hash = '#/library';
-  });
+  // The 401 reloads the page (no state of the old session survives), which can cut this call short.
+  await page
+    .evaluate(() => {
+      window.location.hash = '#/library';
+    })
+    .catch(() => undefined);
   await expect(page.getByRole('region', { name: 'Sign in' })).toBeVisible();
 });
 
@@ -266,6 +291,9 @@ test('record → stop saves the meeting and its chunks on the server, with the C
   await page.locator('#meeting-title').fill('Server standup');
   await page.getByRole('button', { name: /Start recording/ }).click();
   await expect(page.getByLabel('Recording in progress')).toBeVisible();
+  // Chunks go to the server, not to "this device".
+  await expect(page.locator('.saved-note')).toContainText('saved on this server');
+  await expect(page.locator('.saved-note')).not.toContainText('this device');
   await page.waitForTimeout(6_500);
   await page.getByRole('button', { name: '■ Stop & save' }).click();
   await page.getByRole('button', { name: 'Yes, stop & save' }).click();
@@ -331,12 +359,21 @@ test('admin: users, invite link, sign-in settings and audit log', async ({ page 
   await nav.getByRole('button', { name: /^Sign-in/ }).click();
   await expect(page.getByLabel('Issuer URL')).toBeDisabled(); // locked by the server's environment
   await expect(page.getByLabel('Client ID')).toHaveValue('lt');
+  // The server sends scopes as a list: shown space-separated, saved as a list again.
+  await expect(page.getByLabel('Scopes')).toHaveValue('openid email profile');
+  await page.getByLabel('Scopes').fill('openid  email groups\n');
+  await page.getByRole('button', { name: /^Save/ }).click();
+  await expect.poll(() => (fake.savedAdminSettings?.oidc as { scopes?: unknown } | undefined)?.scopes).toEqual(['openid', 'email', 'groups']);
   const secret = page.getByLabel('Client secret');
   await expect(secret).toHaveValue(''); // write-only
   await expect(secret).toHaveAttribute('placeholder', /Set/);
 
   await nav.getByRole('button', { name: /^Audit log/ }).click();
-  await expect(page.getByRole('table', { name: 'Audit entries' })).toContainText('user.disable');
+  const audit = page.getByRole('table', { name: 'Audit entries' });
+  await expect(audit).toContainText('user.disable');
+  // An object `detail` is shown as text, not [object Object] (and does not crash the page).
+  await expect(audit).toContainText('from: member, to: admin, groups: ["a","b"]');
+  await expect(audit).not.toContainText('[object Object]');
   expect(fake.badCsrf).toEqual([]);
 });
 
@@ -368,4 +405,46 @@ test('sign out ends the session; an identity provider logout URL is followed', a
   await signIn(page, 'mia@example.com');
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL('https://sso.example.com/logout');
+});
+
+test('signing out while recording asks first, then stops and saves before the session ends', async ({ page }) => {
+  test.setTimeout(60_000);
+  const fake = await fakeServer(page);
+  await signIn(page, 'mia@example.com');
+  await page.locator('#meeting-title').fill('Interrupted standup');
+  await page.getByRole('button', { name: /Start recording/ }).click();
+  await expect(page.getByLabel('Recording in progress')).toBeVisible();
+  await page.waitForTimeout(6_000);
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  // Nothing happens until the user agrees.
+  await expect(page.getByRole('group', { name: 'Stop the recording and sign out?' })).toBeVisible();
+  expect(fake.signedIn).toBe(true);
+  await page.getByRole('button', { name: 'Stop & sign out' }).click();
+
+  await expect(page.getByRole('region', { name: 'Sign in' })).toBeVisible();
+  expect(fake.signedIn).toBe(false);
+  // The recording was stopped and saved under the account that made it.
+  const saved = [...fake.meetings.values()].find((m) => m.title === 'Interrupted standup');
+  expect(saved).toBeTruthy();
+  expect(saved?.unfinished).not.toBe(true);
+  expect(saved?.endedAt).toBeTruthy();
+  expect([...fake.files.keys()].length).toBeGreaterThanOrEqual(1);
+  expect(fake.badCsrf).toEqual([]);
+});
+
+test('browser prefs are keyed by account', async ({ page }) => {
+  await fakeServer(page);
+  await signIn(page, 'mia@example.com');
+  await page.goto('/#/settings/storage');
+  await page.waitForTimeout(500);
+  const keys = await page.evaluate(() => Object.keys(localStorage));
+  expect(keys.filter((k) => !k.startsWith('u:u-member:'))).toEqual([]);
+  // A different account on the same browser starts from nothing of the first one's.
+  await page.evaluate(() => localStorage.setItem('u:u-member:keep-audio', '30d'));
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('region', { name: 'Sign in' })).toBeVisible();
+  await signIn(page, 'admin@example.com');
+  const seen = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('u:u-admin:')));
+  expect(seen).not.toContain('u:u-admin:keep-audio');
 });

@@ -27,7 +27,7 @@ function toDraft(s: AdminSettings): Draft {
     issuer: s.oidc.issuer,
     clientId: s.oidc.clientId,
     clientSecret: '',
-    scopes: s.oidc.scopes,
+    scopes: Array.isArray(s.oidc.scopes) ? s.oidc.scopes.join(' ') : s.oidc.scopes,
     providerName: s.oidc.providerName,
     adminGroup: s.oidc.adminGroup,
     allowedGroups: asText(s.oidc.allowedGroups),
@@ -93,7 +93,8 @@ export function SignInSettings(): React.JSX.Element {
     const oidc: Record<string, unknown> = {
       issuer: draft.issuer.trim(),
       clientId: draft.clientId.trim(),
-      scopes: draft.scopes.trim(),
+      // The server stores scopes as a list.
+      scopes: draft.scopes.split(/\s+/).filter(Boolean),
       providerName: draft.providerName.trim(),
       adminGroup: draft.adminGroup.trim(),
       allowedGroups: asList(draft.allowedGroups),

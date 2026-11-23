@@ -3,6 +3,7 @@ import { useApp } from '../store';
 import { CALENDAR_PROVIDERS, type CalendarProvider, type ServerEvent } from '../../integrations/calendar';
 import { readCachedMonth, writeCachedMonth } from '../../integrations/calendar-cache';
 import { hasNativeBackend } from '../../platform/desktop';
+import { thisPlace } from '../../platform/server';
 
 function dayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -174,7 +175,7 @@ export function MonthView(): React.JSX.Element {
         )}
         {cachedAt !== null && (
           <p className="muted small" role="status">
-            {fetchError ? 'Offline — showing' : 'Showing'} events saved on this device at{' '}
+            {fetchError ? 'Offline — showing' : 'Showing'} events saved on {thisPlace('device')} at{' '}
             {new Date(cachedAt).toLocaleString()}.
           </p>
         )}

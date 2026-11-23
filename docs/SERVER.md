@@ -125,6 +125,10 @@ Supported (and listed in `/api/me` `capabilities`):
   - `server_db_get_by_index {store:"segments", index:"by-meeting", key}` → value[]
   - `server_db_put {store,value}`; `server_db_delete {store,key}`
   - `server_db_put_if_exists {store,value}` → bool (single transaction)
+  - `server_db_patch {store,key,patch}` → merged value | null — shallow merge in one transaction
+    (frontend `updateMeeting(id, partial)`)
+  - `server_db_put_if_unchanged {store,value,expected}` → bool — write only when the stored value
+    still equals `expected` (frontend function-form `updateMeeting`: read, apply, retry ≤ 5×)
   - `server_db_commit_transcript {meetingId, segments, patch}` → bool — atomically: if meeting
     exists, delete its segments, insert `segments`, put `{...meeting,...patch,transcriptionStatus:"completed"}`
   - `server_db_set_segment_speakers {meetingId, speakers: {segmentId: speaker}}`
@@ -155,3 +159,9 @@ Supported (and listed in `/api/me` `capabilities`):
   **Sign-in** (admin: local login switch, OIDC config + Test, locked fields), Settings →
   **Audit log** (admin). Nav shows the signed-in user + Sign out.
 - Privacy copy in server mode: "Your recordings and transcripts stay on this server; only you can open them."
+- Accounts never mix in the browser: `serverInvoke*` refuses to send without a session and drops an
+  answer that arrives after the account changed (`sessionEpoch`/`sessionGuard`, `SessionChangedError`);
+  recorder chunks and imports are bound to the session that started them; sign-out with a recording
+  asks, then stops + saves, cancels imports/transcriptions and logs out; sign-in, sign-out, 401 and
+  account deletion do a full page reload; browser prefs are keyed `u:<userId>:<key>` and nothing
+  unscoped is read or migrated (`platform/prefs.ts`). `oidc.scopes` is a string array on the wire.

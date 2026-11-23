@@ -2,7 +2,8 @@ import { chunkFileName } from '../../audio/formats';
 import type { Meeting } from '../../domain/meeting';
 import { newMeetingId } from '../../domain/meeting';
 import { saveMeeting } from '../../storage/meetings';
-import { appendChunk, writeMeta } from '../../storage/recordings';
+import { appendChunk, deleteRecording, writeMeta } from '../../storage/recordings';
+import { sessionGuard } from '../../platform/server';
 
 /** Fallback MIME types for files the browser does not label. */
 const EXTENSION_MIME: Record<string, string> = {
@@ -50,15 +51,19 @@ export function titleFromFileName(name: string): string {
  * Turn an existing audio file into a meeting. Stored as a single flat chunk so
  * playback, export and transcription work through the normal recording path.
  */
-export async function importAudioFile(file: File, title?: string): Promise<Meeting> {
+export async function importAudioFile(file: File, title?: string, signal?: AbortSignal): Promise<Meeting> {
   const id = newMeetingId();
   const mimeType = audioMimeFor(file.name, file.type);
   const now = Date.now();
+  // Server edition: an import never finishes under another account, and a
+  // sign-out aborts it (`signal`); the partial recording is removed.
+  const sameSession = sessionGuard();
+  const checkpoint = (): void => {
+    sameSession();
+    if (signal?.aborted) throw new Error('The import was cancelled.');
+  };
+  checkpoint();
   const durationMs = await measureDuration(file);
-
-  await appendChunk(id, chunkFileName(0, mimeType), file, '');
-  await writeMeta(id, { mimeType, startedAt: now });
-
   const meeting: Meeting = {
     id,
     title: title?.trim() ? title.trim() : titleFromFileName(file.name),
@@ -72,6 +77,16 @@ export async function importAudioFile(file: File, title?: string): Promise<Meeti
     transcriptionStatus: 'not_started',
     unfinished: false,
   };
-  await saveMeeting(meeting);
+  try {
+    checkpoint();
+    await appendChunk(id, chunkFileName(0, mimeType), file, '');
+    checkpoint();
+    await writeMeta(id, { mimeType, startedAt: now });
+    checkpoint();
+    await saveMeeting(meeting);
+  } catch (err) {
+    if (signal?.aborted) await deleteRecording(id).catch(() => undefined);
+    throw err;
+  }
   return meeting;
 }

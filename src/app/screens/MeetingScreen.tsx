@@ -28,7 +28,7 @@ import { EventsStep } from '../components/wrap/EventsStep.tsx';
 import { ExportStep } from '../components/wrap/ExportStep.tsx';
 import { getPref, setPref } from '../../platform/prefs';
 import { diarizeStatus } from '../../platform/system';
-import { canManageModels } from '../../platform/server';
+import { canManageModels, thisPlace } from '../../platform/server';
 import { isTypingTarget, matches } from '../shortcuts';
 import { useShortcuts } from '../App.tsx';
 import { enabledWrapSteps, usePrefsVersion, wrapPrefs } from '../preferences';
@@ -612,7 +612,7 @@ function TranscriptTab({
           <p className="muted mt-0">
             {m.audioRemovedAt ? 'The audio was removed, so this meeting cannot be transcribed.' : remote
                 ? `Not transcribed yet. Transcription runs on your server: ${remote}.`
-                : 'Not transcribed yet. Transcription runs fully on this device.'}
+                : `Not transcribed yet. Transcription runs fully on ${thisPlace('device')}.`}
           </p>
           {!m.audioRemovedAt && (
             <button className="btn btn-primary" onClick={run}>
@@ -939,7 +939,7 @@ function DangerZone({ onError }: { onError: (e: unknown) => void }): React.JSX.E
         <strong>Delete</strong>
       </div>
       <p className="muted mt-0">
-        Removes the recording ({modeLabel(m.mode).toLowerCase()}), transcript and summary from this device. Issues and events
+        Removes the recording ({modeLabel(m.mode).toLowerCase()}), transcript and summary from {thisPlace('device')}. Issues and events
         already created stay where they are. This cannot be undone.
       </p>
       <div className="btn-row">

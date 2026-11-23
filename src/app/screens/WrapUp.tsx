@@ -1,4 +1,4 @@
-import { canManageModels } from '../../platform/server';
+import { canManageModels, deviceSoundLabel } from '../../platform/server';
 import { ParticipantsCard } from '../components/meeting/Participants.tsx';
 import { useEffect, useRef, useState } from 'react';
 import { useApp, formatDuration } from '../store.tsx';
@@ -69,7 +69,7 @@ export function WrapUp({ id, step }: { id: string; step?: WrapStepId }): React.J
   const events = m.calendarEvents ?? [];
   const marks = m.wrapUp?.steps ?? {};
   const log: Array<{ mark: string; text: string }> = [
-    { mark: '[x]', text: `Recorded ${formatDuration(m.durationMs)}${m.mode === 'dual' ? ' · mic + system mixed' : ''}` },
+    { mark: '[x]', text: `Recorded ${formatDuration(m.durationMs)}${m.mode === 'dual' ? ` · mic + ${deviceSoundLabel()} mixed` : ''}` },
   ];
   if (txDone) log.push({ mark: '[x]', text: `Transcribed · ${detailSegments.length} line${detailSegments.length === 1 ? '' : 's'}` });
   if (marks.summary === 'done' || m.summary?.reviewedAt) log.push({ mark: '[x]', text: 'Summary reviewed' });

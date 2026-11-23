@@ -44,13 +44,7 @@ export async function updateMeeting(
   change: Partial<Meeting> | ((m: Meeting) => Meeting),
 ): Promise<Meeting | undefined> {
   let result: Meeting | undefined;
-  if (isServerApp()) {
-    const current = await db.get<Meeting>(STORE, id);
-    if (!current) return undefined;
-    const next = typeof change === 'function' ? change(current) : { ...current, ...change };
-    const stored = await invokeDesktop<boolean>('server_db_put_if_exists', { store: STORE, value: next });
-    return stored ? next : undefined;
-  }
+  if (isServerApp()) return updateOnServer(id, change);
   await db.transaction([STORE], 'readwrite', (t) => {
     const os = t.objectStore(STORE);
     const req = os.get(id);
@@ -62,4 +56,38 @@ export async function updateMeeting(
     };
   });
   return result;
+}
+
+/** Attempts of the compare-and-set loop before a contended update gives up. */
+const SERVER_UPDATE_ATTEMPTS = 5;
+
+/**
+ * Server edition. A partial change is merged by the server in ONE transaction
+ * (`server_db_patch`: nothing else in the record is overwritten). A function
+ * needs the current value, so it is compare-and-set: read, apply, write only
+ * when the stored value is still the one read (`server_db_put_if_unchanged`),
+ * else read again. Without this a concurrent writer's fields would be lost.
+ */
+async function updateOnServer(
+  id: string,
+  change: Partial<Meeting> | ((m: Meeting) => Meeting),
+): Promise<Meeting | undefined> {
+  if (typeof change !== 'function') {
+    const merged = await invokeDesktop<Meeting | null>('server_db_patch', { store: STORE, key: id, patch: change });
+    return merged ?? undefined;
+  }
+  for (let attempt = 0; attempt < SERVER_UPDATE_ATTEMPTS; attempt++) {
+    const current = await db.get<Meeting>(STORE, id);
+    if (!current) return undefined;
+    // `change` may mutate `current`: compare against an untouched copy.
+    const expected = JSON.parse(JSON.stringify(current)) as Meeting;
+    const next = change(current);
+    const stored = await invokeDesktop<boolean>('server_db_put_if_unchanged', {
+      store: STORE,
+      value: next,
+      expected,
+    });
+    if (stored) return next;
+  }
+  throw new Error(`The meeting kept changing while it was being updated (${SERVER_UPDATE_ATTEMPTS} attempts). Try again.`);
 }

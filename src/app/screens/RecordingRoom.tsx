@@ -8,6 +8,7 @@ import { LevelBars } from '../components/LevelMeter.tsx';
 import { Keys, useShortcuts } from '../App.tsx';
 import { formatClock } from '../../audio/player';
 import { recordingPrefs } from '../preferences';
+import { deviceSoundLabel, isServerApp, thisPlace } from '../../platform/server';
 
 /** Opus 48 kbps mono ≈ 6 kB per second of recording. */
 const BYTES_PER_SECOND = 6000;
@@ -45,7 +46,7 @@ export function RecordingRoom(): React.JSX.Element {
   // A lost source (unplugged mic, stopped screen share) cannot be retried.
   const sourceLost = failing && recordingErrorKind === 'source';
   const prefs = recordingPrefs();
-  const inputs = m.mode === 'dual' ? 'mic + system sound' : m.mode === 'device' ? 'system sound' : 'microphone';
+  const inputs = m.mode === 'dual' ? `mic + ${deviceSoundLabel()}` : m.mode === 'device' ? deviceSoundLabel() : 'microphone';
 
   return (
     <div className="room">
@@ -71,7 +72,7 @@ export function RecordingRoom(): React.JSX.Element {
             {levels.map((l) => (
               <div key={l.role} className="room-level">
                 <span className="room-level-label">{l.role === 'microphone' ? 'You' : m.mode === 'dual' ? 'Call' : 'Computer'}</span>
-                <LevelBars level={l.level} cells={40} label={l.role === 'microphone' ? 'Your microphone' : 'System sound'} onInk />
+                <LevelBars level={l.level} cells={40} label={l.role === 'microphone' ? 'Your microphone' : (isServerApp() ? 'Shared tab sound' : 'System sound')} onInk />
               </div>
             ))}
           </div>
@@ -183,8 +184,8 @@ function SavedLine({ tracks }: { tracks: number }): React.JSX.Element {
   const mb = (ms / 1000) * BYTES_PER_SECOND / 1e6;
   return (
     <p className="saved-note">
-      <span className="saved-mark">[x]</span> Audio chunks are being saved on this device · every 5 seconds ·{' '}
-      {tracks === 2 ? 'mic + system mixed' : '1 track'} · {mb < 1 ? '<1' : Math.round(mb)} MB · you can leave this screen,
+      <span className="saved-mark">[x]</span> Audio chunks are being saved on {thisPlace('device')} · every 5 seconds ·{' '}
+      {tracks === 2 ? `mic + ${deviceSoundLabel()} mixed` : '1 track'} · {mb < 1 ? '<1' : Math.round(mb)} MB · you can leave this screen,
       recording continues
     </p>
   );

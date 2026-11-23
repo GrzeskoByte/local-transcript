@@ -22,7 +22,7 @@ import { LevelBars, useLevelMonitor } from '../LevelMeter.tsx';
 import { getMicrophoneDevice } from '../../../audio/devices';
 import { playbackContext } from '../../../audio/player';
 import { isDesktopApp } from '../../../platform/desktop';
-import { isServerApp } from '../../../platform/server';
+import { isServerApp, thisPlace } from '../../../platform/server';
 import { UsageMeter } from '../server/Usage';
 import {
   appLogs,
@@ -122,7 +122,7 @@ export function EngineOverview(): React.JSX.Element {
               {diarize === null
                 ? 'checking…'
                 : diarize
-                  ? 'Bundled (sherpa-onnx), runs on this computer · "Detect speakers" on a transcript'
+                  ? `Bundled (sherpa-onnx), runs on ${thisPlace('computer')} · "Detect speakers" on a transcript`
                   : 'Not in this build — release builds include it'}
             </small>
           </span>
@@ -623,7 +623,7 @@ export function StorageCards(): React.JSX.Element {
         <div className="set-row">
           <span className="grow">
             <b>Remove all {meetings.length} meetings</b>{' '}
-            <small className="muted">Audio, transcripts and summaries on this computer. Issues and events already created stay where they are.</small>
+            <small className="muted">Audio, transcripts and summaries on {thisPlace('computer')}. Issues and events already created stay where they are.</small>
           </span>
           {!confirmAll && (
             <button type="button" className="btn btn-danger btn-sm" disabled={meetings.length === 0} onClick={() => setConfirmAll(true)}>

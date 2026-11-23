@@ -15,7 +15,8 @@ import { useQuickRecord } from './quick-record';
 import { remindToRecord, usePrefsVersion } from './preferences';
 import { useUpcoming } from './upcoming';
 import { isServerApp } from '../platform/server';
-import { signOut, useServerSession } from './components/server/api';
+import { useServerSession } from './components/server/api';
+import { SignOutButton } from './components/server/SignOutButton';
 
 /** Keys as <kbd> chips ("Ctrl N"). */
 export function Keys({ binding }: { binding: string }): React.JSX.Element {
@@ -197,9 +198,7 @@ function Shell(): React.JSX.Element {
             >
               {account.name || account.email}
             </button>
-            <button type="button" className="cell" title="Sign out" onClick={() => void signOut()}>
-              Sign out
-            </button>
+            <SignOutButton className="cell" />
           </>
         )}
         {live ? (

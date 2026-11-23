@@ -28,8 +28,26 @@ export function isServerApp(): boolean {
   return document.querySelector('meta[name="lt-edition"]')?.getAttribute('content') === 'server';
 }
 
+/**
+ * Where data lives, for copy: "this server" in the server edition (the
+ * browser only shows it), else `this <kind>` (the desktop app keeps it local).
+ */
+export function thisPlace(kind: 'device' | 'computer' = 'device'): string {
+  return isServerApp() ? 'this server' : `this ${kind}`;
+}
+
+/**
+ * Device Audio in the browser is the sound of a shared tab or window — never
+ * "system sound" (the server edition cannot capture that).
+ */
+export function deviceSoundLabel(): string {
+  return isServerApp() ? 'shared tab sound' : 'system sound';
+}
+
 let session: ServerSession | null = null;
 let version = 0;
+/** Bumps whenever the signed-in account changes or the session ends. */
+let epoch = 0;
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -43,8 +61,41 @@ export function serverSession(): ServerSession | null {
 }
 
 export function setServerSession(next: ServerSession | null): void {
+  if ((next?.user.id ?? null) !== (session?.user.id ?? null)) epoch++;
   session = next;
   emit();
+}
+
+/** The session a call or an operation started under (changes with the account). */
+export function sessionEpoch(): number {
+  return epoch;
+}
+
+/** Work started under one account must not continue under another. */
+export class SessionChangedError extends Error {
+  constructor() {
+    super('The session changed (signed out or another account). Nothing was sent.');
+    this.name = 'SessionChangedError';
+  }
+}
+
+/**
+ * Capture the current session; the returned function throws
+ * `SessionChangedError` once it no longer matches. Long operations (a
+ * recording, an import) call it before every write to the server.
+ */
+export function sessionGuard(): () => void {
+  const started = epoch;
+  return () => {
+    if (!isServerApp()) return;
+    if (epoch !== started || session === null) throw new SessionChangedError();
+  };
+}
+
+/** Test hook. */
+export function resetServerSessionForTests(): void {
+  session = null;
+  epoch = 0;
 }
 
 /** `useSyncExternalStore` hooks: changes whenever the session changes. */
@@ -108,9 +159,15 @@ export async function loadServerSession(): Promise<ServerSession | null> {
  */
 export function sessionLost(): void {
   const hadSession = session !== null;
+  if (hadSession) epoch++;
   session = null;
   if (typeof window !== 'undefined' && window.location && !window.location.hash.startsWith('#/invite/')) {
     window.location.hash = '#/signin';
   }
-  if (hadSession) emit();
+  if (hadSession) {
+    emit();
+    // A clean page: whatever the old account left in memory (a recorder that
+    // still holds the microphone, caches) must not outlive its session.
+    if (typeof window !== 'undefined' && typeof window.location?.reload === 'function') window.location.reload();
+  }
 }

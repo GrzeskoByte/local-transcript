@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchAuthConfig, signIn, type AuthConfig } from '../../components/server/api';
+import { fetchAuthConfig, reloadApp, signIn, type AuthConfig } from '../../components/server/api';
 
 /** Layout shared by Sign in and Accept invite: a pink head over one window. */
 export function AuthFrame({ title, lede, children }: { title: string; lede: string; children: React.ReactNode }): React.JSX.Element {
@@ -38,7 +38,7 @@ export function SignIn(): React.JSX.Element {
     setError(null);
     signIn(email.trim(), password)
       .then(() => {
-        window.location.hash = '#/';
+        reloadApp('#/');
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setBusy(false));

@@ -281,6 +281,11 @@ interface AppState {
   /** Change a meeting's title (blank = "Untitled meeting"). */
   renameMeeting: (id: string, title: string) => Promise<void>;
   stopRecording: () => Promise<Meeting | null>;
+  /**
+   * Before the server session ends: abort imports, stop and save the active
+   * recording, cancel transcription runs (they belong to this account).
+   */
+  prepareSignOut: () => Promise<void>;
   /** True from the Stop click until the recording is saved (Active Meeting shows a loader). */
   stopping: boolean;
   /** Desktop: what the shell can record natively (null: webview recording only). */
@@ -978,12 +983,19 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     await openDesktopStorageDir();
   }, []);
 
+  const importAbortRef = useRef<AbortController | null>(null);
   const importMeeting = useCallback(
     async (file: File) => {
       setRecordingError(null);
-      const meeting = await importAudioFile(file);
-      await refresh();
-      go({ name: 'detail', id: meeting.id });
+      const abort = new AbortController();
+      importAbortRef.current = abort;
+      try {
+        const meeting = await importAudioFile(file, undefined, abort.signal);
+        await refresh();
+        go({ name: 'detail', id: meeting.id });
+      } finally {
+        if (importAbortRef.current === abort) importAbortRef.current = null;
+      }
     },
     [go, refresh],
   );
@@ -1497,6 +1509,13 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [refresh, txService],
   );
 
+  const prepareSignOut = useCallback(async () => {
+    importAbortRef.current?.abort();
+    if (recorderRef.current && activeMeeting) await stopRecording();
+    const running = new Set([...Object.keys(txStage), ...Object.keys(txProgress), ...liveDrainRef.current.keys()]);
+    for (const id of running) await cancelTranscription(id).catch(() => undefined);
+  }, [activeMeeting, stopRecording, txStage, txProgress, cancelTranscription]);
+
   const downloadModel = useCallback(async (id?: string) => {
     const targetId = id ?? (await getModelMeta().catch(() => null))?.modelId ?? NATIVE_DEFAULT_MODEL;
     // Persisting the model state is best-effort: a storage problem must never
@@ -1919,6 +1938,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       deleteMeeting,
       renameMeeting,
       stopRecording,
+      prepareSignOut,
       stopping,
       nativeRecording: nativeDevices,
       detailMeeting,
@@ -1991,7 +2011,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       route, go, meetings, refresh, recordingState, recordingError, recordingErrorKind, activeMeeting,
       recordingIssues, storageWarning, startRecording, addMoment, labelMoment, markAgenda, editSegment, renameSpeaker, meetingParticipants, setParticipants, loadGitlabPeople,
       detectSpeakersFor, diarizing, setWrapUp, recordExport, deleteAllMeetings, applyRetention, recordingLevels, pauseRecording, resumeRecording, retrySaving, deleteMeeting, renameMeeting,
-      stopRecording, stopping, nativeDevices, detailMeeting, detailSegments, detailTracks, loadDetail,
+      stopRecording, prepareSignOut, stopping, nativeDevices, detailMeeting, detailSegments, detailTracks, loadDetail,
       txProgress, txStage, summarizing, returnTo, transcribe, setupAndTranscribe, modelDownload, firstRunModel, cancelTranscription, modelMeta, downloadModel, selectModel, language, setLanguage, modelCatalog, installedModels,
       nativeStatus, nativeModels, refreshNativeStatus, enableGpu,
       liveEnabled, setLiveTranscription, liveModel, setLiveModelChoice, liveOptions, liveChoice,

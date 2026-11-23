@@ -4,7 +4,7 @@
  * `serverApi` talks to the account endpoints (`/api/me`, `/api/admin/*`, …).
  * Cookie auth + the `X-LT-CSRF` header on every state-changing request.
  */
-import { serverSession, sessionLost } from './server';
+import { SessionChangedError, serverSession, sessionEpoch, sessionLost } from './server';
 
 const CSRF_HEADER = 'X-LT-CSRF';
 
@@ -19,6 +19,19 @@ async function errorMessage(res: Response): Promise<string> {
   }
   const text = await res.text().catch(() => '');
   return text.trim() || `The server answered ${res.status}.`;
+}
+
+/**
+ * Bind an authenticated call to the session it starts under: nothing is sent
+ * without one, and an answer that arrives after the account changed is
+ * discarded, so a chunk or an import of account A can never land in B's data.
+ */
+function bind(): () => void {
+  const epoch = sessionEpoch();
+  if (serverSession() === null) throw new Error('Your session has ended. Sign in again.');
+  return () => {
+    if (sessionEpoch() !== epoch) throw new SessionChangedError();
+  };
 }
 
 /** Throw the server's `{error}` (Tauri-style: a plain message). A 401 ends the session. */
@@ -46,12 +59,14 @@ function csrfHeaders(): Record<string, string> {
 
 /** Call a per-user command (the Tauri `invoke` equivalent). */
 export async function serverInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const same = bind();
   const res = await fetch(`/api/invoke/${encodeURIComponent(cmd)}`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json', ...csrfHeaders() },
     body: JSON.stringify(args ?? {}),
   });
+  same();
   return reply<T>(await checked(res));
 }
 
@@ -61,12 +76,14 @@ export async function serverInvokeRaw<T>(
   body: Uint8Array,
   headers: Record<string, string> = {},
 ): Promise<T> {
+  const same = bind();
   const res = await fetch(`/api/invoke/${encodeURIComponent(cmd)}`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { ...headers, 'content-type': 'application/octet-stream', ...csrfHeaders() },
     body: body as unknown as BodyInit,
   });
+  same();
   return reply<T>(await checked(res));
 }
 

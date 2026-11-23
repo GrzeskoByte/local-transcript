@@ -4,7 +4,8 @@ import { deleteMeetingRecord, getMeeting, updateMeeting } from './meetings';
 import { commitTranscript, deleteSegments, getSegments, setSegmentSpeakers } from './transcripts';
 import { appendChunk, deleteRecording, readRecordingBlob } from './recordings';
 import { resetNativeSettingsCache } from '../platform/native-settings';
-import { setServerSession } from '../platform/server';
+import { SessionChangedError, setServerSession } from '../platform/server';
+import { importAudioFile } from '../features/meetings/import-audio';
 
 interface Call {
   cmd: string;
@@ -54,20 +55,49 @@ describe('server mode storage routing (no IndexedDB here: any IDB access would t
     expect(calls[4]!.args).toEqual({ store: 'segments', index: 'by-meeting', key: 'm1' });
   });
 
-  it('updateMeeting reads, applies the change and writes with put_if_exists', async () => {
-    handler = (cmd) => (cmd === 'server_db_get' ? { id: 'm1', title: 'Old' } : cmd === 'server_db_put_if_exists' ? true : null);
+  it('updateMeeting with a partial change is one server_db_patch (no read, no overwrite)', async () => {
+    handler = (cmd) => (cmd === 'server_db_patch' ? { id: 'm1', title: 'New', other: 1 } : null);
     const out = await updateMeeting('m1', { title: 'New' });
-    expect(out).toEqual({ id: 'm1', title: 'New' });
-    expect(calls[1]).toEqual({ cmd: 'server_db_put_if_exists', args: { store: 'meetings', value: { id: 'm1', title: 'New' } } });
+    expect(out).toEqual({ id: 'm1', title: 'New', other: 1 });
+    expect(calls).toEqual([{ cmd: 'server_db_patch', args: { store: 'meetings', key: 'm1', patch: { title: 'New' } } }]);
   });
 
   it('updateMeeting is a no-op when the meeting is gone (deleted mid-run)', async () => {
-    handler = () => null;
+    handler = () => null; // patch → null, get → null
     expect(await updateMeeting('gone', { title: 'x' })).toBeUndefined();
-    expect(calls.map((c) => c.cmd)).toEqual(['server_db_get']);
-    handler = (cmd) => (cmd === 'server_db_get' ? { id: 'm1' } : false);
+    expect(await updateMeeting('gone', (m) => m)).toBeUndefined();
+    expect(calls.map((c) => c.cmd)).toEqual(['server_db_patch', 'server_db_get']);
+  });
+
+  it('a function update is compare-and-set against the value it read', async () => {
+    handler = (cmd) => (cmd === 'server_db_get' ? { id: 'm1', n: 1 } : cmd === 'server_db_put_if_unchanged' ? true : null);
+    const out = await updateMeeting('m1', (m) => {
+      const next = { ...m, n: 2 };
+      (m as unknown as { n: number }).n = 99; // mutating the input must not corrupt `expected`
+      return next as never;
+    });
+    expect(out).toEqual({ id: 'm1', n: 2 });
+    expect(calls[1]).toEqual({
+      cmd: 'server_db_put_if_unchanged',
+      args: { store: 'meetings', value: { id: 'm1', n: 2 }, expected: { id: 'm1', n: 1 } },
+    });
+  });
+
+  it('a lost race re-reads and retries, then gives up after 5 attempts', async () => {
+    let writes = 0;
+    handler = (cmd) => {
+      if (cmd === 'server_db_get') return { id: 'm1', n: writes };
+      if (cmd === 'server_db_put_if_unchanged') return ++writes === 3; // two losses, then it wins
+      return null;
+    };
+    const out = await updateMeeting('m1', (m) => ({ ...m, seen: true }) as never);
+    expect(out).toEqual({ id: 'm1', n: 2, seen: true });
+    expect(calls.filter((c) => c.cmd === 'server_db_get')).toHaveLength(3);
+
     calls = [];
-    expect(await updateMeeting('m1', { title: 'x' })).toBeUndefined();
+    handler = (cmd) => (cmd === 'server_db_get' ? { id: 'm1' } : false);
+    await expect(updateMeeting('m1', (m) => m)).rejects.toThrow(/kept changing/);
+    expect(calls.filter((c) => c.cmd === 'server_db_put_if_unchanged')).toHaveLength(5);
   });
 
   it('commitTranscript, speakers and delete use their atomic commands', async () => {
@@ -118,5 +148,48 @@ describe('server mode storage routing (no IndexedDB here: any IDB access would t
     expect(calls.map((c) => c.cmd)).toEqual(['native_settings_load', 'native_settings_set']);
     await db.kvSet('calendar-cache:x', [1]);
     expect(calls.at(-1)).toEqual({ cmd: 'server_db_put', args: { store: 'kv', value: { key: 'calendar-cache:x', value: [1] } } });
+  });
+});
+
+describe('in-flight work cannot cross accounts', () => {
+  const as = (id: string) =>
+    setServerSession({ user: { id, email: `${id}@x`, name: id, role: 'member', auth: 'local' }, csrf: `c-${id}`, capabilities: [] });
+
+  it("a recorder's later chunks are refused after the account changed", async () => {
+    as('alice');
+    await appendChunk('rec1', '000000.webm', new Blob(['a']), '');
+    as('bob');
+    await expect(appendChunk('rec1', '000001.webm', new Blob(['b']), '')).rejects.toBeInstanceOf(SessionChangedError);
+    expect(calls.map((c) => c.cmd)).toEqual(['native_recording_write']); // only Alice's own chunk was sent
+    // Bob's own recordings are not affected.
+    await appendChunk('rec2', '000000.webm', new Blob(['c']), '');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('an import that outlives the session never writes under the new account', async () => {
+    as('alice');
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const send = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      if (url.endsWith('native_recording_write')) await gate; // the chunk upload is in flight
+      return send(url, init);
+    });
+    const file = new File([new Uint8Array(8)], 'call.webm', { type: 'audio/webm' });
+    const pending = importAudioFile(file);
+    await new Promise((r) => setTimeout(r, 0));
+    as('bob');
+    release();
+    await expect(pending).rejects.toBeInstanceOf(SessionChangedError);
+    expect(calls.map((c) => c.cmd)).not.toContain('server_db_put');
+  });
+
+  it('an aborted import (sign-out) writes nothing and removes what it started', async () => {
+    as('alice');
+    const abort = new AbortController();
+    abort.abort();
+    const file = new File([new Uint8Array(8)], 'call.webm', { type: 'audio/webm' });
+    await expect(importAudioFile(file, undefined, abort.signal)).rejects.toThrow(/cancelled/);
+    expect(calls.map((c) => c.cmd)).not.toContain('native_recording_write');
   });
 });

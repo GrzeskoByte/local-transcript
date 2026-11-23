@@ -33,7 +33,7 @@ import {
   type MailAccount,
 } from '../../integrations/calendar-detect';
 import { hasNativeBackend, isDesktopApp, openExternalUrl } from '../../platform/desktop';
-import { canManageModels, isServerApp, isServerAdmin } from '../../platform/server';
+import { canManageModels, isServerApp, isServerAdmin, thisPlace } from '../../platform/server';
 import { AccountSettings } from '../components/server/AccountSettings.tsx';
 import { UsersSettings } from '../components/server/UsersSettings.tsx';
 import { SignInSettings } from '../components/server/SignInSettings.tsx';
@@ -646,7 +646,7 @@ export function Settings(): React.JSX.Element {
               setGitlabBusy(true);
               setGitlabMessage(null);
               saveGitlabConfig(gitlabDraft)
-                .then(() => setGitlabMessage('GitLab settings saved on this device.'))
+                .then(() => setGitlabMessage(`GitLab settings saved on ${thisPlace('device')}.`))
                 .catch((e: unknown) =>
                   setGitlabMessage(e instanceof Error ? e.message : String(e)),
                 )
@@ -679,7 +679,7 @@ export function Settings(): React.JSX.Element {
               onClick={() => {
                 const cleared = { ...gitlabDraft, token: '' };
                 setGitlabDraft(cleared);
-                void saveGitlabConfig(cleared).then(() => setGitlabMessage('Disconnected — the token was removed from this computer.'));
+                void saveGitlabConfig(cleared).then(() => setGitlabMessage(`Disconnected — the token was removed from ${thisPlace('computer')}.`));
               }}
             >
               Disconnect
@@ -698,7 +698,7 @@ export function Settings(): React.JSX.Element {
         </div>
         <div className="muted">
           Create calendar events from a meeting summary on your company server.
-          Credentials stay on this device; transport runs through the desktop shell.
+          Credentials stay on {thisPlace('device')}; transport runs through {server ? 'the server' : 'the desktop shell'}.
         </div>
         <div className="btn-row">
           {!server && (
@@ -964,7 +964,7 @@ export function Settings(): React.JSX.Element {
               setCalBusy(true);
               setCalMessage(null);
               saveCalendarConfig(calDraft)
-                .then(() => setCalMessage('Calendar settings saved on this device.'))
+                .then(() => setCalMessage(`Calendar settings saved on ${thisPlace('device')}.`))
                 .catch((e: unknown) =>
                   setCalMessage(e instanceof Error ? e.message : String(e)),
                 )
@@ -1117,7 +1117,7 @@ export function Settings(): React.JSX.Element {
               setLlmBusy(true);
               setLlmMessage(null);
               saveLlmConfig(llmDraft)
-                .then(() => setLlmMessage('LLM settings saved on this device.'))
+                .then(() => setLlmMessage(`LLM settings saved on ${thisPlace('device')}.`))
                 .catch((e: unknown) =>
                   setLlmMessage(e instanceof Error ? e.message : String(e)),
                 )

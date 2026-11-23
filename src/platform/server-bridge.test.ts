@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invokeDesktop, invokeDesktopRaw, hasNativeBackend, isDesktopApp } from './desktop';
 import { serverInvoke, serverInvokeRaw, serverApi } from './server-bridge';
-import { hasCapability, isServerApp, loadServerSession, serverSession, setServerSession } from './server';
+import {
+  SessionChangedError,
+  hasCapability,
+  isServerApp,
+  loadServerSession,
+  serverSession,
+  sessionGuard,
+  setServerSession,
+} from './server';
 
 interface Call {
   url: string;
@@ -153,5 +161,71 @@ describe('account API', () => {
     const bytes = new Uint8Array([0, 255, 7]);
     await serverInvokeRaw('native_export_file', bytes);
     expect(calls[0]!.init.body).toBe(bytes);
+  });
+});
+
+describe('calls are bound to the session they started under', () => {
+  const ME_B = { ...ME, user: { ...ME.user, id: 'u2', email: 'b@x.io' }, csrf: 'tokB' };
+
+  it('sends nothing without a session', async () => {
+    setServerSession(null);
+    await expect(serverInvoke('native_recording_write', {})).rejects.toThrow(/session/i);
+    await expect(serverInvokeRaw('native_export_file', new Uint8Array([1]))).rejects.toThrow(/session/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('discards an answer that arrives after the account changed', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    reply = () => json({ ok: true });
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      await gate;
+      return reply({ url, init });
+    });
+    const pending = serverInvoke('native_recording_write', { request: { meetingId: 'a' } });
+    setServerSession(ME_B as never); // signed in as someone else meanwhile
+    release();
+    await expect(pending).rejects.toBeInstanceOf(SessionChangedError);
+    // and the new account's session is untouched by the old call
+    expect(serverSession()?.user.id).toBe('u2');
+  });
+
+  it('a late 401 of the old account cannot end the new one', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      await gate;
+      return json({ error: 'expired' }, 401);
+    });
+    const pending = serverInvoke('native_asr_status');
+    setServerSession(ME_B as never);
+    release();
+    await expect(pending).rejects.toBeInstanceOf(SessionChangedError);
+    expect(serverSession()?.user.id).toBe('u2');
+  });
+
+  it('sessionGuard throws once the account changed or the session ended', () => {
+    const same = sessionGuard();
+    expect(() => same()).not.toThrow();
+    setServerSession(ME as never); // same user re-loaded (/api/me refresh): still the same session
+    expect(() => same()).not.toThrow();
+    setServerSession(ME_B as never);
+    expect(() => same()).toThrow(SessionChangedError);
+
+    const other = sessionGuard();
+    setServerSession(null);
+    expect(() => other()).toThrow(SessionChangedError);
+    setServerSession(ME_B as never); // signing in again as the same user is a new session
+    expect(() => other()).toThrow(SessionChangedError);
+  });
+
+  it('a 401 reloads the page so nothing of the old session stays in memory', async () => {
+    let reloads = 0;
+    (window as unknown as { location: { reload: () => void } }).location.reload = () => void reloads++;
+    reply = () => json({ error: 'expired' }, 401);
+    await expect(serverInvoke('native_asr_status')).rejects.toThrow();
+    expect(reloads).toBe(1);
   });
 });

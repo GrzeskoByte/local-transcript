@@ -14,7 +14,7 @@
  * per meeting (`inNativeStore`).
  */
 import { hasNativeBackend, invokeDesktop, isDesktopApp } from '../platform/desktop';
-import { isServerApp } from '../platform/server';
+import { isServerApp, sessionGuard } from '../platform/server';
 import { Mp4StreamRepair } from '../audio/mp4-repair';
 import { bytesToBase64 } from '../asr/wav';
 
@@ -42,6 +42,22 @@ function hasOPFS(): boolean {
  */
 function useNative(): boolean {
   return isServerApp() || (!hasOPFS() && isDesktopApp());
+}
+
+/**
+ * Server edition: every write for a meeting must come from the session that
+ * wrote its first chunk. A recorder that outlives a sign-out (or a 401 and a
+ * sign-in as someone else) is refused instead of filling the new account.
+ */
+const writeGuards = new Map<string, () => void>();
+function guardServerWrite(id: string): void {
+  if (!isServerApp()) return;
+  let guard = writeGuards.get(id);
+  if (!guard) {
+    guard = sessionGuard();
+    writeGuards.set(id, guard);
+  }
+  guard();
 }
 
 /** Meetings known to be in the native store (recorded natively). */
@@ -182,6 +198,7 @@ async function trackDir(
 
 export async function writeMeta(id: string, meta: RecordingMeta): Promise<void> {
   if (useNative()) {
+    guardServerWrite(id);
     await invokeDesktop('native_recording_write_meta', { meetingId: id, meta: JSON.stringify(meta) });
     return;
   }
@@ -217,6 +234,7 @@ export async function appendChunk(
   track = '',
 ): Promise<void> {
   if (useNative()) {
+    guardServerWrite(id);
     const dataBase64 = bytesToBase64(new Uint8Array(await data.arrayBuffer()));
     try {
       await invokeDesktop('native_recording_write', { request: { meetingId: id, track, name, dataBase64 } });
@@ -355,6 +373,7 @@ async function assembled(parts: (Blob | Uint8Array)[], mimeType: string): Promis
 }
 
 export async function deleteRecording(id: string): Promise<void> {
+  writeGuards.delete(id);
   if (hasNativeBackend()) {
     // Native recordings live there on every OS (no orphans, §23).
     const native = invokeDesktop('native_recording_delete', { meetingId: id });

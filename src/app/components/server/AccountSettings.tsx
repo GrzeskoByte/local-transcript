@@ -2,15 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   changePassword,
   deleteOwnAccount,
-  endSession,
+  leaveSession,
   formatWhen,
   listSessions,
   revokeSession,
-  signOut,
   useServerSession,
   type ServerSessionRow,
 } from './api';
 import { UsageMeter } from './Usage';
+import { SignOutButton } from './SignOutButton';
 import { ConfirmButton } from '../ConfirmButton';
 
 const MIN_PASSWORD = 8;
@@ -32,9 +32,7 @@ function ProfileCard(): React.JSX.Element | null {
         <span className="pill">{user.auth === 'oidc' ? 'single sign-on' : 'local account'}</span>
       </div>
       <div className="btn-row">
-        <button type="button" className="btn" onClick={() => void signOut()}>
-          Sign out
-        </button>
+        <SignOutButton className="btn" />
       </div>
     </section>
   );
@@ -116,7 +114,7 @@ function SessionsCard(): React.JSX.Element {
             className="btn btn-sm"
             onClick={() =>
               void revokeSession(s.id)
-                .then(() => (s.current ? endSession() : reload()))
+                .then(() => (s.current ? leaveSession() : reload()))
                 .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
             }
           >
@@ -173,8 +171,7 @@ function DeleteCard(): React.JSX.Element | null {
             setError(null);
             deleteOwnAccount(typed.trim())
               .then(() => {
-                endSession();
-                window.location.hash = '#/signin';
+                leaveSession();
               })
               .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
           }}

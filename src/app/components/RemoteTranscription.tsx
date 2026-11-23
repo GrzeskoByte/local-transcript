@@ -8,6 +8,7 @@ import {
   type RemoteAsrConfig,
 } from '../../integrations/remote-asr';
 import { logNetwork } from '../../platform/network-log';
+import { thisPlace } from '../../platform/server';
 
 /** Settings → Models: transcribe on the user's Open WebUI server instead of this computer. */
 export function RemoteTranscriptionSettings(): React.JSX.Element {
@@ -44,9 +45,9 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
         {on && <span className="badge badge-ok">[x] On</span>}
       </div>
       <div className="muted">
-        Optional: transcribe recordings on your own Open WebUI server instead of this computer. When it is on,
+        Optional: transcribe recordings on your own Open WebUI server instead of {thisPlace('computer')}. When it is on,
         Transcribe sends the recording&apos;s speech (16 kHz WAV pieces, silence left out) to that server — it
-        leaves this device. Live transcription still runs locally.
+        leaves {thisPlace('device')}. Live transcription still runs locally.
       </div>
       <label className="check-row">
         <input
@@ -106,7 +107,7 @@ export function RemoteTranscriptionSettings(): React.JSX.Element {
               setDirty(false);
               return draft.enabled
                 ? 'Saved. Transcribe now uses the transcription server.'
-                : 'Saved. Transcription runs on this computer.';
+                : `Saved. Transcription runs on ${thisPlace('computer')}.`;
             })
           }
         >

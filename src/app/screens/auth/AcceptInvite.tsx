@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { acceptInvite } from '../../components/server/api';
+import { acceptInvite, reloadApp } from '../../components/server/api';
 import { AuthFrame } from './SignIn';
 
 const MIN_PASSWORD = 8;
@@ -25,7 +25,7 @@ export function AcceptInvite({ token }: { token: string }): React.JSX.Element {
     setError(null);
     acceptInvite(token, name.trim(), password)
       .then(() => {
-        window.location.hash = '#/';
+        reloadApp('#/');
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setBusy(false));

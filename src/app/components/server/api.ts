@@ -51,6 +51,21 @@ export function endSession(): void {
   setServerSession(null);
 }
 
+/**
+ * Full page reload after the account changed (sign-in, sign-out, deletion): no
+ * recorder, cache or pref of the previous account survives in memory.
+ */
+export function reloadApp(hash = '#/'): void {
+  window.location.hash = hash;
+  window.location.reload();
+}
+
+/** The session is over (revoked here, account deleted): clean slate. */
+export function leaveSession(): void {
+  endSession();
+  reloadApp('#/signin');
+}
+
 /** Sign out; follows the provider's end-session URL when the server sends one. */
 export async function signOut(): Promise<void> {
   let redirect: string | undefined;
@@ -62,7 +77,7 @@ export async function signOut(): Promise<void> {
   }
   endSession();
   if (redirect) window.location.assign(redirect);
-  else window.location.hash = '#/signin';
+  else reloadApp('#/signin');
 }
 
 // ---- own account ----------------------------------------------------------
@@ -114,7 +129,8 @@ export interface AdminSettings {
     issuer: string;
     clientId: string;
     clientSecretSet: boolean;
-    scopes: string;
+    /** A list on the wire (a space-separated string is tolerated). */
+    scopes: string[] | string;
     providerName: string;
     adminGroup: string;
     allowedGroups: string[] | string;
