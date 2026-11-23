@@ -85,7 +85,7 @@ fn quota_message(quota_bytes: u64) -> String {
 /// Save one chunk. `quota_bytes` 0 = unlimited; otherwise the user's whole
 /// folder (after this write) must stay within it.
 pub fn write_chunk(user_dir: &Path, req: &WriteChunkRequest, quota_bytes: u64) -> Result<(), String> {
-    if !valid_segment(&req.name) || req.name == META {
+    if !valid_segment(&req.name) || req.name == META || req.name.ends_with(".part") {
         return Err(format!("Invalid chunk name: {}", req.name));
     }
     let root = root(user_dir);
@@ -94,7 +94,7 @@ pub fn write_chunk(user_dir: &Path, req: &WriteChunkRequest, quota_bytes: u64) -
     if quota_bytes > 0 {
         let replaced = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let used = dir_size(user_dir).saturating_sub(replaced);
-        if used + bytes.len() as u64 > quota_bytes {
+        if used.saturating_add(bytes.len() as u64) > quota_bytes {
             return Err(quota_message(quota_bytes));
         }
     }
@@ -130,15 +130,10 @@ pub fn list(user_dir: &Path, meeting_id: &str) -> Result<Vec<TrackChunks>, Strin
     Ok(tracks)
 }
 
-/// All chunks of a track, concatenated in order.
-pub fn read_track(user_dir: &Path, meeting_id: &str, track: &str) -> Result<Vec<u8>, String> {
+/// Snapshot the chunk paths in concatenation order. The HTTP body opens one at a time.
+pub fn track_paths(user_dir: &Path, meeting_id: &str, track: &str) -> Result<Vec<PathBuf>, String> {
     let dir = track_dir(&root(user_dir), meeting_id, track)?;
-    let mut out = Vec::new();
-    for name in chunk_names(&dir) {
-        let mut bytes = fs::read(dir.join(&name)).map_err(|e| format!("Could not read {name}: {e}"))?;
-        out.append(&mut bytes);
-    }
-    Ok(out)
+    Ok(chunk_names(&dir).into_iter().map(|name| dir.join(name)).collect())
 }
 
 pub fn delete(user_dir: &Path, meeting_id: &str) -> Result<(), String> {

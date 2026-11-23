@@ -4,7 +4,7 @@
 // (round-robin across users); every job belongs to a user and `cancel` only
 // reaches the caller's; models are addressed by plain name (no filesystem paths).
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -21,6 +21,11 @@ use crate::util::{lock, unique_path};
 use crate::Engine;
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
+const MAX_FILE_AUDIO_SECS: usize = 4 * 60 * 60;
+
+pub fn default_sample_rate() -> u32 {
+    TARGET_SAMPLE_RATE
+}
 const MAX_TRANSCRIBE_SECS: u64 = 30 * 60;
 const DEFAULT_MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
@@ -49,7 +54,7 @@ impl AsrState {
 pub struct TranscribeRequest {
     /// A 16 kHz mono WAV (or bare little-endian f32 PCM), base64 encoded.
     pub samples_base64: String,
-    #[serde(default)]
+    #[serde(default = "default_sample_rate")]
     pub sample_rate: u32,
     /// Native model name, e.g. `"large-v3-turbo"`.
     #[serde(default)]
@@ -264,23 +269,25 @@ impl Drop for Prepared {
 }
 
 /// Decode the audio, resolve the model, write the 16 kHz WAV. `None` = nothing to transcribe.
-pub fn prepare(models_dir: &Path, tmp_dir: &Path, request: &TranscribeRequest) -> Result<Option<Prepared>, String> {
+pub fn prepare(models_dir: &Path, tmp_dir: &Path, request: &TranscribeRequest, max_secs: usize) -> Result<Option<Prepared>, String> {
     if let Some(model) = request.model.as_deref().filter(|m| !m.is_empty()) {
         if !models::valid_model_name(model) {
             return Err(format!("Invalid model name: {model}"));
         }
     }
+    check_rate(request.sample_rate)?;
     let raw = base64::engine::general_purpose::STANDARD
         .decode(request.samples_base64.as_bytes())
         .map_err(|e| format!("Invalid base64 audio: {e}"))?;
     if raw.is_empty() {
         return Ok(None);
     }
-    let (samples, source_rate) = decode_audio(&raw, request.sample_rate)?;
+    let (samples, source_rate) = decode_audio(&raw, request.sample_rate, max_secs)?;
+    drop(raw);
     if samples.is_empty() {
         return Ok(None);
     }
-    let resampled = if source_rate != TARGET_SAMPLE_RATE && source_rate != 0 {
+    let resampled = if source_rate != TARGET_SAMPLE_RATE {
         resample_linear(&samples, source_rate, TARGET_SAMPLE_RATE)
     } else {
         samples
@@ -299,11 +306,6 @@ pub async fn transcribe(engine: &Engine, user: &str, request: TranscribeRequest)
     let backend = engine.backend().ok_or_else(|| "No transcription backend available".to_string())?;
     let guard = engine.asr.jobs.register(user);
     let (models_dir, tmp_dir) = (engine.models_dir(), engine.tmp_dir());
-    let prepared = tokio::task::spawn_blocking(move || prepare(&models_dir, &tmp_dir, &request))
-        .await
-        .map_err(|e| format!("Transcription task failed: {e}"))??;
-    let Some(prepared) = prepared else { return Ok(Vec::new()) };
-
     // Waiting in line (cancelling the user's jobs ends the wait).
     let permit = engine
         .asr
@@ -320,6 +322,10 @@ pub async fn transcribe(engine: &Engine, user: &str, request: TranscribeRequest)
     tokio::task::spawn_blocking(move || {
         let _slot = permit; // released when the CLI is done
         let _guard = guard;
+        let Some(prepared) = prepare(&models_dir, &tmp_dir, &request, MAX_FILE_AUDIO_SECS)? else {
+            return Ok(Vec::new());
+        };
+        drop(request);
         run_whisper(&backend, &prepared, &ctl)
     })
     .await
@@ -505,23 +511,38 @@ fn run_child(ctl: &JobCtl, program: &Path, args: &[String]) -> Result<(), String
 // Audio helpers
 // ---------------------------------------------------------------------------
 
+fn check_rate(rate: u32) -> Result<(), String> {
+    if !(8_000..=192_000).contains(&rate) {
+        return Err("Audio sample rate must be between 8000 and 192000 Hz.".into());
+    }
+    Ok(())
+}
+
+fn check_samples(frames: usize, rate: u32, max_secs: usize) -> Result<(), String> {
+    check_rate(rate)?;
+    if frames > rate as usize * max_secs || frames > TARGET_SAMPLE_RATE as usize * max_secs {
+        return Err(format!("Audio payload exceeds the sample or duration limit ({max_secs} seconds at 16 kHz)."));
+    }
+    Ok(())
+}
+
 /// Decode the audio payload: a RIFF/WAVE container, else bare little-endian f32 mono PCM.
-fn decode_audio(raw: &[u8], declared_rate: u32) -> Result<(Vec<f32>, u32), String> {
+fn decode_audio(raw: &[u8], declared_rate: u32, max_secs: usize) -> Result<(Vec<f32>, u32), String> {
     if raw.len() >= 12 && &raw[0..4] == b"RIFF" && &raw[8..12] == b"WAVE" {
-        return parse_wav(raw);
+        return parse_wav(raw, max_secs);
     }
     if raw.len() & 3 != 0 {
         return Err("Audio payload length is not a multiple of 4 bytes".to_string());
     }
+    check_samples(raw.len() / 4, declared_rate, max_secs)?;
     let samples: Vec<f32> = (0..raw.len() / 4)
         .map(|i| f32::from_le_bytes([raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2], raw[i * 4 + 3]]))
         .collect();
-    let rate = if declared_rate == 0 { TARGET_SAMPLE_RATE } else { declared_rate };
-    Ok((samples, rate))
+    Ok((samples, declared_rate))
 }
 
 /// Minimal RIFF/WAVE reader: PCM s16, PCM s32 and IEEE float32, downmixed to mono.
-fn parse_wav(raw: &[u8]) -> Result<(Vec<f32>, u32), String> {
+fn parse_wav(raw: &[u8], max_secs: usize) -> Result<(Vec<f32>, u32), String> {
     let mut pos = 12usize;
     let mut fmt: Option<(u16, u16, u32, u16)> = None;
     let mut data: Option<&[u8]> = None;
@@ -551,7 +572,14 @@ fn parse_wav(raw: &[u8]) -> Result<(Vec<f32>, u32), String> {
     let (format, channels, rate, bits) = fmt.ok_or_else(|| "WAV missing fmt chunk".to_string())?;
     let data = data.ok_or_else(|| "WAV missing data chunk".to_string())?;
     let channels = channels.max(1) as usize;
-    let mut samples: Vec<f32> = Vec::new();
+    let frame_bytes = match (format, bits) {
+        (1, 16) => 2 * channels,
+        (1 | 3, 32) => 4 * channels,
+        _ => return Err(format!("Unsupported WAV format {format} with {bits}-bit samples")),
+    };
+    let frames = data.len() / frame_bytes;
+    check_samples(frames, rate, max_secs)?;
+    let mut samples = Vec::with_capacity(frames);
     match (format, bits) {
         (1, 16) => {
             for frame in data.chunks_exact(2 * channels) {
@@ -582,7 +610,7 @@ fn parse_wav(raw: &[u8]) -> Result<(Vec<f32>, u32), String> {
                 samples.push(acc / channels as f32);
             }
         }
-        _ => return Err(format!("Unsupported WAV format {format} with {bits}-bit samples")),
+        _ => unreachable!("WAV format already validated"),
     }
     Ok((samples, rate))
 }
@@ -606,17 +634,12 @@ fn resample_linear(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
 }
 
 fn write_wav(path: &Path, samples: &[f32]) -> Result<(), String> {
-    let mut pcm: Vec<u8> = Vec::with_capacity(samples.len() * 2);
-    for &sample in samples {
-        let value = (sample.clamp(-1.0, 1.0) * 32767.0).round() as i32;
-        pcm.extend_from_slice(&(value.clamp(-32768, 32767) as i16).to_le_bytes());
-    }
-    let data_len = pcm.len() as u32;
+    let data_len = (samples.len() * 2) as u32;
     let channels: u16 = 1;
     let bits: u16 = 16;
     let byte_rate = TARGET_SAMPLE_RATE * channels as u32 * (bits as u32 / 8);
     let block_align = channels * (bits / 8);
-    let mut out: Vec<u8> = Vec::with_capacity(44 + pcm.len());
+    let mut out = Vec::with_capacity(44);
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&(36 + data_len).to_le_bytes());
     out.extend_from_slice(b"WAVEfmt ");
@@ -629,8 +652,16 @@ fn write_wav(path: &Path, samples: &[f32]) -> Result<(), String> {
     out.extend_from_slice(&bits.to_le_bytes());
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_len.to_le_bytes());
-    out.extend_from_slice(&pcm);
-    std::fs::write(path, out).map_err(|e| format!("Failed to write temp WAV: {e}"))
+    let write = || -> std::io::Result<()> {
+        let mut file = BufWriter::new(std::fs::File::create(path)?);
+        file.write_all(&out)?;
+        for &sample in samples {
+            let value = (sample.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            file.write_all(&value.to_le_bytes())?;
+        }
+        file.flush()
+    };
+    write().map_err(|e| format!("Failed to write temp WAV: {e}"))
 }
 
 #[cfg(test)]
@@ -653,11 +684,39 @@ mod tests {
     fn wav_round_trips_through_the_decoder() {
         let tmp = std::env::temp_dir().join(format!("lt-wav-{}.wav", std::process::id()));
         write_wav(&tmp, &[0.0, 0.5, -0.5, 1.0]).unwrap();
-        let (samples, rate) = decode_audio(&std::fs::read(&tmp).unwrap(), 0).unwrap();
+        let (samples, rate) = decode_audio(&std::fs::read(&tmp).unwrap(), TARGET_SAMPLE_RATE, 60).unwrap();
         let _ = std::fs::remove_file(&tmp);
         assert_eq!(rate, 16_000);
         assert_eq!(samples.len(), 4);
         assert!((samples[1] - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn rejects_out_of_range_declared_and_wav_rates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audio.wav");
+        write_wav(&path, &[0.0]).unwrap();
+        let mut wav = std::fs::read(path).unwrap();
+        for rate in [0u32, 7_999, 192_001] {
+            assert!(decode_audio(&[0; 4], rate, 60).unwrap_err().contains("sample rate"));
+            wav[24..28].copy_from_slice(&rate.to_le_bytes());
+            assert!(decode_audio(&wav, TARGET_SAMPLE_RATE, 60).unwrap_err().contains("sample rate"));
+        }
+    }
+
+    #[test]
+    fn rejects_oversized_wav_and_pcm_before_decoding() {
+        let rate = 8_000;
+        let frames = rate as usize * 60 + 1;
+        assert!(decode_audio(&vec![0; frames * 4], rate, 60).unwrap_err().contains("duration limit"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audio.wav");
+        write_wav(&path, &vec![0.0; frames]).unwrap();
+        let mut wav = std::fs::read(path).unwrap();
+        wav[24..28].copy_from_slice(&rate.to_le_bytes());
+        assert!(decode_audio(&wav, rate, 60).unwrap_err().contains("duration limit"));
+        assert!(check_samples(TARGET_SAMPLE_RATE as usize * MAX_FILE_AUDIO_SECS + 1, 192_000, MAX_FILE_AUDIO_SECS).is_err());
+        assert!(check_samples(frames - 1, rate, 60).is_ok());
     }
 
     #[test]

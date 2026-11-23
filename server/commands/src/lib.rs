@@ -7,7 +7,7 @@
 //! `src-tauri/src`, but every path is resolved from `UserCtx.user_dir`.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -47,6 +47,7 @@ pub struct EngineConfig {
     /// whisper-cli; `None` = discover like `src-tauri/src/models.rs`.
     pub whisper_cli: Option<PathBuf>,
     pub diarize_dir: Option<PathBuf>,
+    pub calendar_allowed_hosts: Vec<String>,
     /// Encrypts per-user settings at rest.
     pub secret_key: [u8; 32],
 }
@@ -58,6 +59,7 @@ pub struct Engine {
     pub(crate) asr: asr::AsrState,
     pub(crate) live: live::LiveState,
     pub(crate) diarize: diarize::DiarizeState,
+    recording_writes: Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>,
 }
 
 impl Engine {
@@ -70,7 +72,20 @@ impl Engine {
             asr: asr::AsrState::new(),
             live: live::LiveState::new(),
             diarize: diarize::DiarizeState::default(),
+            recording_writes: Mutex::default(),
         })
+    }
+
+    fn recording_write_lock(&self, dir: &Path) -> Arc<Mutex<()>> {
+        let mut locks = util::lock(&self.recording_writes);
+        locks.retain(|_, lock| lock.strong_count() != 0);
+        let lock = locks.entry(dir.to_owned()).or_default();
+        if let Some(current) = lock.upgrade() {
+            return current;
+        }
+        let current = Arc::new(Mutex::new(()));
+        *lock = Arc::downgrade(&current);
+        current
     }
 
     /// An owning handle, for work that moves to a blocking thread.
@@ -87,7 +102,7 @@ pub enum Body {
 
 pub enum Reply {
     Json(Value),
-    Bytes(Vec<u8>),
+    Recording(Vec<PathBuf>),
 }
 
 #[derive(Debug)]
@@ -139,6 +154,8 @@ const MEMBER_COMMANDS: &[&str] = &[
     "server_db_put",
     "server_db_delete",
     "server_db_put_if_exists",
+    "server_db_patch",
+    "server_db_put_if_unchanged",
     "server_db_commit_transcript",
     "server_db_set_segment_speakers",
     "server_db_delete_meeting",
@@ -174,7 +191,7 @@ pub async fn dispatch(engine: &Engine, ctx: &UserCtx, cmd: &str, body: Body) -> 
         return json(text);
     }
 
-    let args = match body {
+    let mut args = match body {
         Body::Json(v) => Args::from_value(v)?,
         Body::Raw { .. } => return Err("This command takes JSON arguments.".to_string().into()),
     };
@@ -195,12 +212,20 @@ pub async fn dispatch(engine: &Engine, ctx: &UserCtx, cmd: &str, body: Body) -> 
         // --- recordings ---------------------------------------------------------
         "native_recording_write" => {
             let request: recordings::WriteChunkRequest = args.get("request")?;
-            blocking(move || recordings::write_chunk(&dir, &request, ctx.quota_bytes)).await?;
+            blocking(move || {
+                let lock = engine.recording_write_lock(&dir);
+                let _guard = util::lock(&lock);
+                recordings::write_chunk(&dir, &request, ctx.quota_bytes)
+            }).await?;
             json(())
         }
         "native_recording_write_meta" => {
             let (id, meta): (String, String) = (args.get("meetingId")?, args.get("meta")?);
-            blocking(move || recordings::write_meta(&dir, &id, &meta)).await?;
+            blocking(move || {
+                let lock = engine.recording_write_lock(&dir);
+                let _guard = util::lock(&lock);
+                recordings::write_meta(&dir, &id, &meta)
+            }).await?;
             json(())
         }
         "native_recording_read_meta" => {
@@ -214,8 +239,7 @@ pub async fn dispatch(engine: &Engine, ctx: &UserCtx, cmd: &str, body: Body) -> 
         "native_recording_read" => {
             let id: String = args.get("meetingId")?;
             let track: String = args.opt("track")?.unwrap_or_default();
-            let bytes = blocking(move || recordings::read_track(&dir, &id, &track)).await?;
-            Ok(Reply::Bytes(bytes))
+            Ok(Reply::Recording(blocking(move || recordings::track_paths(&dir, &id, &track)).await?))
         }
         "native_recording_delete" => {
             let id: String = args.get("meetingId")?;
@@ -239,7 +263,7 @@ pub async fn dispatch(engine: &Engine, ctx: &UserCtx, cmd: &str, body: Body) -> 
             "GPU acceleration is configured by whoever runs this server (use a GPU-enabled whisper.cpp build).".into(),
         )),
         "native_asr_transcribe" => {
-            let request: asr::TranscribeRequest = args.get("request")?;
+            let request: asr::TranscribeRequest = args.take("request")?;
             json(asr::transcribe(&engine, &user, request).await?)
         }
         "native_asr_cancel" => {
@@ -249,7 +273,7 @@ pub async fn dispatch(engine: &Engine, ctx: &UserCtx, cmd: &str, body: Body) -> 
 
         // --- live ---------------------------------------------------------------
         "native_live_transcribe" => {
-            let request: live::LiveTranscribeRequest = args.get("request")?;
+            let request: live::LiveTranscribeRequest = args.take("request")?;
             json(live::transcribe(&engine, &user, request).await?)
         }
         "native_live_cancel" => {
@@ -268,15 +292,15 @@ pub async fn dispatch(engine: &Engine, ctx: &UserCtx, cmd: &str, body: Body) -> 
         // --- calendar -------------------------------------------------------------
         "native_calendar_test" => {
             let request: calendar::CalendarTestRequest = args.get("request")?;
-            json(blocking(move || calendar::test(&request)).await?)
+            json(blocking(move || calendar::test(&request, &engine.config.calendar_allowed_hosts)).await?)
         }
         "native_calendar_create" | "native_calendar_fetch" => {
             let request: calendar::CalendarCreateRequest = args.get("request")?;
-            json(blocking(move || calendar::curl_send(&request)).await?)
+            json(blocking(move || calendar::send(&request, &engine.config.calendar_allowed_hosts)).await?)
         }
         "native_calendar_probe" => {
             let request: calendar::ProbeRequest = args.get("request")?;
-            json(blocking(move || calendar::probe(&request)).await?)
+            json(blocking(move || calendar::probe(&request, &engine.config.calendar_allowed_hosts)).await?)
         }
 
         // --- meeting database -------------------------------------------------------
@@ -319,7 +343,7 @@ pub fn usage_bytes(user_dir: &Path) -> u64 {
 }
 
 /// Zip of the user's data: meetings/segments/kv as JSON, decrypted settings, recordings.
-pub async fn export_user(engine: &Engine, ctx: &UserCtx) -> Result<Vec<u8>, String> {
+pub async fn export_user(engine: &Engine, ctx: &UserCtx) -> Result<std::fs::File, String> {
     let dir = ctx.user_dir.clone();
     let key = engine.config.secret_key;
     tokio::task::spawn_blocking(move || export_blocking(&dir, &key))
@@ -327,28 +351,29 @@ pub async fn export_user(engine: &Engine, ctx: &UserCtx) -> Result<Vec<u8>, Stri
         .map_err(|e| format!("Export task failed: {e}"))?
 }
 
-fn export_blocking(dir: &Path, key: &[u8; 32]) -> Result<Vec<u8>, String> {
-    use std::io::{Cursor, Write};
+fn export_blocking(dir: &Path, key: &[u8; 32]) -> Result<std::fs::File, String> {
+    use std::io::Seek;
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
     let zip_err = |e: zip::result::ZipError| format!("Could not build the export: {e}");
     let io_err = |e: std::io::Error| format!("Could not build the export: {e}");
-    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
-    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    // The OS removes the scratch file when its last handle closes, including on disconnect.
+    let mut zip = ZipWriter::new(tempfile::tempfile_in(dir).map_err(io_err)?);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).large_file(true);
 
-    let (meetings, segments, kv) = db::export(dir)?;
-    let settings = settings::load(dir, key);
-    let pretty = |v: &Value| serde_json::to_vec_pretty(v).map_err(|e| format!("Could not encode the export: {e}"));
-    for (name, value) in [
-        ("meetings.json", Value::Array(meetings)),
-        ("segments.json", Value::Array(segments)),
-        ("kv.json", Value::Array(kv)),
-        ("settings.json", Value::Object(settings)),
-    ] {
-        zip.start_file(name, deflated).map_err(zip_err)?;
-        zip.write_all(&pretty(&value)?).map_err(io_err)?;
+    {
+        let mut conn = db::db_path(dir).is_file().then(|| db::open(dir)).transpose()?;
+        let snapshot = conn.as_mut().map(|conn| conn.transaction()).transpose()
+            .map_err(|e| format!("Database error: {e}"))?;
+        for store in ["meetings", "segments", "kv"] {
+            zip.start_file(format!("{store}.json"), deflated).map_err(zip_err)?;
+            db::export_table(snapshot.as_deref(), store, &mut zip)?;
+        }
     }
+    zip.start_file("settings.json", deflated).map_err(zip_err)?;
+    serde_json::to_writer_pretty(&mut zip, &settings::load(dir, key))
+        .map_err(|e| format!("Could not encode the export: {e}"))?;
 
     // Audio chunks are already compressed (Opus): store them as they are.
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored).large_file(true);
@@ -373,7 +398,9 @@ fn export_blocking(dir: &Path, key: &[u8; 32]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    zip.finish().map(|c| c.into_inner()).map_err(zip_err)
+    let mut file = zip.finish().map_err(zip_err)?;
+    file.rewind().map_err(io_err)?;
+    Ok(file)
 }
 
 /// Cancel the user's jobs and remove `user_dir` entirely.

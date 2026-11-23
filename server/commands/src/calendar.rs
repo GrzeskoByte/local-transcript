@@ -1,18 +1,189 @@
-//! Company calendar transport (CalDAV / Microsoft Graph / EWS) through the
-//! server's `curl`, with the user's own credentials from the request.
-// Ported from src-tauri/src/calendar.rs (create/fetch/test) and
-// src-tauri/src/calendar_detect.rs (probe). Same validation; additionally the
-// protocol is pinned to http(s) (`--proto`) so curl can never read local files.
-use std::io::Write;
-use std::process::Stdio;
+//! Company calendar transport (CalDAV / Microsoft Graph / EWS).
+// Ported from src-tauri/src/calendar.rs and src-tauri/src/calendar_detect.rs.
+use std::io::Read;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use ipnet::IpNet;
+use reqwest::{
+    blocking::{Client, RequestBuilder, Response},
+    header::{self, HeaderMap, HeaderName, HeaderValue},
+    redirect::Policy,
+    Method, Url,
+};
 use serde::{Deserialize, Serialize};
+use url::Host;
+
+const MAX_PROBE_BODY: u64 = 256 * 1024;
+const MAX_CALENDAR_BODY: u64 = 16 * 1024 * 1024;
+
+fn endpoint(input: &str) -> Result<Url, String> {
+    let url = Url::parse(input).map_err(|_| "Invalid calendar endpoint.")?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Refusing non-HTTP(S) calendar endpoint.".into());
+    }
+    if url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || input.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(
+            "Expected an HTTP(S) calendar endpoint without credentials or a fragment.".into(),
+        );
+    }
+    Ok(url)
+}
+
+fn public_ip(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            !(ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_documentation()
+                || a == 0
+                || a >= 240
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 192 && b == 0 && c == 0)
+                || (a == 198 && matches!(b, 18 | 19)))
+        }
+        IpAddr::V6(ip) => {
+            let [a, b, ..] = ip.segments();
+            // Global unicast only, excluding special-use space, documentation and 6to4.
+            a & 0xe000 == 0x2000
+                && (a != 0x2001 || (b >= 0x0200 && b != 0x0db8))
+                && !matches!(a, 0x2002 | 0x3fff)
+        }
+    }
+}
+
+fn check_addresses(host: &str, addresses: &[SocketAddr], allowed: &[String]) -> Result<(), String> {
+    let allowed_host = allowed.iter().any(|entry| {
+        entry
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case(host.trim_end_matches('.'))
+    });
+    let networks: Vec<IpNet> = allowed
+        .iter()
+        .filter_map(|entry| entry.parse().ok())
+        .collect();
+    if addresses.is_empty()
+        || addresses.iter().any(|address| {
+            let ip = address.ip();
+            !allowed_host
+                && !public_ip(ip)
+                && !networks
+                    .iter()
+                    .any(|network| network.contains(&ip) || network.contains(&ip.to_canonical()))
+        })
+    {
+        return Err("Calendar endpoint resolves to a restricted address. Ask the server administrator to allow this host.".into());
+    }
+    Ok(())
+}
+
+fn client(
+    url: &Url,
+    allowed: &[String],
+    connect_secs: u64,
+    request_secs: u64,
+) -> Result<Client, String> {
+    let host = url.host_str().ok_or("Calendar endpoint has no host.")?;
+    let port = url
+        .port_or_known_default()
+        .ok_or("Calendar endpoint has no port.")?;
+    let addresses: Vec<_> = match url.host() {
+        Some(Host::Ipv4(ip)) => vec![SocketAddr::new(ip.into(), port)],
+        Some(Host::Ipv6(ip)) => vec![SocketAddr::new(ip.into(), port)],
+        _ => (host, port)
+            .to_socket_addrs()
+            .map_err(|_| "Could not resolve the calendar endpoint.")?
+            .collect(),
+    };
+    check_addresses(host, &addresses, allowed)?;
+    // Keep the original URL for Host and TLS verification. Only dial the checked addresses.
+    Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .resolve_to_addrs(host, &addresses)
+        .connect_timeout(Duration::from_secs(connect_secs))
+        .timeout(Duration::from_secs(request_secs))
+        .build()
+        .map_err(|_| "Could not initialize the calendar client.".into())
+}
+
+fn request_headers(content_type: &str, headers: &[String]) -> Result<HeaderMap, String> {
+    let mut map = HeaderMap::new();
+    if !content_type.is_empty() {
+        map.insert(header::CONTENT_TYPE, header_value(content_type)?);
+    }
+    for raw in headers {
+        let (name, value) = raw
+            .split_once(':')
+            .ok_or("Expected a calendar header name and value.")?;
+        let name =
+            HeaderName::from_bytes(name.as_bytes()).map_err(|_| "Invalid calendar header name.")?;
+        // The app sends these transport headers. The client owns routing, framing and credentials.
+        if !matches!(name.as_str(), "depth" | "soapaction" | "content-type") {
+            return Err("Unsupported calendar transport header.".into());
+        }
+        map.insert(name, header_value(value)?);
+    }
+    Ok(map)
+}
+
+fn header_value(value: &str) -> Result<HeaderValue, String> {
+    if value.contains(['\r', '\n']) {
+        return Err("Calendar headers and credentials must not contain CR or LF.".into());
+    }
+    HeaderValue::from_str(value.trim()).map_err(|_| "Invalid calendar header value.".into())
+}
+
+fn basic_auth(headers: &mut HeaderMap, username: &str, password: &str) -> Result<(), String> {
+    if username.contains(['\r', '\n']) || password.contains(['\r', '\n']) {
+        return Err("Calendar headers and credentials must not contain CR or LF.".into());
+    }
+    let mut value = header_value(&format!(
+        "Basic {}",
+        STANDARD.encode(format!("{username}:{password}"))
+    ))?;
+    value.set_sensitive(true);
+    headers.insert(header::AUTHORIZATION, value);
+    Ok(())
+}
+
+fn send_request(builder: RequestBuilder, method: &str, body: &str) -> Result<Response, String> {
+    let builder = if method == "GET" {
+        builder
+    } else {
+        builder.body(body.to_owned())
+    };
+    builder
+        .send()
+        .map_err(|_| "Calendar request failed.".into())
+}
+
+fn response_body(response: Response, limit: u64, truncate: bool) -> Result<String, String> {
+    let mut body = Vec::new();
+    response
+        .take(limit + u64::from(!truncate))
+        .read_to_end(&mut body)
+        .map_err(|_| "Could not read the calendar response.")?;
+    if body.len() as u64 > limit {
+        return Err("Calendar response exceeds the maximum size.".into());
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
 
 /// What the frontend sends: a fully-built body + where/how to deliver it.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarCreateRequest {
-    /// `caldav` | `graph` | `ews` (used only for error context).
+    /// `caldav` | `graph` | `ews`.
     pub provider: String,
     pub endpoint: String,
     pub username: Option<String>,
@@ -28,70 +199,57 @@ pub struct CalendarCreateRequest {
     pub headers: Vec<String>,
 }
 
-fn valid_endpoint(url: &str) -> bool {
-    (url.starts_with("https://") || url.starts_with("http://"))
-        && !url.chars().any(|c| c.is_control() || c.is_whitespace())
-}
-
 /// POST/PUT `body` to `endpoint`, return the response on success.
-pub fn curl_send(req: &CalendarCreateRequest) -> Result<String, String> {
-    if !valid_endpoint(&req.endpoint) {
-        return Err("Refusing non-HTTP(S) calendar endpoint.".to_string());
+pub fn send(req: &CalendarCreateRequest, allowed: &[String]) -> Result<String, String> {
+    let url = endpoint(&req.endpoint)?;
+    if !matches!(
+        req.method.as_str(),
+        "PUT" | "POST" | "PROPFIND" | "GET" | "REPORT"
+    ) {
+        return Err("Calendar method must be PUT, POST, PROPFIND, GET or REPORT.".into());
     }
-    if !matches!(req.method.as_str(), "PUT" | "POST" | "PROPFIND" | "GET" | "REPORT") {
-        return Err("Calendar method must be PUT, POST, PROPFIND, GET or REPORT.".to_string());
+    let method =
+        Method::from_bytes(req.method.as_bytes()).map_err(|_| "Invalid calendar method.")?;
+    let mut headers = request_headers(&req.content_type, &req.headers)?;
+    if let Some(token) = req.token.as_ref().filter(|token| !token.is_empty()) {
+        let mut value = header_value(&format!("Bearer {token}"))?;
+        value.set_sensitive(true);
+        headers.insert(header::AUTHORIZATION, value);
     }
-    let mut cmd = crate::proc::command("curl");
-    cmd.args(["-sS", "-f", "-X", &req.method, "--proto", "=http,https"]);
-    cmd.arg("--connect-timeout").arg("15").arg("--max-time").arg("60");
-    cmd.arg("-H").arg(format!("Content-Type: {}", req.content_type));
-    for h in &req.headers {
-        cmd.arg("-H").arg(h);
+    let basic = req
+        .username
+        .as_deref()
+        .filter(|username| !username.is_empty())
+        .filter(|_| !headers.contains_key(header::AUTHORIZATION));
+    if basic.is_some() && req.use_ntlm && req.provider == "ews" {
+        return Err("NTLM is unavailable in the server edition. Configure EWS with Basic or Bearer authentication.".into());
     }
-    if let Some(token) = req.token.as_ref().filter(|t| !t.is_empty()) {
-        cmd.arg("-H").arg(format!("Authorization: Bearer {token}"));
-    } else if let Some(user) = req.username.as_ref().filter(|u| !u.is_empty()) {
-        let pass = req.password.clone().unwrap_or_default();
-        // NTLM is for on-prem Exchange only (and some curl builds lack it).
-        if req.use_ntlm && req.provider == "ews" {
-            cmd.arg("--ntlm");
-        }
-        cmd.arg("-u").arg(format!("{user}:{pass}"));
+    if let Some(username) = basic {
+        basic_auth(
+            &mut headers,
+            username,
+            req.password.as_deref().unwrap_or_default(),
+        )?;
     }
-    if req.method != "GET" {
-        cmd.arg("--data-binary").arg("@-");
+    let client = client(&url, allowed, 15, 60)?;
+    let response = send_request(
+        client.request(method, url).headers(headers),
+        &req.method,
+        &req.body,
+    )?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Calendar server returned HTTP {}.",
+            response.status().as_u16()
+        ));
     }
-    cmd.arg(&req.endpoint);
-    let out = if req.method == "GET" {
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|e| format!("Calendar request failed: {e}"))?
-    } else {
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = cmd.spawn().map_err(|e| format!("Could not run curl ({}): {e}", req.provider))?;
-        child
-            .stdin
-            .take()
-            .ok_or_else(|| "Could not pipe calendar payload.".to_string())?
-            .write_all(req.body.as_bytes())
-            .map_err(|e| format!("Could not send calendar payload: {e}"))?;
-        child.wait_with_output().map_err(|e| format!("Calendar request failed: {e}"))?
-    };
-    if !out.status.success() {
-        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if detail.is_empty() {
-            format!("Calendar server rejected the request ({}).", req.provider)
-        } else {
-            format!("Calendar request failed ({}): {}", req.provider, detail)
-        });
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(response_body(response, MAX_CALENDAR_BODY, false)?
+        .trim()
+        .to_string())
 }
 
 /// Cheap per-provider connectivity check (creates nothing).
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarTestRequest {
     pub provider: String,
@@ -108,11 +266,23 @@ const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?><propfind x
 const EWS_GET_FOLDER: &str = r#"<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages"><soap:Header><t:RequestServerVersion Version="Exchange2013"/></soap:Header><soap:Body><m:GetFolder><m:FolderShape><t:BaseShape>IdOnly</t:BaseShape></m:FolderShape><m:FolderIds><t:DistinguishedFolderId Id="calendar"/></m:FolderIds></m:GetFolder></soap:Body></soap:Envelope>"#;
 
 /// CalDAV: PROPFIND on the collection; Graph: GET /me; EWS: GetFolder on the calendar.
-pub fn test(request: &CalendarTestRequest) -> Result<String, String> {
+pub fn test(request: &CalendarTestRequest, allowed: &[String]) -> Result<String, String> {
     let (method, endpoint, content_type, body, headers): (&str, String, &str, &str, Vec<String>) =
         match request.provider.as_str() {
-            "graph" => ("GET", format!("{}/me", request.endpoint.trim_end_matches('/')), "application/json", "", vec![]),
-            "ews" => ("POST", request.endpoint.clone(), "text/xml; charset=utf-8", EWS_GET_FOLDER, vec![]),
+            "graph" => (
+                "GET",
+                format!("{}/me", request.endpoint.trim_end_matches('/')),
+                "application/json",
+                "",
+                vec![],
+            ),
+            "ews" => (
+                "POST",
+                request.endpoint.clone(),
+                "text/xml; charset=utf-8",
+                EWS_GET_FOLDER,
+                vec![],
+            ),
             _ => (
                 "PROPFIND",
                 request.endpoint.clone(),
@@ -121,24 +291,27 @@ pub fn test(request: &CalendarTestRequest) -> Result<String, String> {
                 vec!["Depth: 1".to_string()],
             ),
         };
-    curl_send(&CalendarCreateRequest {
-        provider: request.provider.clone(),
-        endpoint,
-        username: request.username.clone(),
-        password: request.password.clone(),
-        token: request.token.clone(),
-        content_type: content_type.to_string(),
-        body: body.to_string(),
-        use_ntlm: request.use_ntlm,
-        method: method.to_string(),
-        headers,
-    })
+    send(
+        &CalendarCreateRequest {
+            provider: request.provider.clone(),
+            endpoint,
+            username: request.username.clone(),
+            password: request.password.clone(),
+            token: request.token.clone(),
+            content_type: content_type.to_string(),
+            body: body.to_string(),
+            use_ntlm: request.use_ntlm,
+            method: method.to_string(),
+            headers,
+        },
+        allowed,
+    )
     .map(|_| "Connection OK.".to_string())
 }
 
 // --- server auto-detection probe -------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeRequest {
     pub endpoint: String,
@@ -164,159 +337,160 @@ pub struct ProbeResponse {
     pub body: String,
 }
 
-const MAX_BODY: usize = 256 * 1024;
-
-/// Split `curl -i` output: skip `1xx` blocks, read status + a few headers.
-pub fn parse_include(raw: &str) -> ProbeResponse {
-    let mut rest = raw;
-    loop {
-        let (head, body) = match rest.find("\r\n\r\n") {
-            Some(i) => (&rest[..i], &rest[i + 4..]),
-            None => match rest.find("\n\n") {
-                Some(i) => (&rest[..i], &rest[i + 2..]),
-                None => (rest, ""),
-            },
-        };
-        let mut lines = head.lines();
-        let status: u16 = lines
-            .next()
-            .and_then(|s| s.split_whitespace().nth(1))
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        if (100..200).contains(&status) && body.starts_with("HTTP/") {
-            rest = body;
-            continue;
-        }
-        let mut res = ProbeResponse {
-            status,
-            location: String::new(),
-            www_authenticate: String::new(),
-            dav: String::new(),
-            body: body.chars().take(MAX_BODY).collect(),
-        };
-        for line in lines {
-            let Some((k, v)) = line.split_once(':') else { continue };
-            let v = v.trim().to_string();
-            match k.trim().to_ascii_lowercase().as_str() {
-                "location" => res.location = v,
-                "www-authenticate" => {
-                    if !res.www_authenticate.is_empty() {
-                        res.www_authenticate.push_str(", ");
-                    }
-                    res.www_authenticate.push_str(&v);
-                }
-                "dav" => res.dav = v,
-                _ => {}
-            }
-        }
-        return res;
-    }
-}
-
-/// One curl request, no redirects, PROPFIND/GET/POST only.
-pub fn probe(req: &ProbeRequest) -> Result<ProbeResponse, String> {
-    let ep = &req.endpoint;
-    if !valid_endpoint(ep) {
-        return Err("Refusing non-HTTP(S) probe endpoint.".to_string());
-    }
+/// The caller handles same-origin redirects using the returned Location header.
+pub fn probe(req: &ProbeRequest, allowed: &[String]) -> Result<ProbeResponse, String> {
+    let url = endpoint(&req.endpoint)?;
     if !matches!(req.method.as_str(), "PROPFIND" | "GET" | "POST") {
-        return Err("Probe method must be PROPFIND, GET or POST.".to_string());
+        return Err("Probe method must be PROPFIND, GET or POST.".into());
     }
-    let mut cmd = crate::proc::command("curl");
-    cmd.args(["-sS", "-i", "-X", &req.method, "--proto", "=http,https"])
-        .args(["--connect-timeout", "8", "--max-time", "20"]);
-    if !req.content_type.is_empty() {
-        cmd.arg("-H").arg(format!("Content-Type: {}", req.content_type));
+    let method = Method::from_bytes(req.method.as_bytes()).map_err(|_| "Invalid probe method.")?;
+    let mut headers = request_headers(&req.content_type, &req.headers)?;
+    if let Some((username, password)) = req
+        .username
+        .as_deref()
+        .zip(req.password.as_deref())
+        .filter(|(user, pass)| !user.is_empty() && !pass.is_empty())
+    {
+        basic_auth(&mut headers, username, password)?;
     }
-    for h in &req.headers {
-        cmd.arg("-H").arg(h);
-    }
-    if let Some(user) = req.username.as_ref().filter(|u| !u.is_empty()) {
-        if let Some(pass) = req.password.as_ref().filter(|p| !p.is_empty()) {
-            cmd.arg("-u").arg(format!("{user}:{pass}"));
-        }
-    }
-    let has_body = req.method != "GET";
-    if has_body {
-        cmd.arg("--data-binary").arg("@-");
-    }
-    cmd.arg(ep)
-        .stdin(if has_body { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| format!("Could not run curl: {e}"))?;
-    if has_body {
-        child
-            .stdin
-            .take()
-            .ok_or_else(|| "Could not pipe probe body.".to_string())?
-            .write_all(req.body.as_bytes())
-            .map_err(|e| format!("Could not send probe body: {e}"))?;
-    }
-    let out = child.wait_with_output().map_err(|e| format!("Probe failed: {e}"))?;
-    if !out.status.success() {
-        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if detail.is_empty() { "Host did not answer.".to_string() } else { detail });
-    }
-    Ok(parse_include(&String::from_utf8_lossy(&out.stdout)))
+    let client = client(&url, allowed, 8, 20)?;
+    let response = send_request(
+        client.request(method, url).headers(headers),
+        &req.method,
+        &req.body,
+    )?;
+    let headers = response.headers();
+    let field = |name| {
+        headers
+            .get(name)
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+            .unwrap_or_default()
+    };
+    Ok(ProbeResponse {
+        status: response.status().as_u16(),
+        location: field(header::LOCATION),
+        www_authenticate: headers
+            .get_all(header::WWW_AUTHENTICATE)
+            .iter()
+            .map(|value| String::from_utf8_lossy(value.as_bytes()))
+            .collect::<Vec<_>>()
+            .join(", "),
+        dav: field(HeaderName::from_static("dav")),
+        body: response_body(response, MAX_PROBE_BODY, true)?,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{io::Write, net::TcpListener};
 
-    fn req(endpoint: &str) -> CalendarCreateRequest {
-        CalendarCreateRequest {
-            provider: "caldav".to_string(),
-            endpoint: endpoint.to_string(),
-            username: None,
-            password: None,
-            token: None,
-            content_type: "text/calendar".to_string(),
-            body: "BEGIN:VCALENDAR".to_string(),
-            use_ntlm: false,
-            method: "PUT".to_string(),
-            headers: vec![],
+    #[test]
+    fn rejects_restricted_addresses_including_mapped_ipv4() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.0.1",
+            "169.254.1.1",
+            "100.64.0.1",
+            "224.0.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "::",
+            "::1",
+            "fc00::1",
+            "fd00::1",
+            "fe80::1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "::ffff:169.254.1.1",
+            "::ffff:100.64.0.1",
+            "::ffff:0.0.0.0",
+            "::ffff:224.0.0.1",
+        ] {
+            let address = SocketAddr::new(ip.parse().unwrap(), 443);
+            assert!(
+                check_addresses("calendar.example", &[address], &[]).is_err(),
+                "{ip}"
+            );
         }
+        let public: SocketAddr = "8.8.8.8:443".parse().unwrap();
+        let private: SocketAddr = "10.0.0.1:443".parse().unwrap();
+        let public_v6: SocketAddr = "[2606:4700::1111]:443".parse().unwrap();
+        assert!(check_addresses("calendar.example", &[public, public_v6], &[]).is_ok());
+        assert!(check_addresses("calendar.example", &[public, private], &[]).is_err());
+        assert!(check_addresses("calendar.example", &[private], &["10.0.0.0/24".into()]).is_ok());
+        assert!(check_addresses("calendar.example", &[private], &["10.0.1.0/24".into()]).is_err());
+        assert!(check_addresses("calendar.example", &[private], &["example".into()]).is_err());
     }
 
     #[test]
-    fn rejects_non_http_endpoints() {
-        assert!(curl_send(&req("file:///etc/passwd")).is_err());
-        assert!(curl_send(&req("javascript:alert(1)")).is_err());
-        assert!(curl_send(&req("https://cal.example/x y")).is_err());
-    }
-
-    #[test]
-    fn rejects_bad_methods() {
-        let mut r = req("https://cal.example/dav/x.ics");
-        r.method = "DELETE".to_string();
-        assert!(curl_send(&r).is_err());
-    }
-
-    #[test]
-    fn parses_curl_include_output() {
-        let raw = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 301 Moved\r\nLocation: https://x/y\r\nWWW-Authenticate: Basic\r\nDAV: 1, calendar-access\r\n\r\n<body/>";
-        let res = parse_include(raw);
-        assert_eq!(res.status, 301);
-        assert_eq!(res.location, "https://x/y");
-        assert_eq!(res.www_authenticate, "Basic");
-        assert_eq!(res.dav, "1, calendar-access");
-        assert_eq!(res.body, "<body/>");
-    }
-
-    #[test]
-    fn rejects_bad_probe_requests() {
-        let bad = |endpoint: &str, method: &str| ProbeRequest {
-            endpoint: endpoint.into(),
-            method: method.into(),
-            username: None,
-            password: None,
+    fn accepts_allowlisted_private_host_and_returns_redirect_to_caller() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!(
+            "http://localhost:{}/dav",
+            listener.local_addr().unwrap().port()
+        );
+        let request = ProbeRequest {
+            endpoint,
+            method: "GET".into(),
+            username: Some("user".into()),
+            password: Some("pass".into()),
             content_type: String::new(),
             body: String::new(),
             headers: vec![],
         };
-        assert!(probe(&bad("file:///etc/passwd", "GET")).is_err());
-        assert!(probe(&bad("https://a.example", "DELETE")).is_err());
+        assert!(probe(&request, &[])
+            .unwrap_err()
+            .contains("restricted address"));
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            use std::io::BufRead;
+            let request: String = std::io::BufReader::new(&stream)
+                .lines()
+                .map(Result::unwrap)
+                .take_while(|line| !line.is_empty())
+                .map(|line| format!("{line}\n"))
+                .collect();
+            assert!(request.starts_with("GET /dav HTTP/1.1"));
+            assert!(request.contains("authorization: Basic dXNlcjpwYXNz"));
+            stream.write_all(b"HTTP/1.1 301 Moved\r\nLocation: /calendar/\r\nWWW-Authenticate: Basic\r\nWWW-Authenticate: Bearer\r\nDAV: 1, calendar-access\r\nContent-Length: 7\r\nConnection: close\r\n\r\n<body/>").unwrap();
+        });
+        let response = probe(&request, &["LOCALHOST.".into()]).unwrap();
+        server.join().unwrap();
+        assert_eq!(response.status, 301);
+        assert_eq!(response.location, "/calendar/");
+        assert_eq!(response.www_authenticate, "Basic, Bearer");
+        assert_eq!(response.dav, "1, calendar-access");
+        assert_eq!(response.body, "<body/>");
+    }
+
+    #[test]
+    fn rejects_unsafe_urls_and_headers() {
+        for url in [
+            "file:///tmp/calendar",
+            "javascript:alert(1)",
+            "https://calendar.example/a b",
+            "https://user:pass@calendar.example/",
+            "https://calendar.example/#fragment",
+        ] {
+            assert!(endpoint(url).is_err(), "{url}");
+        }
+        for raw in [
+            "@headers",
+            "Host: other.example",
+            "Depth: 1\r",
+            "Depth: 1\n",
+            "Depth: 1\r\nDepth: 2",
+        ] {
+            assert!(request_headers("", &[raw.into()]).is_err(), "{raw:?}");
+        }
+        assert!(request_headers("text/plain\r", &[]).is_err());
+        assert!(basic_auth(&mut HeaderMap::new(), "user", "pass\n").is_err());
     }
 }

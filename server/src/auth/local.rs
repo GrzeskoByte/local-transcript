@@ -10,6 +10,7 @@ use axum::{
     response::Response,
     Json,
 };
+use ipnet::IpNet;
 use rand::rngs::OsRng;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::Deserialize;
@@ -109,6 +110,25 @@ async fn verify_password(app: &App, password: String, hash: Option<String>) -> A
     .await
 }
 
+pub(super) fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted_proxies: &[IpNet]) -> IpAddr {
+    let peer = peer.to_canonical();
+    let trusted = |ip: &IpAddr| trusted_proxies.iter().any(|network| network.contains(ip));
+    if !trusted(&peer) {
+        return peer;
+    }
+    for value in headers.get_all("x-forwarded-for").iter().rev() {
+        let Ok(value) = value.to_str() else { return peer };
+        for hop in value.rsplit(',') {
+            let Ok(ip) = hop.trim().parse::<IpAddr>() else { return peer };
+            let ip = ip.to_canonical();
+            if !trusted(&ip) {
+                return ip;
+            }
+        }
+    }
+    peer
+}
+
 #[derive(Deserialize)]
 pub struct Login {
     email: String,
@@ -125,10 +145,11 @@ pub async fn login(
     if !admin::settings(&app).await?.local_login {
         return Err(ApiError::forbidden("Local sign-in is disabled"));
     }
-    let ip = connection.map_or(
+    let peer = connection.map_or(
         IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        |Extension(ConnectInfo(peer))| peer.ip().to_canonical(),
+        |Extension(ConnectInfo(peer))| peer.ip(),
     );
+    let ip = client_ip(peer, &headers, &app.config.trusted_proxies);
     let email = body.email.trim().to_ascii_lowercase();
     if email.len() > 254 {
         return Err(invalid_login());
@@ -397,4 +418,26 @@ pub async fn reset_password(db: &AccountsDb, email: String, password: String) ->
         Ok(())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forwarded_client_ip_uses_only_the_trusted_proxy_chain() {
+        let trusted = ["172.31.253.2/32".parse().unwrap(), "fd00:1::/64".parse().unwrap()];
+        let proxy = "::ffff:172.31.253.2".parse().unwrap();
+        let direct = "198.51.100.9".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.append("x-forwarded-for", "203.0.113.99, 198.51.100.7".parse().unwrap());
+        headers.append("x-forwarded-for", "fd00:1::2, 172.31.253.2".parse().unwrap());
+        assert_eq!(client_ip(proxy, &headers, &[]), "172.31.253.2".parse::<IpAddr>().unwrap());
+        assert_eq!(client_ip(direct, &headers, &trusted), direct);
+        assert_eq!(client_ip(proxy, &headers, &trusted), "198.51.100.7".parse::<IpAddr>().unwrap());
+        headers.insert("x-forwarded-for", "203.0.113.99, invalid".parse().unwrap());
+        assert_eq!(client_ip(proxy, &headers, &trusted), "172.31.253.2".parse::<IpAddr>().unwrap());
+        headers.insert("x-forwarded-for", "fd00:1::2".parse().unwrap());
+        assert_eq!(client_ip(proxy, &headers, &trusted), "172.31.253.2".parse::<IpAddr>().unwrap());
+    }
 }

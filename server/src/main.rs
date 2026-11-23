@@ -7,7 +7,9 @@ mod ctx;
 mod http;
 mod users;
 
-use anyhow::Result;
+use std::io::{self, BufRead, IsTerminal};
+
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 
 use accounts_db::{AccountsDb, Role};
@@ -40,16 +42,18 @@ enum AdminCommand {
         email: String,
         #[arg(long)]
         name: String,
+        /// Read one line of standard input instead of prompting on the terminal.
         #[arg(long)]
-        password: String,
+        password_stdin: bool,
         #[arg(long, value_enum, default_value = "member")]
         role: Role,
     },
     ResetPassword {
         #[arg(long)]
         email: String,
+        /// Read one line of standard input instead of prompting on the terminal.
         #[arg(long)]
-        password: String,
+        password_stdin: bool,
     },
     List,
 }
@@ -93,17 +97,18 @@ async fn admin_command(db: AccountsDb, command: AdminCommand) -> Result<()> {
         AdminCommand::Create {
             email,
             name,
-            password,
+            password_stdin,
             role,
         } => {
+            let password = read_password(password_stdin)?;
             if let Some(user) =
                 local::create_account(&db, email, name, password, role, false).await?
             {
                 println!("Created {} ({})", user.email, user.role.as_str());
             }
         }
-        AdminCommand::ResetPassword { email, password } => {
-            local::reset_password(&db, email, password).await?;
+        AdminCommand::ResetPassword { email, password_stdin } => {
+            local::reset_password(&db, email, read_password(password_stdin)?).await?;
             println!("Password reset");
         }
         AdminCommand::List => {
@@ -120,6 +125,33 @@ async fn admin_command(db: AccountsDb, command: AdminCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn read_password(from_stdin: bool) -> Result<String> {
+    let stdin = io::stdin();
+    if from_stdin {
+        return read_password_line(stdin.lock());
+    }
+    if !stdin.is_terminal() {
+        bail!("Pass --password-stdin to read a password from standard input");
+    }
+    Ok(rpassword::prompt_password("Password: ")?)
+}
+
+fn read_password_line(input: impl BufRead) -> Result<String> {
+    let mut password = String::new();
+    // Cap stdin before handing the password to Argon2.
+    input.take(1027).read_line(&mut password)?;
+    if password.ends_with('\n') {
+        password.pop();
+        if password.ends_with('\r') {
+            password.pop();
+        }
+    }
+    if password.is_empty() || password.len() > 1024 {
+        bail!("Enter a password between 1 and 1024 bytes");
+    }
+    Ok(password)
 }
 
 async fn shutdown() {

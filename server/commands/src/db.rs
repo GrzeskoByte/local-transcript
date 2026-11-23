@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::{Map, Value};
 
 use crate::util::Args;
@@ -130,7 +130,10 @@ fn exists(tx: &Transaction<'_>, store: Store, key: &str) -> Result<bool, String>
 }
 
 pub fn get(conn: &Connection, store: &str, key: &str) -> Result<Value, String> {
-    let store = Store::parse(store)?;
+    read(conn, Store::parse(store)?, key)
+}
+
+fn read(conn: &Connection, store: Store, key: &str) -> Result<Value, String> {
     let json: Option<String> = conn
         .query_row(
             &format!("SELECT json FROM {} WHERE {} = ?1", store.table(), store.key_column()),
@@ -166,7 +169,7 @@ pub fn get_by_index(conn: &Connection, store: &str, index: &str, key: &str) -> R
 
 pub fn put(conn: &mut Connection, store: &str, value: &Value) -> Result<(), String> {
     let store = Store::parse(store)?;
-    let tx = conn.transaction().map_err(sql)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
     put_in(&tx, store, value)?;
     tx.commit().map_err(sql)
 }
@@ -182,8 +185,49 @@ pub fn delete(conn: &Connection, store: &str, key: &str) -> Result<(), String> {
 pub fn put_if_exists(conn: &mut Connection, store: &str, value: &Value) -> Result<bool, String> {
     let store = Store::parse(store)?;
     let key = store.key_of(value)?;
-    let tx = conn.transaction().map_err(sql)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
     if !exists(&tx, store, &key)? {
+        return Ok(false);
+    }
+    put_in(&tx, store, value)?;
+    tx.commit().map_err(sql)?;
+    Ok(true)
+}
+
+/// Merge the supplied fields into an existing record without changing its key.
+pub fn patch(
+    conn: &mut Connection,
+    store: &str,
+    key: &str,
+    patch: Map<String, Value>,
+) -> Result<Value, String> {
+    let store = Store::parse(store)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
+    let mut current = read(&tx, store, key)?;
+    if current.is_null() {
+        return Ok(Value::Null);
+    }
+    current.as_object_mut().ok_or("Stored value is not an object.")?.extend(patch);
+    if store.key_of(&current)? != key {
+        return Err("A patch cannot change the record key.".into());
+    }
+    put_in(&tx, store, &current)?;
+    tx.commit().map_err(sql)?;
+    Ok(current)
+}
+
+/// Replace an existing record only when it still matches the caller's snapshot.
+pub fn put_if_unchanged(
+    conn: &mut Connection,
+    store: &str,
+    value: &Value,
+    expected: &Value,
+) -> Result<bool, String> {
+    let store = Store::parse(store)?;
+    let key = store.key_of(value)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
+    let current = read(&tx, store, &key)?;
+    if current.is_null() || &current != expected {
         return Ok(false);
     }
     put_in(&tx, store, value)?;
@@ -199,7 +243,7 @@ pub fn commit_transcript(
     segments: &[Value],
     patch: &Value,
 ) -> Result<bool, String> {
-    let tx = conn.transaction().map_err(sql)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
     let current: Option<String> = tx
         .query_row("SELECT json FROM meetings WHERE id = ?1", [meeting_id], |r| r.get(0))
         .optional()
@@ -232,7 +276,7 @@ pub fn commit_transcript(
 
 /// Set `speaker` on the listed segments of a meeting (`{segmentId: speaker}`).
 pub fn set_segment_speakers(conn: &mut Connection, meeting_id: &str, speakers: &Map<String, Value>) -> Result<(), String> {
-    let tx = conn.transaction().map_err(sql)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
     let rows: Vec<(String, String)> = {
         let mut stmt = tx.prepare("SELECT id, json FROM segments WHERE meeting_id = ?1").map_err(sql)?;
         let rows = stmt
@@ -253,7 +297,7 @@ pub fn set_segment_speakers(conn: &mut Connection, meeting_id: &str, speakers: &
 
 /// The meeting and all its segments, in one transaction.
 pub fn delete_meeting(conn: &mut Connection, id: &str) -> Result<(), String> {
-    let tx = conn.transaction().map_err(sql)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
     tx.execute("DELETE FROM segments WHERE meeting_id = ?1", [id]).map_err(sql)?;
     tx.execute("DELETE FROM meetings WHERE id = ?1", [id]).map_err(sql)?;
     tx.commit().map_err(sql)
@@ -276,6 +320,10 @@ pub fn handle(user_dir: &Path, cmd: &str, args: &Args) -> Result<Value, String> 
         "put_if_exists" => {
             put_if_exists(&mut conn, &args.get::<String>("store")?, &args.raw("value")?).map(Value::Bool)
         }
+        "patch" => patch(&mut conn, &args.get::<String>("store")?, &key_arg(args)?, args.get("patch")?),
+        "put_if_unchanged" => put_if_unchanged(
+            &mut conn, &args.get::<String>("store")?, &args.raw("value")?, &args.raw("expected")?,
+        ).map(Value::Bool),
         "commit_transcript" => {
             let segments: Vec<Value> = args.get("segments")?;
             commit_transcript(&mut conn, &args.get::<String>("meetingId")?, &segments, &args.raw("patch")?)
@@ -294,14 +342,23 @@ fn key_arg(args: &Args) -> Result<String, String> {
     args.get("key")
 }
 
-/// Every stored object, for the account export.
-/// (meetings, segments, kv)
-pub type Export = (Vec<Value>, Vec<Value>, Vec<Value>);
-
-pub fn export(user_dir: &Path) -> Result<Export, String> {
-    if !db_path(user_dir).is_file() {
-        return Ok((Vec::new(), Vec::new(), Vec::new()));
+/// Write one table as a JSON array while keeping only one row in memory.
+pub fn export_table(conn: Option<&Connection>, store: &str, out: &mut impl std::io::Write) -> Result<(), String> {
+    let io_err = |e: std::io::Error| format!("Could not write the export: {e}");
+    let store = Store::parse(store)?;
+    out.write_all(b"[").map_err(io_err)?;
+    if let Some(conn) = conn {
+        let mut stmt = conn.prepare(&format!("SELECT json FROM {} ORDER BY {}", store.table(), store.key_column())).map_err(sql)?;
+        let mut rows = stmt.query([]).map_err(sql)?;
+        let mut first = true;
+        while let Some(row) = rows.next().map_err(sql)? {
+            if !first {
+                out.write_all(b",").map_err(io_err)?;
+            }
+            let json: String = row.get(0).map_err(sql)?;
+            out.write_all(json.as_bytes()).map_err(io_err)?;
+            first = false;
+        }
     }
-    let conn = open(user_dir)?;
-    Ok((get_all(&conn, "meetings")?, get_all(&conn, "segments")?, get_all(&conn, "kv")?))
+    out.write_all(b"]").map_err(io_err)
 }

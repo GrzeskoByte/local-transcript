@@ -26,6 +26,23 @@ For the included Caddy proxy, point the domain's DNS at the Docker host, allow i
 docker compose --profile https up -d
 ```
 
+The HTTPS profile gives Caddy the trusted address `172.31.253.2/32` on a dedicated Docker network. If that subnet conflicts with your network, set `LT_UPSTREAM_SUBNET`, `LT_CADDY_UPSTREAM_IP` and `LT_APP_UPSTREAM_IP` to an unused subnet and two addresses in it. For a custom proxy, set `LT_TRUSTED_PROXIES` to the comma-separated CIDRs of the proxy hops the app should trust. The proxy must overwrite incoming `X-Forwarded-For` or append the actual peer address. Set `LT_TRUSTED_PROXIES=` to disable forwarded-IP handling.
+
+## Local account recovery
+
+Use the console to create a local admin or reset a local password.
+
+```sh
+docker compose exec app lt-server admin create --email admin@example.com --name Admin --role admin
+docker compose exec app lt-server admin reset-password --email admin@example.com
+```
+
+Both commands prompt without echo. For automation, pipe a password from your secret store into `docker compose exec -T app lt-server admin reset-password --email admin@example.com --password-stdin`. The same flag works with `admin create`.
+
+## Internal calendars
+
+Set `LT_CALENDAR_ALLOWED_HOSTS` to a comma-separated list of exact hostnames or CIDRs to reach calendars on private networks. Recreate the app after updating `.env`. For Exchange EWS, configure Basic or Bearer authentication. NTLM is available only in the desktop app.
+
 ## OpenID Connect
 
 At your provider, create a confidential web client using the authorization code flow. Register the exact redirect URI, for example `https://transcribe.example.com/auth/oidc/callback`. Configure `LT_PUBLIC_URL`, `LT_OIDC_ISSUER`, `LT_OIDC_CLIENT_ID` and `LT_OIDC_CLIENT_SECRET` in `.env`, or enter the OIDC settings under **Settings → Sign-in**. Environment settings take precedence. Restart or recreate the app with `docker compose up -d` after editing `.env`.

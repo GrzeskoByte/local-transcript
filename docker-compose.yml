@@ -6,6 +6,13 @@ services:
       args:
         VARIANT: cpu
     env_file: .env
+    environment:
+      LT_TRUSTED_PROXIES: ${LT_TRUSTED_PROXIES-${LT_CADDY_UPSTREAM_IP:-172.31.253.2}/32}
+    networks:
+      default: {}
+      caddy-upstream:
+        ipv4_address: ${LT_APP_UPSTREAM_IP:-172.31.253.3}
+        aliases: [lt-app-upstream]
     ports:
       - '127.0.0.1:8080:8080'
     volumes:
@@ -15,6 +22,10 @@ services:
   caddy:
     image: caddy:2-alpine
     profiles: [https]
+    networks:
+      default: {}
+      caddy-upstream:
+        ipv4_address: ${LT_CADDY_UPSTREAM_IP:-172.31.253.2}
     environment:
       LT_DOMAIN: ${LT_DOMAIN:-localhost}
     ports:
@@ -26,6 +37,13 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     restart: unless-stopped
+
+networks:
+  caddy-upstream:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${LT_UPSTREAM_SUBNET:-172.31.253.0/29}
 
 volumes:
   lt-data:

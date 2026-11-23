@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use futures_util::{stream, StreamExt, TryStreamExt};
 use lt_commands::{Body as CommandBody, CommandError, Reply};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -25,6 +26,7 @@ use crate::{
 };
 
 const MAX_COMMAND_BYTES: usize = 256 * 1024 * 1024;
+const MAX_ASR_BYTES: usize = 64 * 1024 * 1024;
 const CSP: &str = "default-src 'self'; connect-src 'self' https:; media-src blob:; \
                    img-src 'self' data: blob:; font-src 'self' data:; \
                    worker-src 'self' blob:; object-src 'none'; base-uri 'none'; \
@@ -204,6 +206,16 @@ async fn invoke(
     if admin_command && session.user.role != Role::Admin {
         return Err(ApiError::forbidden("This command requires admin access"));
     }
+    // Queued ASR jobs retain their upload until they get a preparation slot.
+    let slots = match cmd.as_str() {
+        "native_asr_transcribe" => Some(&app.asr_requests),
+        "native_live_transcribe" => Some(&app.live_requests),
+        _ => None,
+    };
+    let _upload = slots.map(|slots| slots.try_acquire()).transpose().map_err(|_| {
+        ApiError::new(StatusCode::TOO_MANY_REQUESTS, "Transcription is busy on this server. Try again shortly.")
+    })?;
+    let limit = if slots.is_some() { MAX_ASR_BYTES } else { MAX_COMMAND_BYTES };
     let (parts, body) = request.into_parts();
     let raw = parts
         .headers
@@ -215,7 +227,7 @@ async fn invoke(
                 .trim()
                 .eq_ignore_ascii_case("application/octet-stream")
         });
-    let bytes = to_bytes(body, MAX_COMMAND_BYTES).await.map_err(|_| {
+    let bytes = to_bytes(body, limit).await.map_err(|_| {
         ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "Command body exceeds the maximum size or could not be read",
@@ -244,6 +256,7 @@ async fn invoke(
         CommandBody::Json(value)
     };
 
+    drop(bytes);
     let gate = app.user_data.get(session.user.id.clone());
     let _guard = gate.access.read().await;
     let session = session::load(&app, session.hash).await?;
@@ -288,11 +301,16 @@ async fn invoke(
     };
     match result {
         Ok(Reply::Json(value)) => Ok(Json(value).into_response()),
-        Ok(Reply::Bytes(value)) => Ok((
-            [(header::CONTENT_TYPE, "application/octet-stream")],
-            Body::from(value),
-        )
-            .into_response()),
+        Ok(Reply::Recording(paths)) => {
+            let chunks = stream::iter(paths)
+                .then(tokio::fs::File::open)
+                .map_ok(tokio_util::io::ReaderStream::new)
+                .try_flatten();
+            Ok((
+                [(header::CONTENT_TYPE, "application/octet-stream")],
+                Body::from_stream(chunks),
+            ).into_response())
+        }
         Err(CommandError::NotFound(error)) => Err(ApiError::not_found(error)),
         Err(CommandError::Forbidden(error)) => Err(ApiError::forbidden(error)),
         Err(CommandError::Failed(error)) => Err(ApiError::bad_request(error)),

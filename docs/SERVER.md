@@ -28,6 +28,8 @@ Keep the layer **additive** (new files) so `main → server` merges stay clean.
 |---|---|---|
 | `LT_BIND` | `0.0.0.0:8080` | listen address |
 | `LT_DATA_DIR` | `/data` | volume root |
+| `LT_TRUSTED_PROXIES` | empty | comma-separated trusted proxy CIDRs for login throttling |
+| `LT_CALENDAR_ALLOWED_HOSTS` | empty | comma-separated exact hostnames or CIDRs allowed to reach restricted addresses |
 | `LT_PUBLIC_URL` | — | external URL (OIDC redirect, cookie `Secure`) — required for OIDC |
 | `LT_SECRET_KEY` | — | 32-byte base64; encrypts per-user settings at rest. Generated into `/data/secret.key` (0600) if unset |
 | `LT_ADMIN_EMAIL` / `LT_ADMIN_PASSWORD` | — | bootstrap admin on first start when no users exist |
@@ -68,7 +70,14 @@ Env values win over values set in the admin UI (UI shows them as locked).
 Rules: argon2id; login rate limit (5 fails / 15 min per email+IP → 429); SSO users matched by
 `(issuer, sub)` only, created on first login (role from admin group; first user ever = admin),
 email/name refreshed each login; disabled users cannot log in and their sessions are dropped.
-The last active admin cannot be demoted/disabled/deleted. **Admins never get access to another
+Login uses the connecting IP unless the peer matches `LT_TRUSTED_PROXIES`. For a
+trusted peer it uses the right-most untrusted IP in `X-Forwarded-For`. The included
+Compose HTTPS profile trusts the dedicated Caddy address.
+The last active admin cannot be demoted/disabled/deleted. Disabling local sign-in
+in the admin UI requires successful OIDC discovery, a client secret, and an active
+OIDC admin for the configured issuer. While local sign-in is disabled, the last
+active OIDC admin is protected as well. Changing the issuer or client ID in the
+admin UI requires a new client secret in the same request. **Admins never get access to another
 user's meetings, recordings or settings** — there is no endpoint for it.
 Deleting a user deletes `/data/users/<uid>/` entirely + sessions; audit keeps the action.
 
@@ -89,7 +98,7 @@ Authenticated:
 - `POST /api/auth/logout` → clears session; `{ redirect?: <provider end_session_url> }`
 - `POST /api/me/password` `{ current, next }` (local accounts)
 - `GET /api/me/sessions`, `DELETE /api/me/sessions/:id` (id = first 12 hex of token_hash)
-- `GET /api/me/export` → zip of the user's whole folder (meetings.db as JSON + recordings + settings decrypted)
+- `GET /api/me/export` → streamed zip (meetings.db as JSON + recordings + settings decrypted)
 - `DELETE /api/me` `{ confirm: "<email>" }` → deletes own account + data (not the last admin)
 - `GET /api/me/usage` → `{ bytes, quotaBytes }`
 - `POST /api/invoke/:cmd` → per-user command (below)
@@ -118,17 +127,25 @@ Supported (and listed in `/api/me` `capabilities`):
   `native_asr_download_model` (admin), `native_asr_download_progress`
 - Live: `native_live_transcribe`, `native_live_cancel` (own slot per user, max 2 concurrent server-wide → busy error)
 - Diarization: `native_diarize_status|run|progress|cancel` (per user)
-- Calendar (server-side curl, user's own config): `native_calendar_test|create|fetch|probe`
+- Calendar (server-side HTTP(S), user's own config): `native_calendar_test|create|fetch|probe`.
+  The client connects to validated addresses and disables redirects. The calling
+  probe may follow a same-origin Location with a separate request. Restricted IP
+  ranges require an explicit `LT_CALENDAR_ALLOWED_HOSTS` entry. EWS supports
+  Basic or Bearer authentication in the server edition.
+- ASR uploads are limited to 64 MiB. Sample rates must be 8–192 kHz. Whole-file
+  requests allow up to 4 hours and live requests up to 60 seconds, with decoded
+  sample counts also capped at the 16 kHz sample count for each limit.
 - Server-only meeting DB (replaces IndexedDB in server mode; JSON values are the frontend's objects):
   - `server_db_get {store,key}` → value | null
   - `server_db_get_all {store}` → value[]
   - `server_db_get_by_index {store:"segments", index:"by-meeting", key}` → value[]
   - `server_db_put {store,value}`; `server_db_delete {store,key}`
   - `server_db_put_if_exists {store,value}` → bool (single transaction)
-  - `server_db_patch {store,key,patch}` → merged value | null — shallow merge in one transaction
-    (frontend `updateMeeting(id, partial)`)
-  - `server_db_put_if_unchanged {store,value,expected}` → bool — write only when the stored value
-    still equals `expected` (frontend function-form `updateMeeting`: read, apply, retry ≤ 5×)
+  - `server_db_patch {store,key,patch}` → merged value | null. Shallow-merge into an existing
+    object in one transaction; the key stays fixed; missing records return null
+    (frontend `updateMeeting(id, partial)`).
+  - `server_db_put_if_unchanged {store,value,expected}` → bool. Replace the record at `value`'s key
+    only if its parsed JSON equals `expected` (frontend function-form `updateMeeting`: read, apply, retry ≤ 5×).
   - `server_db_commit_transcript {meetingId, segments, patch}` → bool — atomically: if meeting
     exists, delete its segments, insert `segments`, put `{...meeting,...patch,transcriptionStatus:"completed"}`
   - `server_db_set_segment_speakers {meetingId, speakers: {segmentId: speaker}}`

@@ -27,7 +27,7 @@ use url::Url;
 
 use crate::{
     accounts_db::{
-        audit, has_users, is_last_active_admin, now_ms, user_by_email, user_by_oidc, AuthKind,
+        audit, has_oidc_admin, has_users, is_last_active_admin, now_ms, user_by_email, user_by_oidc, AuthKind,
         Profile, Role,
     },
     admin::{self, EffectiveSettings},
@@ -111,7 +111,7 @@ fn fingerprint(settings: &OidcSettings) -> ApiResult<String> {
     ))
 }
 
-async fn discover(app: &App, settings: &OidcSettings) -> ApiResult<ProviderMetadataWithLogout> {
+pub(crate) async fn discover(app: &App, settings: &OidcSettings) -> ApiResult<ProviderMetadataWithLogout> {
     let issuer_url = parse_issuer(&settings.issuer).map_err(ApiError::bad_request)?;
     let issuer = IssuerUrl::new(settings.issuer.clone()).map_err(ApiError::bad_request)?;
     let provider = ProviderMetadataWithLogout::discover_async(issuer, app.oidc_http(&issuer_url))
@@ -393,7 +393,8 @@ async fn complete(
     app.db
         .run(move |db| {
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            if fingerprint(&admin::read_settings(&tx, &config.config)?.oidc)? != flow.settings {
+            let effective = admin::read_settings(&tx, &config.config)?;
+            if fingerprint(&effective.oidc)? != flow.settings {
                 return Err(ApiError::bad_request(
                     "OIDC settings changed during sign-in. Start again",
                 ));
@@ -414,7 +415,10 @@ async fn complete(
             }
             let (id, role) = if let Some(user) = existing {
                 let mut role = mapped_role.unwrap_or(user.profile.role);
-                if role == Role::Member && is_last_active_admin(&tx, &user)? {
+                if role == Role::Member && (is_last_active_admin(&tx, &user)?
+                    || (!effective.local_login && user.profile.role == Role::Admin
+                        && !has_oidc_admin(&tx, &issuer, Some(&user.profile.id))?))
+                {
                     role = Role::Admin;
                 }
                 tx.execute(
