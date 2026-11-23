@@ -1,0 +1,144 @@
+name: Publish server images
+
+on:
+  push:
+    tags: ['v*-server']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: server-image
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Resolve image name and version
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            if [[ "$GITHUB_REF_NAME" != v*-server ]]; then
+              echo "::error::Select a v<version>-server tag or run from a branch."
+              exit 1
+            fi
+            version=${GITHUB_REF_NAME#v}
+            version=${version%-server}
+          else
+            version=$(node -p "require('./package.json').version")
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[[:alnum:].-]+)?$ || ${#version} -gt 123 ]]; then
+            echo "::error::Expected a version such as 1.2.3 or 1.2.3-rc.1."
+            exit 1
+          fi
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/local-transcribe" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: metadata
+    runs-on: ubuntu-latest
+    outputs:
+      cpu-digest: ${{ steps.digest.outputs.cpu }}
+      cuda-digest: ${{ steps.digest.outputs.cuda }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            platforms: linux/amd64,linux/arm64
+          - variant: cuda
+            platforms: linux/amd64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.variant == 'cpu'
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        id: image
+        with:
+          context: .
+          platforms: ${{ matrix.platforms }}
+          build-args: |
+            VARIANT=${{ matrix.variant }}
+            VERSION=${{ needs.metadata.outputs.version }}
+          outputs: type=image,name=${{ needs.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=server-${{ matrix.variant }}
+          cache-to: type=gha,scope=server-${{ matrix.variant }},mode=max
+      - name: Record image digest
+        id: digest
+        run: echo "${{ matrix.variant }}=${{ steps.image.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  smoke:
+    needs: [metadata, build]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Check health and bootstrap admin login
+        shell: bash
+        env:
+          IMAGE: ${{ needs.metadata.outputs.image }}@${{ needs.build.outputs.cpu-digest }}
+          LT_ADMIN_EMAIL: smoke@example.test
+        run: |
+          LT_ADMIN_PASSWORD=$(openssl rand -hex 32)
+          echo "::add-mask::$LT_ADMIN_PASSWORD"
+          export LT_ADMIN_PASSWORD
+          docker run --detach --name lt-smoke --platform linux/amd64 \
+            --publish 127.0.0.1:8080:8080 \
+            --env LT_ADMIN_EMAIL --env LT_ADMIN_PASSWORD "$IMAGE"
+
+          base=http://127.0.0.1:8080
+          curl --fail --silent --show-error --max-time 5 --retry 30 --retry-delay 2 \
+            --retry-connrefused "$base/api/health" | jq -e '.ok == true'
+          jq -n '{email: env.LT_ADMIN_EMAIL, password: env.LT_ADMIN_PASSWORD}' | \
+            curl --fail-with-body --silent --show-error --max-time 10 \
+              --cookie-jar "$RUNNER_TEMP/lt-session" --header 'Content-Type: application/json' \
+              --data-binary @- "$base/api/auth/login" | jq -e '.user.role == "admin"'
+          curl --fail-with-body --silent --show-error --max-time 10 \
+            --cookie "$RUNNER_TEMP/lt-session" "$base/api/me" | \
+            jq -e '.user.email == env.LT_ADMIN_EMAIL and .user.role == "admin" and (.csrf | length > 0)'
+      - name: Print server logs
+        if: failure()
+        run: docker logs lt-smoke
+      - name: Clean up smoke container
+        if: always()
+        run: docker rm -fv lt-smoke || true
+
+  publish:
+    needs: [metadata, build, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish versioned and rolling tags
+        env:
+          IMAGE: ${{ needs.metadata.outputs.image }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+          CPU_DIGEST: ${{ needs.build.outputs.cpu-digest }}
+          CUDA_DIGEST: ${{ needs.build.outputs.cuda-digest }}
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" "$IMAGE@$CPU_DIGEST"
+          docker buildx imagetools create --tag "$IMAGE:$VERSION-cuda" --tag "$IMAGE:cuda" "$IMAGE@$CUDA_DIGEST"

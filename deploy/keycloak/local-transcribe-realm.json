@@ -1,0 +1,58 @@
+{
+  "realm": "local-transcribe",
+  "enabled": true,
+  "registrationAllowed": false,
+  "groups": [
+    {"name": "lt-admins"},
+    {"name": "lt-users"}
+  ],
+  "clients": [
+    {
+      "clientId": "local-transcribe",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "local-transcribe-demo-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["__LT_PUBLIC_URL__/auth/oidc/callback"],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "lt-admin",
+      "email": "admin@example.test",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Admin",
+      "enabled": true,
+      "groups": ["/lt-admins"],
+      "credentials": [{"type": "password", "value": "demo-admin-password", "temporary": false}]
+    },
+    {
+      "username": "lt-user",
+      "email": "user@example.test",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "User",
+      "enabled": true,
+      "groups": ["/lt-users"],
+      "credentials": [{"type": "password", "value": "demo-user-password", "temporary": false}]
+    }
+  ]
+}

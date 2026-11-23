@@ -1,0 +1,41 @@
+name: Server CI
+
+on:
+  push:
+    branches: [server]
+  pull_request:
+    branches: [server]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server -> target
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --locked --all-targets
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          build-args: VARIANT=cpu
+          push: false
+          cache-from: type=gha,scope=server-ci-cpu
+          cache-to: type=gha,scope=server-ci-cpu,mode=max

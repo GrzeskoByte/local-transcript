@@ -1,0 +1,33 @@
+services:
+  app:
+    image: ghcr.io/grzeskobyte/local-transcribe:latest
+    build:
+      context: .
+      args:
+        VARIANT: cpu
+    env_file: .env
+    ports:
+      - '127.0.0.1:8080:8080'
+    volumes:
+      - lt-data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: [https]
+    environment:
+      LT_DOMAIN: ${LT_DOMAIN:-localhost}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  lt-data:
+  caddy-data:
+  caddy-config:

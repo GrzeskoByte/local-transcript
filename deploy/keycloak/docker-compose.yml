@@ -1,0 +1,27 @@
+# Demo only. Use a production identity provider for real accounts.
+services:
+  caddy:
+    command: [caddy, run, --config, /etc/caddy/Keycloak.Caddyfile, --adapter, caddyfile]
+    environment:
+      LT_KEYCLOAK_DOMAIN: ${LT_KEYCLOAK_DOMAIN:-sso-demo.invalid}
+    volumes:
+      - ./deploy/keycloak/Caddyfile:/etc/caddy/Keycloak.Caddyfile:ro
+    networks:
+      default:
+        aliases:
+          - ${LT_KEYCLOAK_DOMAIN:-sso-demo.invalid}
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6
+    profiles: [sso-demo]
+    entrypoint: [/bin/bash, /opt/keycloak/demo/import-realm.sh]
+    command: [start-dev, --import-realm]
+    environment:
+      KC_HOSTNAME: https://${LT_KEYCLOAK_DOMAIN:-sso-demo.invalid}
+      KC_PROXY_HEADERS: xforwarded
+      KC_BOOTSTRAP_ADMIN_USERNAME: demo-admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: demo-admin-password
+      LT_PUBLIC_URL: ${LT_PUBLIC_URL:-https://localhost}
+    volumes:
+      - ./deploy/keycloak/import-realm.sh:/opt/keycloak/demo/import-realm.sh:ro
+      - ./deploy/keycloak/local-transcribe-realm.json:/opt/keycloak/demo/local-transcribe-realm.json:ro
