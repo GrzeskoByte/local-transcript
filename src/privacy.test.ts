@@ -33,6 +33,8 @@ describe('privacy: network access is limited to user-initiated features', () => 
       'src/integrations/gitlab.ts', // GitLab sharing: only on Upload/Test, to the user's server
       'src/integrations/llm.ts', // summaries: only on click, to the user's endpoint
       'src/integrations/remote-asr.ts', // transcription server: only when turned on + Transcribe/Test
+      'src/platform/server-bridge.ts', // server edition: same-origin calls to the server that serves the app
+      'src/platform/server.ts', // server edition: GET /api/me on the serving host (the signed-in session)
     ]);
   });
 

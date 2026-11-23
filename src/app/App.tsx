@@ -14,6 +14,8 @@ import { isTypingTarget, keyParts, matches, shortcuts, subscribeShortcuts } from
 import { useQuickRecord } from './quick-record';
 import { remindToRecord, usePrefsVersion } from './preferences';
 import { useUpcoming } from './upcoming';
+import { isServerApp } from '../platform/server';
+import { signOut, useServerSession } from './components/server/api';
 
 /** Keys as <kbd> chips ("Ctrl N"). */
 export function Keys({ binding }: { binding: string }): React.JSX.Element {
@@ -35,6 +37,8 @@ function Shell(): React.JSX.Element {
   } = useApp();
   const keys = useShortcuts();
   const quickRecord = useQuickRecord();
+  const server = isServerApp();
+  const account = useServerSession()?.user ?? null;
   usePrefsVersion();
   const live = recordingState === 'RECORDING' || recordingState === 'PAUSED';
 
@@ -124,7 +128,8 @@ function Shell(): React.JSX.Element {
   const onHome = route.name === 'home';
   const onLibrary = route.name === 'library' || route.name === 'detail' || route.name === 'wrapup';
 
-  if (route.name === 'setup') return <Setup step={route.step ?? 1} />;
+  // First-run setup is the desktop flow (models, devices, files); a server has none.
+  if (route.name === 'setup' && !server) return <Setup step={route.step ?? 1} />;
 
   return (
     <div className={`layout${route.name === 'active' ? ' is-room' : ''}`}>
@@ -182,6 +187,21 @@ function Shell(): React.JSX.Element {
           {remoteServer ? 'Server · Open WebUI' : modelChipLabel(modelMeta)}
         </button>
         <ThemeQuick />
+        {server && account && (
+          <>
+            <button
+              type="button"
+              className="cell user-chip"
+              title={`${account.email}: open your account`}
+              onClick={() => go({ name: 'settings', tab: 'account' })}
+            >
+              {account.name || account.email}
+            </button>
+            <button type="button" className="cell" title="Sign out" onClick={() => void signOut()}>
+              Sign out
+            </button>
+          </>
+        )}
         {live ? (
           <button
             type="button"
@@ -255,7 +275,9 @@ function Shell(): React.JSX.Element {
         )}
       </main>
       <footer className="footer-band">
-        {remoteServer
+        {server
+          ? 'Your recordings and transcripts stay on this server; only you can open them.'
+          : remoteServer
           ? `Your recordings stay on this device; Transcribe sends their speech to ${remoteServer}.`
           : 'Your recording and transcript stay on this device. Nothing leaves it unless you upload it.'}
       </footer>

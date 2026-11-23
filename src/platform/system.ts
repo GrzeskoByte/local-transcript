@@ -4,7 +4,7 @@
  * computer awake while recording, the microphone privacy page, app logs, the
  * pre-recording level monitor and local speaker detection.
  */
-import { invokeDesktop, invokeDesktopRaw, isDesktopApp } from './desktop';
+import { hasNativeBackend, invokeDesktop, invokeDesktopRaw, isDesktopApp } from './desktop';
 
 export interface SystemInfo {
   os: string;
@@ -85,7 +85,7 @@ export interface DiarizeStatus {
 }
 
 export async function diarizeStatus(): Promise<DiarizeStatus> {
-  if (!isDesktopApp()) return { available: false, dir: null };
+  if (!hasNativeBackend()) return { available: false, dir: null };
   return invokeDesktop<DiarizeStatus>('native_diarize_status').catch(() => ({ available: false, dir: null }));
 }
 

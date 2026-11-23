@@ -6,10 +6,11 @@
  * than the AppImage bundles fails with "Unable to establish IDB database
  * file") and every setting looked lost. The desktop shell keeps them in a
  * JSON file instead; values are cached here after one load. Outside the
- * desktop shell — or when the command is missing — `loadNativeSettings`
+ * desktop shell and the server edition (per-user, encrypted at rest) — or
+ * when the command is missing — `loadNativeSettings`
  * resolves `null` and callers fall back to IndexedDB/localStorage.
  */
-import { invokeDesktop, isDesktopApp } from './desktop';
+import { hasNativeBackend, invokeDesktop } from './desktop';
 
 type SettingsMap = Record<string, unknown>;
 
@@ -23,7 +24,7 @@ function isMap(value: unknown): value is SettingsMap {
 /** Load (once) the settings file. `null` when unavailable. */
 export function loadNativeSettings(): Promise<SettingsMap | null> {
   if (cache) return Promise.resolve(cache);
-  if (!isDesktopApp()) return Promise.resolve(null);
+  if (!hasNativeBackend()) return Promise.resolve(null);
   if (!loading) {
     loading = invokeDesktop<unknown>('native_settings_load')
       .then((value) => {

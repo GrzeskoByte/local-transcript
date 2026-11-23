@@ -13,7 +13,8 @@
  * in that on-disk store, on every OS: reads, listing and deletion check it
  * per meeting (`inNativeStore`).
  */
-import { invokeDesktop, isDesktopApp } from '../platform/desktop';
+import { hasNativeBackend, invokeDesktop, isDesktopApp } from '../platform/desktop';
+import { isServerApp } from '../platform/server';
 import { Mp4StreamRepair } from '../audio/mp4-repair';
 import { bytesToBase64 } from '../asr/wav';
 
@@ -35,9 +36,12 @@ function hasOPFS(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
 }
 
-/** Desktop shell without OPFS: chunks go to disk through Rust. */
+/**
+ * Desktop shell without OPFS: chunks go to disk through Rust. The server
+ * edition always stores them on the server (per user, quota-checked).
+ */
 function useNative(): boolean {
-  return !hasOPFS() && isDesktopApp();
+  return isServerApp() || (!hasOPFS() && isDesktopApp());
 }
 
 /** Meetings known to be in the native store (recorded natively). */
@@ -51,7 +55,7 @@ export function markNativeRecording(id: string): void {
 /** Whether this meeting's audio lives in the desktop shell's store. */
 async function inNativeStore(id: string): Promise<boolean> {
   if (useNative() || nativeMeetings.has(id)) return true;
-  if (!isDesktopApp()) return false;
+  if (!hasNativeBackend()) return false;
   const found = (await nativeList(id).catch(() => [])).some((t) => t.chunks.length > 0);
   if (found) nativeMeetings.add(id);
   return found;
@@ -351,7 +355,7 @@ async function assembled(parts: (Blob | Uint8Array)[], mimeType: string): Promis
 }
 
 export async function deleteRecording(id: string): Promise<void> {
-  if (isDesktopApp()) {
+  if (hasNativeBackend()) {
     // Native recordings live there on every OS (no orphans, §23).
     const native = invokeDesktop('native_recording_delete', { meetingId: id });
     nativeMeetings.delete(id);

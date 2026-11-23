@@ -1,3 +1,4 @@
+import { isServerApp } from '../../platform/server';
 import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../store.tsx';
 import { formatDuration, type Meeting, type RecordingMode } from '../../domain/meeting';
@@ -182,7 +183,7 @@ export function Library({ view, initialQuery }: { view: 'list' | 'month'; initia
                 Search <Keys binding={keys.search} />
               </button>
             </form>
-            <p className="hero-note">Searching titles, summaries and every transcript line on this computer.</p>
+            <p className="hero-note">Searching titles, summaries and every transcript line {isServerApp() ? 'in your library' : 'on this computer'}.</p>
           </>
         )}
       </header>

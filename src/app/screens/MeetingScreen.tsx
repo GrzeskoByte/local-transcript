@@ -28,6 +28,7 @@ import { EventsStep } from '../components/wrap/EventsStep.tsx';
 import { ExportStep } from '../components/wrap/ExportStep.tsx';
 import { getPref, setPref } from '../../platform/prefs';
 import { diarizeStatus } from '../../platform/system';
+import { canManageModels } from '../../platform/server';
 import { isTypingTarget, matches } from '../shortcuts';
 import { useShortcuts } from '../App.tsx';
 import { enabledWrapSteps, usePrefsVersion, wrapPrefs } from '../preferences';
@@ -584,7 +585,10 @@ function TranscriptTab({
               .
             </p>
           )}
-          {!remote && installedModels.length === 0 && nativeStatus?.available && (
+          {!remote && installedModels.length === 0 && nativeStatus?.available && !canManageModels() && (
+            <p className="muted mt-2 mb-0">No speech model is installed on this server. Ask your administrator to install models.</p>
+          )}
+          {!remote && installedModels.length === 0 && nativeStatus?.available && canManageModels() && (
             <p className="muted mt-2 mb-0">
               Your first transcription downloads the speech model ({firstRunModel}) once — about{' '}
               {firstRunModel.includes('q5') ? '550 MB' : '1.6 GB'}. Other models live in{' '}
@@ -612,7 +616,7 @@ function TranscriptTab({
           </p>
           {!m.audioRemovedAt && (
             <button className="btn btn-primary" onClick={run}>
-              {installedModels.length > 0 || remote ? 'Transcribe' : 'Download model & transcribe'}
+              {installedModels.length > 0 || remote || !canManageModels() ? 'Transcribe' : 'Download model & transcribe'}
             </button>
           )}
         </section>

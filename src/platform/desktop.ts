@@ -5,6 +5,9 @@
  * `@tauri-apps/api` dependency: outside the Tauri webview
  * `__TAURI_INTERNALS__` is absent and every helper degrades safely.
  */
+import { isServerApp } from './server';
+import { serverInvoke, serverInvokeRaw } from './server-bridge';
+
 interface TauriInternals {
   invoke: <T>(
     cmd: string,
@@ -20,9 +23,22 @@ function internals(): TauriInternals | null {
   return t && typeof t.invoke === 'function' ? (t as TauriInternals) : null;
 }
 
-/** True only inside the Tauri desktop shell. */
+/**
+ * True only inside the Tauri desktop shell. Stays false in the server
+ * edition: desktop-only features (native recorder, folders, updater, …) keep
+ * checking this one.
+ */
 export function isDesktopApp(): boolean {
   return internals() !== null;
+}
+
+/**
+ * A backend answers `invokeDesktop`: the desktop shell or the server edition.
+ * Gate features both provide (ASR, settings file, recordings store, calendar,
+ * diarization) on this, desktop-only ones on `isDesktopApp()`.
+ */
+export function hasNativeBackend(): boolean {
+  return isDesktopApp() || isServerApp();
 }
 
 /** Call a Rust command. Throws when not running in the desktop shell. */
@@ -31,7 +47,10 @@ export async function invokeDesktop<T>(
   args?: Record<string, unknown>,
 ): Promise<T> {
   const t = internals();
-  if (!t) throw new Error('Not running in the desktop app');
+  if (!t) {
+    if (isServerApp()) return serverInvoke<T>(cmd, args);
+    throw new Error('Not running in the desktop app');
+  }
   return t.invoke<T>(cmd, args);
 }
 
@@ -45,7 +64,10 @@ export async function invokeDesktopRaw<T>(
   headers: Record<string, string> = {},
 ): Promise<T> {
   const t = internals();
-  if (!t) throw new Error('Not running in the desktop app');
+  if (!t) {
+    if (isServerApp()) return serverInvokeRaw<T>(cmd, body, headers);
+    throw new Error('Not running in the desktop app');
+  }
   return t.invoke<T>(cmd, body, { headers });
 }
 
