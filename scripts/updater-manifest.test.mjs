@@ -39,6 +39,17 @@ describe('updater manifest', () => {
     expect(planManifest(withCanary).version).toBe('0.1.2');
   });
 
+  it('ignores server releases in both desktop manifests', () => {
+    const withServer = [
+      ...releases,
+      release('v1.2.3-server', [
+        'LocalTranscriber_1.2.3_linux_amd64.AppImage', 'LocalTranscriber_1.2.3_linux_amd64.AppImage.sig',
+      ]),
+    ];
+    expect(planManifest(withServer).version).toBe('0.1.2');
+    expect(planManifest(withServer, { canary: true }).version).toBe('0.1.2');
+  });
+
   it('the test-release manifest offers the newest canary, and stable over a canary of the same version', () => {
     const canaryRel = release('v0.1.3-canary.7-ubuntu', [
       'LocalTranscriber_0.1.3-canary.7_linux_amd64.AppImage', 'LocalTranscriber_0.1.3-canary.7_linux_amd64.AppImage.sig',

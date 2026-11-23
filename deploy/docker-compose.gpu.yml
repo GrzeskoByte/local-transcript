@@ -1,0 +1,7 @@
+services:
+  app:
+    image: ghcr.io/grzeskobyte/local-transcribe:cuda
+    build:
+      args:
+        VARIANT: cuda
+    gpus: all

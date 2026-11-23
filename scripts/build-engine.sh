@@ -45,6 +45,9 @@ case "$TARGET" in
   x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu)
     ARGS+=(-DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc")
     [[ "$TARGET" == x86_64* ]] && ARGS+=("${X86_BASELINE[@]}")
+    if [[ "${GGML_CUDA:-0}" == 1 ]]; then
+      ARGS+=(-DGGML_CUDA=ON)
+    fi
     ;;
   aarch64-apple-darwin)
     ARGS+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
@@ -95,6 +98,8 @@ if [[ "${CAN_RUN:-0}" == 1 && "${SKIP_ENGINE_SMOKE:-0}" != 1 ]]; then
   TEXT="$("$OUT_DIR/lt-whisper-$TARGET$EXT" -m "$MODEL" -f "$WORK/samples/jfk.wav" -nt --no-prints 2>/dev/null)"
   echo "smoke test transcript: $TEXT"
   grep -qi "ask not what your country can do for you" <<<"$TEXT" || { echo "engine smoke test failed" >&2; exit 1; }
+elif [[ "${SKIP_ENGINE_SMOKE:-0}" == 1 ]]; then
+  echo "engine smoke test disabled by SKIP_ENGINE_SMOKE"
 else
   echo "cross-compiled for $TARGET on $HOST: skipping the smoke test"
 fi

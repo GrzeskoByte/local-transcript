@@ -1,0 +1,5 @@
+import /etc/caddy/Caddyfile
+
+{$LT_KEYCLOAK_DOMAIN} {
+	reverse_proxy keycloak:8080
+}

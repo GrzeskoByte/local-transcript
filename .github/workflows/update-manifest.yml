@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   manifest:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.tag_name != 'updater' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.release.tag_name != 'updater' && !endsWith(github.event.release.tag_name, '-server')) }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}

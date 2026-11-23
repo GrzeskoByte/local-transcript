@@ -1,6 +1,9 @@
 node_modules/
 dist/
 *.local
+.env
+.env.*
+!.env.example
 playwright-report/
 test-results/
 bench/fixtures/cache/
