@@ -108,7 +108,7 @@ jobs:
 
           base=http://127.0.0.1:8080
           curl --fail --silent --show-error --max-time 5 --retry 30 --retry-delay 2 \
-            --retry-connrefused "$base/api/health" | jq -e '.ok == true'
+            --retry-all-errors "$base/api/health" | jq -e '.ok == true'
           jq -n '{email: env.LT_ADMIN_EMAIL, password: env.LT_ADMIN_PASSWORD}' | \
             curl --fail-with-body --silent --show-error --max-time 10 \
               --cookie-jar "$RUNNER_TEMP/lt-session" --header 'Content-Type: application/json' \
