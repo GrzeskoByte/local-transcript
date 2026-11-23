@@ -29,7 +29,7 @@ impl LiveState {
 pub struct LiveTranscribeRequest {
     /// A 16 kHz mono WAV (or bare f32 PCM), base64 encoded.
     pub samples_base64: String,
-    #[serde(default)]
+    #[serde(default = "asr::default_sample_rate")]
     pub sample_rate: u32,
     /// Native model name, e.g. `"base"`.
     pub model: String,
@@ -54,7 +54,8 @@ pub async fn transcribe(engine: &Engine, user: &str, request: LiveTranscribeRequ
     };
     tokio::task::spawn_blocking(move || {
         let guard = guard;
-        let Some(prepared) = asr::prepare(&models_dir, &tmp_dir, &request)? else { return Ok(Vec::new()) };
+        let Some(prepared) = asr::prepare(&models_dir, &tmp_dir, &request, 60)? else { return Ok(Vec::new()) };
+        drop(request);
         asr::run_whisper(&backend, &prepared, &guard.ctl)
     })
     .await

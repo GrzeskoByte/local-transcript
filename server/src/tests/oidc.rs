@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use super::{cookie, json_body, request, TestApp, ADMIN, ORIGIN};
+use super::{cookie, json_body, request, TestApp, ADMIN, ORIGIN, PASSWORD};
 use crate::{
     accounts_db::{now_ms, Role},
     config::{OidcPatch, SettingsPatch},
@@ -278,6 +278,36 @@ async fn oidc_checks_state_nonce_pkce_and_id_token_claims() {
         .await
         .unwrap();
     task.abort();
+}
+
+#[tokio::test]
+async fn local_sign_in_requires_a_reachable_provider_and_an_active_oidc_admin() {
+    let (provider, task) = MockProvider::launch().await;
+    let test = TestApp::new(Some(ORIGIN), provider.settings());
+    test.create(ADMIN, Role::Admin).await;
+    let local = test.login_as(ADMIN).await;
+    let configure = |local_login| test.request(
+        local.request("PUT", "/api/admin/settings"),
+        Some(json!({ "localLogin": local_login })),
+    );
+    assert_eq!(configure(false).await.status(), StatusCode::BAD_REQUEST);
+
+    let sso_response = sign_in(&test, &provider, json!({ "org_groups": ["staff", "operators"] })).await;
+    let sso = test.ticket(cookie(&sso_response, "lt_session")).await;
+    assert_eq!(sso.me["user"]["role"], "admin");
+    assert_eq!(configure(false).await.status(), StatusCode::OK);
+    assert_eq!(test.login(ADMIN, PASSWORD, "127.0.0.1:4000").await.status(), StatusCode::FORBIDDEN);
+
+    let user = format!("/api/admin/users/{}", sso.me["user"]["id"].as_str().unwrap());
+    for patch in [json!({ "role": "member" }), json!({ "disabled": true })] {
+        assert_eq!(test.request(local.request("PATCH", &user), Some(patch)).await.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(test.request(local.request("DELETE", &user), None).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(configure(true).await.status(), StatusCode::OK);
+    task.abort();
+    task.await.unwrap_err();
+    assert_eq!(configure(false).await.status(), StatusCode::BAD_REQUEST);
+    assert!(crate::admin::settings(&test.app).await.unwrap().local_login);
 }
 
 #[tokio::test]

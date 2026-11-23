@@ -55,6 +55,7 @@ impl TestApp {
                 data_dir: data_dir.clone(),
                 whisper_cli: None,
                 diarize_dir: None,
+                calendar_allowed_hosts: Vec::new(),
                 secret_key: [17; 32],
             },
             settings,
@@ -62,6 +63,7 @@ impl TestApp {
             session_ttl_ms: 168 * HOUR_MS,
             session_idle_ms: 24 * HOUR_MS,
             quota_bytes: 1024,
+            trusted_proxies: Vec::new(),
         };
         let app = App::new(config, AccountsDb::open(&data_dir).unwrap()).unwrap();
         let router = http::router(app.clone());
@@ -641,6 +643,78 @@ async fn admin_settings_do_not_expose_secrets_and_env_wins() {
         })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn changing_oidc_identity_requires_a_fresh_secret() {
+    let test = TestApp::new(Some(ORIGIN), SettingsPatch::default());
+    test.create(ADMIN, Role::Admin).await;
+    let admin = test.login_as(ADMIN).await;
+    let endpoint = "/api/admin/settings";
+    let update = |oidc| test.request(admin.request("PUT", endpoint), Some(json!({ "oidc": oidc })));
+    assert_eq!(
+        test.request(admin.request("PUT", endpoint), Some(json!({ "localLogin": false }))).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(update(json!({
+        "issuer": "https://old.example", "clientId": "old", "clientSecret": "old-secret"
+    })).await.status(), StatusCode::OK);
+    for rejected in [
+        json!({ "issuer": "https://new.example" }),
+        json!({ "clientId": "new" }),
+        json!({ "clientId": "new", "clientSecret": "" }),
+        json!({ "clientId": "new", "clientSecret": "old-secret" }),
+    ] {
+        assert_eq!(update(rejected).await.status(), StatusCode::BAD_REQUEST);
+    }
+    let previous = crate::admin::settings(&test.app).await.unwrap().oidc;
+    assert_eq!(previous.issuer, "https://old.example");
+    assert_eq!(previous.client_id, "old");
+    assert_eq!(previous.client_secret, "old-secret");
+    assert_eq!(update(json!({
+        "issuer": "https://new.example", "clientId": "new", "clientSecret": "new-secret"
+    })).await.status(), StatusCode::OK);
+    let current = crate::admin::settings(&test.app).await.unwrap().oidc;
+    assert_eq!(current.issuer, "https://new.example");
+    assert_eq!(current.client_id, "new");
+    assert_eq!(current.client_secret, "new-secret");
+}
+
+#[tokio::test]
+async fn recording_and_export_streams_preserve_binary_responses() {
+    let test = TestApp::new(None, SettingsPatch::default());
+    test.create(ADMIN, Role::Admin).await;
+    let admin = test.login_as(ADMIN).await;
+    for (name, chunk) in [("000001.ogg", "QkI="), ("000000.ogg", "QUE=")] {
+        let response = test.request(
+            admin.request("POST", "/api/invoke/native_recording_write"),
+            Some(json!({ "request": { "meetingId": "m", "name": name, "dataBase64": chunk } })),
+        ).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let audio = test.request(
+        admin.request("POST", "/api/invoke/native_recording_read"),
+        Some(json!({ "meetingId": "m" })),
+    ).await;
+    assert_eq!(audio.headers()[header::CONTENT_TYPE], "application/octet-stream");
+    assert_eq!(to_bytes(audio.into_body(), 100).await.unwrap(), "AABB");
+
+    let archive = test.request(admin.request("GET", "/api/me/export"), None).await;
+    assert_eq!(archive.status(), StatusCode::OK);
+    assert_eq!(archive.headers()[header::CONTENT_TYPE], "application/zip");
+    assert!(to_bytes(archive.into_body(), 4096).await.unwrap().starts_with(b"PK"));
+}
+
+#[test]
+fn admin_passwords_come_from_a_prompt_or_one_stdin_line() {
+    use clap::Parser;
+    let args = ["lt-server", "admin", "reset-password", "--email", ADMIN];
+    assert!(crate::Cli::try_parse_from(args).is_ok());
+    assert!(crate::Cli::try_parse_from(args.into_iter().chain(["--password-stdin"])).is_ok());
+    assert!(crate::Cli::try_parse_from(args.into_iter().chain(["--password", "value"])).is_err());
+    assert_eq!(crate::read_password_line(b" password \r\nignored".as_slice()).unwrap(), " password ");
+    assert!(crate::read_password_line(b"\n".as_slice()).is_err());
+    assert!(crate::read_password_line(vec![b'a'; 1025].as_slice()).is_err());
 }
 
 #[test]

@@ -9,7 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts_db::{audit, guard_last_admin, now_ms, user_by_id},
+    accounts_db::{audit, now_ms, user_by_id},
+    admin,
     auth::session::{self, Session},
     ctx::App,
     http::{blocking, ApiError, ApiResult, Input},
@@ -48,7 +49,7 @@ pub async fn export(
                 "attachment; filename=\"local-transcribe-export.zip\"",
             ),
         ],
-        Body::from(zip),
+        Body::from_stream(tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(zip))),
     )
         .into_response())
 }
@@ -92,12 +93,13 @@ pub async fn delete_account(app: App, session: Session, request: DeleteAccount) 
             }
         };
         let lookup = id.clone();
+        let config = app.clone();
         let user = app
             .db
             .run(move |db| {
                 let user = user_by_id(db, &lookup)?
                     .ok_or_else(|| ApiError::not_found("Account not found"))?;
-                guard_last_admin(db, &user)?;
+                admin::guard_last_admin(db, &config.config, &user)?;
                 Ok(user)
             })
             .await?;

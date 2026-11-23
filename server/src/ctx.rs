@@ -24,7 +24,9 @@ pub struct State {
     http: reqwest::Client,
     https: reqwest::Client,
     pub password_slots: Arc<Semaphore>,
-    pub account_write: AsyncMutex<()>,
+    pub asr_requests: Semaphore,
+    pub live_requests: Semaphore,
+    pub account_write: Arc<AsyncMutex<()>>,
     pub user_data: Gates<String, UserActivity>,
     pub logins: Gates<(String, std::net::IpAddr), AsyncMutex<()>>,
 }
@@ -46,7 +48,9 @@ impl App {
             http: client(false)?,
             https: client(true)?,
             password_slots: Arc::new(Semaphore::new(4)),
-            account_write: AsyncMutex::new(()),
+            asr_requests: Semaphore::new(4),
+            live_requests: Semaphore::new(2),
+            account_write: Arc::new(AsyncMutex::new(())),
             user_data: Gates::default(),
             logins: Gates::default(),
         })))

@@ -8,12 +8,12 @@ use serde_json::{json, Value};
 
 use crate::{
     accounts_db::{
-        audit, guard_last_admin, list_users as load_users, now_ms, read_setting, user_by_email,
-        user_by_id, write_setting, Profile, Role,
+        audit, has_oidc_admin, list_users as load_users, now_ms, read_setting, user_by_email,
+        user_by_id, write_setting, AuthKind, Profile, Role, User,
     },
     auth::{
         local::{normalize_email, normalize_name},
-        random_token, seal,
+        oidc, random_token, seal,
         session::{self, Session},
         token_hash, unseal,
     },
@@ -114,40 +114,82 @@ pub async fn put_settings(
     Extension(session): Extension<Session>,
     Input(patch): Input<SettingsPatch>,
 ) -> ApiResult<Json<Value>> {
-    let _guard = app.account_write.lock().await;
+    let guard = app.account_write.clone().lock_owned().await;
     let actor = refresh_admin(&app, session).await?;
     let config = app.clone();
+    let (local_login, oidc, oidc_changed, effective) = app.db.run(move |db| {
+        let env = &config.config.settings;
+        let local_login = patch.local_login.filter(|_| env.local_login.is_none());
+        let stored_local_login = local_login.unwrap_or(read_setting(db, "localLogin")?.unwrap_or(true));
+        let mut oidc: OidcSettings = read_setting(db, "oidc")?.unwrap_or_default();
+        let previous = effective_settings(&config.config, stored_local_login, oidc.clone())?;
+        let old_issuer = oidc.issuer.clone();
+        let old_client_id = oidc.client_id.clone();
+        let changed = patch.oidc.apply(&mut oidc, Some(&env.oidc));
+        if oidc.issuer != old_issuer || oidc.client_id != old_client_id {
+            if env.oidc.client_secret.is_some() {
+                return Err(ApiError::bad_request(
+                    "Change the OIDC issuer or client ID and secret together in the server environment",
+                ));
+            }
+            if !changed.contains(&"oidc.clientSecret") || oidc.client_secret.trim().is_empty()
+                || oidc.client_secret == previous.oidc.client_secret
+            {
+                return Err(ApiError::bad_request(
+                    "Enter a new OIDC client secret when changing the issuer or client ID",
+                ));
+            }
+        }
+        if changed.contains(&"oidc.issuer") && !oidc.issuer.is_empty() {
+            parse_issuer(&oidc.issuer).map_err(ApiError::bad_request)?;
+            if config.config.public_url.is_none() {
+                return Err(ApiError::bad_request(
+                    "Set LT_PUBLIC_URL before configuring an OIDC issuer",
+                ));
+            }
+        }
+        if changed.contains(&"oidc.clientSecret") && !oidc.client_secret.is_empty() {
+            let secret = std::mem::take(&mut oidc.client_secret);
+            oidc.client_secret = seal(&config.config.engine.secret_key, OIDC_SECRET_PURPOSE, &secret)
+                .map_err(ApiError::internal)?;
+        }
+        let effective = effective_settings(&config.config, stored_local_login, oidc.clone())?;
+        Ok((local_login, oidc, !changed.is_empty(), effective))
+    }).await?;
+
+    // Hold the account write gate while checking discovery, without holding a SQLite transaction.
+    if !effective.local_login {
+        if !effective.oidc_enabled(&app.config) || effective.oidc.client_secret.trim().is_empty() {
+            return Err(ApiError::bad_request(
+                "Configure OIDC with a client secret before disabling local sign-in",
+            ));
+        }
+        let issuer = effective.oidc.issuer.clone();
+        if !app
+            .db
+            .run(move |db| has_oidc_admin(db, &issuer, None))
+            .await?
+        {
+            return Err(ApiError::bad_request(
+                "Sign in as an OIDC admin before disabling local sign-in",
+            ));
+        }
+        oidc::discover(&app, &effective.oidc).await.map_err(|_| {
+            ApiError::bad_request("OIDC discovery must succeed before disabling local sign-in")
+        })?;
+    }
+
     let view = app
         .db
         .run(move |db| {
+            let _guard = guard;
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let env = &config.config.settings;
-            if let Some(local_login) = patch.local_login.filter(|_| env.local_login.is_none()) {
+            if let Some(local_login) = local_login {
                 write_setting(&tx, "localLogin", &local_login)?;
             }
-
-            let mut oidc: OidcSettings = read_setting(&tx, "oidc")?.unwrap_or_default();
-            let changed = patch.oidc.apply(&mut oidc, Some(&env.oidc));
-            if changed.contains(&"oidc.issuer") && !oidc.issuer.is_empty() {
-                parse_issuer(&oidc.issuer).map_err(ApiError::bad_request)?;
-                if config.config.public_url.is_none() {
-                    return Err(ApiError::bad_request(
-                        "Set LT_PUBLIC_URL before configuring an OIDC issuer",
-                    ));
-                }
-            }
-            if changed.contains(&"oidc.clientSecret") && !oidc.client_secret.is_empty() {
-                oidc.client_secret = seal(
-                    &config.config.engine.secret_key,
-                    OIDC_SECRET_PURPOSE,
-                    &oidc.client_secret,
-                )
-                .map_err(ApiError::internal)?;
-            }
-            if !changed.is_empty() {
+            if oidc_changed {
                 write_setting(&tx, "oidc", &oidc)?;
             }
-            let view = read_settings(&tx, &config.config)?.view();
             audit(
                 &tx,
                 now_ms(),
@@ -157,10 +199,25 @@ pub async fn put_settings(
                 None,
             )?;
             tx.commit()?;
-            Ok(view)
+            Ok(effective.view())
         })
         .await?;
     Ok(Json(view))
+}
+
+pub fn guard_last_admin(db: &Connection, config: &Config, user: &User) -> ApiResult<()> {
+    crate::accounts_db::guard_last_admin(db, user)?;
+    if user.profile.role == Role::Admin && user.profile.auth == AuthKind::Oidc && !user.disabled {
+        let effective = read_settings(db, config)?;
+        if !effective.local_login
+            && !has_oidc_admin(db, &effective.oidc.issuer, Some(&user.profile.id))?
+        {
+            return Err(ApiError::bad_request(
+                "The last active OIDC admin cannot be removed, disabled, or demoted while local sign-in is disabled",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub async fn refresh_admin(app: &App, session: Session) -> ApiResult<Profile> {
@@ -214,6 +271,7 @@ pub async fn update_user(
     let name = patch.name.as_deref().map(normalize_name).transpose()?;
     let _guard = app.account_write.lock().await;
     let actor = refresh_admin(&app, session).await?;
+    let config = app.clone();
     app.db
         .run(move |db| {
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -222,7 +280,7 @@ pub async fn update_user(
             let role = patch.role.unwrap_or(user.profile.role);
             let disabled = patch.disabled.unwrap_or(user.disabled);
             if disabled || role != Role::Admin {
-                guard_last_admin(&tx, &user)?;
+                guard_last_admin(&tx, &config.config, &user)?;
             }
             tx.execute(
                 "UPDATE users SET role = ?1, disabled = ?2, name = ?3 WHERE id = ?4",

@@ -25,6 +25,7 @@ pub struct Config {
     pub session_ttl_ms: i64,
     pub session_idle_ms: i64,
     pub quota_bytes: u64,
+    pub trusted_proxies: Vec<ipnet::IpNet>,
 }
 
 impl Config {
@@ -88,6 +89,7 @@ impl Config {
                 data_dir,
                 whisper_cli: Some(path("WHISPER_CLI_PATH", "/opt/lt/bin/whisper-cli")),
                 diarize_dir: Some(path("LT_DIARIZE_DIR", "/opt/lt/diarize")),
+                calendar_allowed_hosts: comma_list(&optional("LT_CALENDAR_ALLOWED_HOSTS").unwrap_or_default()),
                 secret_key,
             },
             settings,
@@ -95,6 +97,10 @@ impl Config {
             session_ttl_ms: hours("LT_SESSION_TTL_HOURS", 168)?,
             session_idle_ms: hours("LT_SESSION_IDLE_HOURS", 24)?,
             quota_bytes,
+            trusted_proxies: comma_list(&optional("LT_TRUSTED_PROXIES").unwrap_or_default())
+                .iter()
+                .map(|cidr| cidr.parse().with_context(|| format!("Invalid LT_TRUSTED_PROXIES CIDR: {cidr}")))
+                .collect::<Result<_>>()?,
         })
     }
 

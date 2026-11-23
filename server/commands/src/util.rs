@@ -25,6 +25,11 @@ impl Args {
         serde_json::from_value(value.clone()).map_err(|e| format!("Invalid argument {name}: {e}"))
     }
 
+    pub fn take<T: DeserializeOwned>(&mut self, name: &str) -> Result<T, String> {
+        let value = self.0.remove(name).ok_or_else(|| format!("Missing argument: {name}"))?;
+        serde_json::from_value(value).map_err(|e| format!("Invalid argument {name}: {e}"))
+    }
+
     /// An optional argument (`null` and missing both give `None`).
     pub fn opt<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, String> {
         match self.0.get(name) {
@@ -76,19 +81,19 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), 
     use std::io::Write;
     let dir = path.parent().ok_or("Invalid path")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-    let tmp = path.with_extension("part");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".write-").suffix(".part");
     #[cfg(unix)]
     if let Some(mode) = mode {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(mode);
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(mode));
     }
     #[cfg(not(unix))]
     let _ = mode;
-    let mut f = options.open(&tmp).map_err(|e| format!("Could not write {}: {e}", tmp.display()))?;
-    f.write_all(bytes)
-        .and_then(|_| f.sync_data())
-        .map_err(|e| format!("Could not write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("Could not save {}: {e}", path.display()))
+    let mut file = builder.tempfile_in(dir).map_err(|e| format!("Could not create a temporary file: {e}"))?;
+    file.write_all(bytes)
+        .and_then(|_| file.as_file().sync_data())
+        .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    file.persist(path).map_err(|e| format!("Could not save {}: {e}", path.display()))?;
+    Ok(())
 }

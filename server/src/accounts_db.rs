@@ -246,6 +246,15 @@ pub fn is_last_active_admin(db: &Connection, user: &User) -> ApiResult<bool> {
     )?)
 }
 
+pub fn has_oidc_admin(db: &Connection, issuer: &str, excluded: Option<&str>) -> ApiResult<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE role = 'admin' AND disabled = 0
+         AND auth = 'oidc' AND oidc_issuer = ?1 AND id IS NOT ?2)",
+        params![issuer, excluded],
+        |row| row.get(0),
+    )?)
+}
+
 pub fn insert_local(
     db: &Connection,
     email: String,

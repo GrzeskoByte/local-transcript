@@ -70,6 +70,7 @@ fn env() -> Env {
         data_dir: data,
         whisper_cli: Some(root.join("bin/whisper-cli")),
         diarize_dir: Some(diarize),
+        calendar_allowed_hosts: Vec::new(),
         secret_key: [7u8; 32],
     });
     Env { root, engine }
@@ -90,7 +91,7 @@ fn msg(e: CommandError) -> String {
 async fn call(e: &Env, ctx: &UserCtx, cmd: &str, args: Value) -> Result<Value, CommandError> {
     match dispatch(&e.engine, ctx, cmd, Body::Json(args)).await? {
         Reply::Json(v) => Ok(v),
-        Reply::Bytes(_) => panic!("expected JSON from {cmd}"),
+        Reply::Recording(_) => panic!("expected JSON from {cmd}"),
     }
 }
 
@@ -113,7 +114,7 @@ async fn read_track(e: &Env, ctx: &UserCtx, id: &str, track: &str) -> Vec<u8> {
         .await
         .unwrap_or_else(|err| panic!("read failed: {}", msg(err)))
     {
-        Reply::Bytes(b) => b,
+        Reply::Recording(paths) => paths.into_iter().flat_map(|path| std::fs::read(path).unwrap()).collect(),
         Reply::Json(_) => panic!("expected bytes"),
     }
 }
@@ -324,6 +325,59 @@ fn segment(id: &str, meeting_id: &str, text: &str) -> Value {
 }
 
 #[tokio::test]
+async fn concurrent_recording_writes_respect_quota() {
+    let e = std::sync::Arc::new(env());
+    let u = user(&e, "u1", false, 128 * 1024);
+    let mut jobs = tokio::task::JoinSet::new();
+    let start = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+    for i in 0..8 {
+        let (e, u, start) = (e.clone(), u.clone(), start.clone());
+        jobs.spawn(async move {
+            start.wait().await;
+            write_chunk(&e, &u, "m1", "", &format!("{i}.ogg"), &[1; 65_536]).await
+        });
+    }
+    let mut saved = 0;
+    while let Some(result) = jobs.join_next().await {
+        match result.unwrap() {
+            Ok(_) => saved += 1,
+            Err(err) => assert!(msg(err).contains("quota")),
+        }
+    }
+    assert_eq!(saved, 2);
+    assert_eq!(usage_bytes(&u.user_dir), u.quota_bytes);
+}
+
+#[tokio::test]
+async fn meeting_patch_and_compare_and_swap_preserve_concurrent_edits() {
+    let e = env();
+    let u = user(&e, "u1", false, 0);
+    let patch = |key, patch| call(&e, &u, "server_db_patch", json!({"store": "meetings", "key": key, "patch": patch}));
+    let replace = |value, expected| call(&e, &u, "server_db_put_if_unchanged", json!({"store": "meetings", "value": value, "expected": expected}));
+    let original = json!({"id": "m1", "title": "Old", "nested": {"a": 1, "b": 2}});
+    assert_eq!(patch("m1", json!({"title": "New"})).await.unwrap(), Value::Null);
+    assert_eq!(replace(original.clone(), Value::Null).await.unwrap(), json!(false));
+    call_ok(&e, &u, "server_db_put", json!({"store": "meetings", "value": original})).await;
+    let (rename, nested) = tokio::join!(
+        patch("m1", json!({"title": "New"})),
+        patch("m1", json!({"nested": {"b": 3}})),
+    );
+    assert!(rename.is_ok() && nested.is_ok());
+    assert!(patch("m1", json!({"id": "m2"})).await.is_err());
+    let changed = call_ok(&e, &u, "server_db_get", json!({"store": "meetings", "key": "m1"})).await;
+    assert_eq!(changed, json!({"id": "m1", "title": "New", "nested": {"b": 3}}));
+    assert_eq!(replace(json!({"id": "m1"}), original).await.unwrap(), json!(false));
+    let (first, second) = tokio::join!(
+        replace(json!({"id": "m1", "title": "First"}), changed.clone()),
+        replace(json!({"id": "m1", "title": "Second"}), changed.clone()),
+    );
+    assert_ne!(first.unwrap(), second.unwrap());
+    for command in ["server_db_patch", "server_db_put_if_unchanged"] {
+        assert!(capabilities(false).contains(&command));
+    }
+}
+
+#[tokio::test]
 async fn db_basic_store_operations() {
     let e = env();
     let u = user(&e, "u1", false, 0);
@@ -493,8 +547,8 @@ async fn export_zip_contains_the_users_data() {
     write_chunk(&e, &u, "m1", "", "000000.ogg", b"OggS-audio").await.unwrap();
     write_chunk(&e, &u, "m1", "mic", "000000.webm", b"mic").await.unwrap();
 
-    let bytes = export_user(&e.engine, &u).await.unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let file = export_user(&e.engine, &u).await.unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
     let mut names: Vec<String> = (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
     names.sort();
     assert_eq!(
@@ -527,7 +581,7 @@ async fn export_zip_contains_the_users_data() {
 async fn export_of_an_empty_user_is_a_valid_zip() {
     let e = env();
     let u = user(&e, "fresh", false, 0);
-    let zip = zip::ZipArchive::new(std::io::Cursor::new(export_user(&e.engine, &u).await.unwrap())).unwrap();
+    let zip = zip::ZipArchive::new(export_user(&e.engine, &u).await.unwrap()).unwrap();
     assert_eq!(zip.len(), 4);
 }
 
@@ -759,7 +813,7 @@ async fn diarize(e: &Env, ctx: &UserCtx, speakers: Option<&str>) -> Result<Value
     let wav = STANDARD.decode(wav_payload()).unwrap();
     match dispatch(&e.engine, ctx, "native_diarize_run", Body::Raw { bytes: wav, headers }).await? {
         Reply::Json(v) => Ok(v),
-        Reply::Bytes(_) => panic!("expected JSON"),
+        Reply::Recording(_) => panic!("expected JSON"),
     }
 }
 
@@ -816,7 +870,7 @@ async fn diarize_without_a_runtime_reports_it() {
 // --- calendar ---------------------------------------------------------------------
 
 #[tokio::test]
-async fn calendar_commands_validate_before_calling_curl() {
+async fn calendar_commands_validate_requests() {
     let e = env();
     let u = user(&e, "u1", false, 0);
     let send = |endpoint: &str, method: &str| {
