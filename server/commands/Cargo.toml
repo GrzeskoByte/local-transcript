@@ -1,0 +1,10 @@
+[package]
+name = "lt-commands"
+version = "0.1.27"
+edition = "2021"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
