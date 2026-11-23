@@ -37,5 +37,25 @@ jobs:
           platforms: linux/amd64
           build-args: VARIANT=cpu
           push: false
+          load: true
+          tags: lt-server:ci
           cache-from: type=gha,scope=server-ci-cpu
           cache-to: type=gha,scope=server-ci-cpu,mode=max
+      - name: API smoke test (accounts, isolation, real whisper.cpp)
+        shell: bash
+        env:
+          LT_ADMIN_EMAIL: smoke@example.test
+        run: |
+          LT_ADMIN_PASSWORD=$(openssl rand -hex 24)
+          echo "::add-mask::$LT_ADMIN_PASSWORD"
+          export LT_ADMIN_PASSWORD
+          docker run --detach --name lt-smoke --publish 127.0.0.1:8080:8080 \
+            --env LT_ADMIN_EMAIL --env LT_ADMIN_PASSWORD lt-server:ci
+          curl --fail --silent --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:8080/api/health
+          curl --fail --silent --location --output "$RUNNER_TEMP/jfk.wav" \
+            https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav
+          python3 scripts/server-smoke.py --base http://127.0.0.1:8080 \
+            --email "$LT_ADMIN_EMAIL" --password "$LT_ADMIN_PASSWORD" --wav "$RUNNER_TEMP/jfk.wav"
+      - name: Print server logs
+        if: failure()
+        run: docker logs lt-smoke
