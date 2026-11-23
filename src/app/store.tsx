@@ -33,7 +33,8 @@ import { segmentsToMarkdown, type TranscriptSegment } from '../domain/transcript
 import type { TranscriptionStage } from '../asr/engine';
 import { deleteRecording, estimateStorage, isStorageLow, listChunkNames, listTracks, readMeta, readRecordingBlob } from '../storage/recordings';
 import { trackSpeakerLabel } from '../domain/meeting';
-import { invokeDesktop, isDesktopApp } from '../platform/desktop';
+import { hasNativeBackend, invokeDesktop, isDesktopApp } from '../platform/desktop';
+import { canManageModels } from '../platform/server';
 import { getPref, setPref } from '../platform/prefs';
 import {
   checkForUpdate,
@@ -125,8 +126,16 @@ export type SettingsTab =
   | 'integrations'
   | 'storage'
   | 'appearance'
-  | 'app';
-const SETTINGS_TABS: SettingsTab[] = ['models', 'recording', 'after', 'summaries', 'integrations', 'storage', 'appearance', 'app'];
+  | 'app'
+  // Server edition only (Settings shows them when signed in to a server).
+  | 'account'
+  | 'users'
+  | 'signin'
+  | 'audit';
+const SETTINGS_TABS: SettingsTab[] = [
+  'models', 'recording', 'after', 'summaries', 'integrations', 'storage', 'appearance', 'app',
+  'account', 'users', 'signin', 'audit',
+];
 /** Settings tabs before the redesign (old links keep working). */
 const LEGACY_TABS: Record<string, SettingsTab> = {
   calendar: 'integrations',
@@ -586,9 +595,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     });
   }, []);
 
-  // Detect the desktop backend on mount.
+  // Detect the native backend (desktop shell or server) on mount.
   useEffect(() => {
-    if (!isDesktopApp()) return;
+    if (!hasNativeBackend()) return;
     let cancelled = false;
     void fetchNativeStatus()
       .then((status) => {
@@ -601,7 +610,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, []);
 
   const refreshNativeStatus = useCallback(async () => {
-    if (!isDesktopApp()) return;
+    if (!hasNativeBackend()) return;
     try {
       setNativeStatusState(await fetchNativeStatus());
     } catch {
@@ -734,7 +743,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const startLive = useCallback(
     async (id: string, source: TrackSpec['source'] | NativeRecorder) => {
       const choice = liveChoiceRef.current;
-      if (!isDesktopApp() || !getLiveEnabled() || !choice) return;
+      if (!hasNativeBackend() || !getLiveEnabled() || !choice) return;
       const transcriber = new LiveTranscriber(id, choice.id, language);
       transcriber.onUpdate(setLive);
       if (source instanceof NativeRecorder) {
@@ -1147,7 +1156,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const fetchCalendarEvents = useCallback(
     async (start: Date, end: Date): Promise<ServerEvent[]> => {
-      if (!isDesktopApp()) return [];
+      if (!hasNativeBackend()) return [];
       logNetwork(calendarConfig.serverUrl || 'graph.microsoft.com', 'Listed calendar events', 'Account + date range');
       return fetchServerEvents(calendarConfig, start, end);
     },
@@ -1665,6 +1674,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const setupAndTranscribe = useCallback(
     async (id: string) => {
       if (installedModels.length > 0 || remoteAsrActive(remoteAsrConfig)) return transcribe(id);
+      // Server edition: models are shared and installed by an admin.
+      if (!canManageModels()) throw new Error('No speech model is installed. Ask your administrator to install models.');
       // First transcription on a fresh install: fetch the recommended model
       // (with progress), then run — no trip to Settings.
       await downloadModel(firstRunModel);

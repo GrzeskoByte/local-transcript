@@ -172,6 +172,10 @@ all run on this computer. It goes online **only when you click something**:
 | Transcription server (Open WebUI) | You turned it on in Settings → Models and click Transcribe / Test connection (or Transcribe after recording is on): the recording's speech goes there as 16 kHz WAV pieces | The server you configured |
 | LLM summary | You click Summarize (Ollama stays local; API/Open WebUI/OpenCode/Claude Code send the transcript to that provider) | The endpoint you configured |
 
+In the server edition (`docs/SERVER.md`) the web app talks only to the server
+that serves it (`src/platform/server.ts`, `server-bridge.ts`: sign-in, account
+and per-user commands); recordings and transcripts stay on that server.
+
 Settings → Storage & privacy → **Network activity** lists every connection the
 app made in the last 30 days (where, why, what was sent). Speaker detection
 (sherpa-onnx) runs on this computer: the diarizer and its two models are

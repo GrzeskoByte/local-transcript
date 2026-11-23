@@ -74,7 +74,31 @@ Legacy hashes (`#/new`, `#/calendar`, old settings tabs) redirect.
   release builds), not automatic.
 - **Light only**, as in the canvas.
 
-## 6. Verification
+## 6. Server edition (Docker; `docs/SERVER.md`)
+
+Same Halftone Window, no new roles. The bundle is the same; `isServerApp()`
+(`<meta name="lt-edition" content="server">`) switches it. Nothing of the app
+(store, storage, settings) starts before an account is signed in
+(`ServerRoot.tsx`); a different account gets a fresh `AppProvider`.
+
+| Route / place | Screen | File |
+| --- | --- | --- |
+| `#/signin` (any route while signed out) | **Sign in**: `.auth` column on the desk — pink `.page-head` over one `.card` window; local form (**Sign in** = the one `btn-primary`) and/or **Sign in with <provider>** (`.btn`, becomes `btn-primary` when it is the only method, below an `.auth-sso` rule) | `screens/auth/SignIn.tsx` |
+| `#/invite/<token>` | **Accept invite**: same frame; name + password twice, **Create account** primary | `screens/auth/AcceptInvite.tsx` |
+| `#/settings/account` | Profile (`.set-row` + `.pill` role / sign-in kind, **Sign out**), Your data (`UsageMeter`: `.stat` + `.usage-bar`, **Export my data** link), Change password (local accounts only), Sessions (`.set-row` per session, Revoke), **Delete account** (`.card.danger-zone`, hot title bar, typed e-mail + `ConfirmButton`) | `components/server/AccountSettings.tsx`, `Usage.tsx` |
+| `#/settings/users` (admin) | Invite someone (e-mail, role, **Create invite link** → `.invite-link` pink-wash block with `CopyButton`), Users (`.meetings-table`: role `select`, SSO/local, usage, last sign-in, Disable / Delete with `ConfirmButton`), Pending invites | `components/server/UsersSettings.tsx` |
+| `#/settings/signin` (admin) | Local accounts switch + Single sign-on form; fields set by the server's environment are disabled with a `.pill` "set by the server"; the client secret is write-only; **Test** checks discovery | `components/server/SignInSettings.tsx` |
+| `#/settings/audit` (admin) | `.meetings-table` of sign-ins and admin actions (never meeting content) | `components/server/AuditSettings.tsx` |
+| Nav window | `.cell.user-chip` (name → Account) and **Sign out** cell before the Record cell; footer reads "Your recordings and transcripts stay on this server; only you can open them." | `App.tsx` |
+
+Deviations: Settings → Account / Users / Sign-in / Audit log exist only in
+server mode (Users, Sign-in, Audit log only for administrators); models and
+GPU are administrator-only (members see "Ask your administrator to install
+models"); the first-run Setup, updates, folders, native recorder and the other
+desktop-only cards are not shown. Auth styles are the `/* server edition */`
+block at the end of `styles.css` and use tokens only.
+
+## 7. Verification
 
 `npx tsc --noEmit` → `npx vitest run` → `npm run build && npx playwright test`
 → `npm run tauri:dev` (or the AppImage) for a visual pass on the real shell.

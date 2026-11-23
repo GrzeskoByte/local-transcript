@@ -13,7 +13,8 @@ import { MeetingRow } from '../components/MeetingRow.tsx';
 import { ModelDownloadProgress } from '../components/ModelDownload.tsx';
 import { newAgendaItem, type AgendaItem } from '../../domain/agenda';
 import { describeNativeRuntime } from '../../asr/model-manager';
-import { isDesktopApp } from '../../platform/desktop';
+import { hasNativeBackend, isDesktopApp } from '../../platform/desktop';
+import { canManageModels, isServerApp } from '../../platform/server';
 import { getPref, setPref } from '../../platform/prefs';
 import { Keys, useShortcuts } from '../App.tsx';
 import { errorOf, fromEvent, setStartError, useStartError } from '../quick-record';
@@ -127,7 +128,7 @@ export function Home(): React.JSX.Element {
           <div>
             <h1 className="hero-title">Record now.</h1>
             <p className="hero-lede">
-              Transcribe later. Audio and text stay on this computer until you choose to share them.
+              Transcribe later. Audio and text stay {isServerApp() ? 'on this server' : 'on this computer'} until you choose to share them.
             </p>
           </div>
           <fieldset className="source-pick">
@@ -262,7 +263,11 @@ export function Home(): React.JSX.Element {
           {!modelMeta.state.startsWith('ready') && !remoteAsrActive(remoteAsrConfig) && nativeStatus?.available && installedModels.length === 0 && (
             <section className="cta-red" aria-label="Local speech model">
               <span className="cta-title">Set up on-device transcription</span>
-              <div>One click downloads the speech model ({firstRunModel}) once. Recording already works without it.</div>
+              <div>
+                {canManageModels()
+                  ? `One click downloads the speech model (${firstRunModel}) once. Recording already works without it.`
+                  : 'No speech model is installed on this server. Ask your administrator to install models. Recording already works without it.'}
+              </div>
               <p className="mt-2 mb-0 small" aria-label="Acceleration">
                 {describeNativeRuntime(nativeStatus)}
               </p>
@@ -270,7 +275,7 @@ export function Home(): React.JSX.Element {
                 <div className="mt-3">
                   <ModelDownloadProgress />
                 </div>
-              ) : (
+              ) : !canManageModels() ? null : (
                 <div className="btn-row">
                   <button
                     className="btn btn-primary"
@@ -300,7 +305,7 @@ export function Home(): React.JSX.Element {
             txStage={txStage}
             transcribe={(id) => void setupAndTranscribe(id).catch(() => undefined)}
           />
-          {isDesktopApp() && (
+          {hasNativeBackend() && (
             <section className="card" aria-label="Coming up">
               <div className="card-title">
                 <strong>Coming up · from your calendar</strong>

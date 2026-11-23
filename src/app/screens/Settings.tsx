@@ -32,7 +32,13 @@ import {
   type DetectedCalendar,
   type MailAccount,
 } from '../../integrations/calendar-detect';
-import { isDesktopApp, openExternalUrl } from '../../platform/desktop';
+import { hasNativeBackend, isDesktopApp, openExternalUrl } from '../../platform/desktop';
+import { canManageModels, isServerApp, isServerAdmin } from '../../platform/server';
+import { AccountSettings } from '../components/server/AccountSettings.tsx';
+import { UsersSettings } from '../components/server/UsersSettings.tsx';
+import { SignInSettings } from '../components/server/SignInSettings.tsx';
+import { AuditSettings } from '../components/server/AuditSettings.tsx';
+import { useServerSession } from '../components/server/api.ts';
 import { AudioDevicePickers } from '../components/AudioDevices.tsx';
 import {
   AfterRecordingCards,
@@ -82,7 +88,18 @@ const SECTIONS: Array<[SettingsTab, string, string]> = [
   ['app', 'App & updates', 'Updates, shortcuts, diagnostics'],
 ];
 
+/** Sections of the server edition: Account for everyone, the rest for administrators. */
+const SERVER_SECTIONS: Array<[SettingsTab, string, string, boolean]> = [
+  ['account', 'Account', 'Profile, password, sessions, your data', false],
+  ['users', 'Users', 'Accounts, invitations, usage', true],
+  ['signin', 'Sign-in', 'Local login, single sign-on', true],
+  ['audit', 'Audit log', 'Sign-ins and admin actions', true],
+];
+
 export function Settings(): React.JSX.Element {
+  useServerSession();
+  const server = isServerApp();
+  const admin = isServerAdmin();
   const {
     go,
     nativeStatus,
@@ -186,12 +203,21 @@ export function Settings(): React.JSX.Element {
       });
   }, [llmDraft.preset]);
 
-  const [tab, setTab] = useState<SettingsTab>(
+  const sections: Array<[SettingsTab, string, string]> = [
+    ...SECTIONS,
+    ...SERVER_SECTIONS.filter(([, , , adminOnly]) => server && (!adminOnly || admin)).map(
+      ([id, label, hint]): [SettingsTab, string, string] => [id, label, hint],
+    ),
+  ];
+  const allowed = (t: SettingsTab): boolean => sections.some(([id]) => id === t);
+  const [requested, setTab] = useState<SettingsTab>(
     route.name === 'settings' && route.tab ? route.tab : 'models',
   );
   useEffect(() => {
     if (route.name === 'settings' && route.tab) setTab(route.tab);
   }, [route]);
+  // A section the account may not see (admin-only, or desktop-only) shows the first one.
+  const tab: SettingsTab = allowed(requested) ? requested : 'models';
   const [autoCheck, setAutoCheckState] = useState(getAutoCheck);
   const [updateBusy, setUpdateBusy] = useState<'checking' | 'installing' | null>(null);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
@@ -286,7 +312,11 @@ export function Settings(): React.JSX.Element {
       <div className="page-head is-tool">
         <div>
           <h1>Settings</h1>
-          <p className="muted">Everything here is stored on this computer and survives updates.</p>
+          <p className="muted">
+            {server
+              ? 'Your settings are stored on this server, in your account.'
+              : 'Everything here is stored on this computer and survives updates.'}
+          </p>
         </div>
         <button className="btn" onClick={() => go({ name: 'home' })}>
           Done
@@ -295,7 +325,7 @@ export function Settings(): React.JSX.Element {
 
       <div className="settings-layout">
       <nav className="settings-nav" aria-label="Settings sections">
-        {SECTIONS.map(([id, label, hint]) => (
+        {sections.map(([id, label, hint]) => (
           <button
             key={id}
             type="button"
@@ -313,18 +343,22 @@ export function Settings(): React.JSX.Element {
       <>
       <EngineOverview />
       <RemoteTranscriptionSettings />
-      {isDesktopApp() && <LiveTranscriptionSettings />}
+      {hasNativeBackend() && <LiveTranscriptionSettings />}
       </>
       )}
 
       {tab === 'after' && (
         <>
           <AfterRecordingCards />
-          {isDesktopApp() && <AutoTranscribeSettings />}
+          {hasNativeBackend() && <AutoTranscribeSettings />}
         </>
       )}
 
       {tab === 'appearance' && <AppearanceSettings />}
+      {tab === 'account' && server && <AccountSettings />}
+      {tab === 'users' && server && admin && <UsersSettings />}
+      {tab === 'signin' && server && admin && <SignInSettings />}
+      {tab === 'audit' && server && admin && <AuditSettings />}
 
       {tab === 'app' && (
       <>
@@ -338,7 +372,11 @@ export function Settings(): React.JSX.Element {
           )}
         </div>
         {!isDesktopApp() ? (
-          <div className="muted">Updates are installed from the desktop app.</div>
+          <div className="muted">
+            {server
+              ? 'This server is updated by its administrator (a new container image).'
+              : 'Updates are installed from the desktop app.'}
+          </div>
         ) : (
           <>
             <div className="muted">
@@ -663,41 +701,43 @@ export function Settings(): React.JSX.Element {
           Credentials stay on this device; transport runs through the desktop shell.
         </div>
         <div className="btn-row">
+          {!server && (
+          <button
+              className="btn"
+              type="button"
+              disabled={detectBusy}
+              onClick={() => {
+                if (!isDesktopApp()) {
+                  setDetectMessage('Detection needs the desktop app.');
+                  return;
+                }
+                setDetectBusy(true);
+                setDetectMessage(null);
+                scanThunderbird()
+                  .then(({ calendars, mailAccounts: accounts }) => {
+                    setDetected(calendars);
+                    setMailAccounts(accounts);
+                    setDetectMessage(
+                      calendars.length
+                        ? `Found ${calendars.length} calendar(s) in Thunderbird.`
+                        : accounts.length
+                          ? `No network calendar in Thunderbird; mail server ${accounts[0].host} found — try "Detect from server".`
+                          : 'No Thunderbird profile with calendars found.',
+                    );
+                  })
+                  .catch((e: unknown) => setDetectMessage(e instanceof Error ? e.message : String(e)))
+                  .finally(() => setDetectBusy(false));
+              }}
+            >
+              Find in Thunderbird
+            </button>
+          )}
           <button
             className="btn"
             type="button"
             disabled={detectBusy}
             onClick={() => {
-              if (!isDesktopApp()) {
-                setDetectMessage('Detection needs the desktop app.');
-                return;
-              }
-              setDetectBusy(true);
-              setDetectMessage(null);
-              scanThunderbird()
-                .then(({ calendars, mailAccounts: accounts }) => {
-                  setDetected(calendars);
-                  setMailAccounts(accounts);
-                  setDetectMessage(
-                    calendars.length
-                      ? `Found ${calendars.length} calendar(s) in Thunderbird.`
-                      : accounts.length
-                        ? `No network calendar in Thunderbird; mail server ${accounts[0].host} found — try "Detect from server".`
-                        : 'No Thunderbird profile with calendars found.',
-                  );
-                })
-                .catch((e: unknown) => setDetectMessage(e instanceof Error ? e.message : String(e)))
-                .finally(() => setDetectBusy(false));
-            }}
-          >
-            Find in Thunderbird
-          </button>
-          <button
-            className="btn"
-            type="button"
-            disabled={detectBusy}
-            onClick={() => {
-              if (!isDesktopApp()) {
+              if (!hasNativeBackend()) {
                 setDetectMessage('Detection needs the desktop app.');
                 return;
               }
@@ -986,7 +1026,9 @@ export function Settings(): React.JSX.Element {
             });
           }}
         >
-          {(Object.keys(LLM_PRESET_LABELS) as LlmPreset[]).map((p) => (
+          {(Object.keys(LLM_PRESET_LABELS) as LlmPreset[])
+            .filter((p) => !server || !isLocalAgentPreset(p))
+            .map((p) => (
             <option key={p} value={p}>{LLM_PRESET_LABELS[p]}</option>
           ))}
         </select>
@@ -1119,7 +1161,7 @@ export function Settings(): React.JSX.Element {
       {/* GPU belongs with the models it speeds up. */}
       {tab === 'models' && (
       <>
-      {(!nativeStatus || nativeStatus.backend === 'voxtype') && (
+      {canManageModels() && (!nativeStatus || nativeStatus.backend === 'voxtype') && (
         <section className="card" aria-label="GPU acceleration">
         <div className="model-title">
           <strong>GPU acceleration</strong>
@@ -1230,6 +1272,8 @@ export function Settings(): React.JSX.Element {
                       >
                         {active ? 'In use' : busy ? '…' : 'Use'}
                       </button>
+                    ) : !canManageModels() ? (
+                      <span className="muted small">Ask your administrator to install it</span>
                     ) : (
                       <button
                         className="btn btn-primary"

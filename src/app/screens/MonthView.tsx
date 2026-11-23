@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../store';
 import { CALENDAR_PROVIDERS, type CalendarProvider, type ServerEvent } from '../../integrations/calendar';
 import { readCachedMonth, writeCachedMonth } from '../../integrations/calendar-cache';
-import { isDesktopApp } from '../../platform/desktop';
+import { hasNativeBackend } from '../../platform/desktop';
 
 function dayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -54,7 +54,7 @@ export function MonthView(): React.JSX.Element {
         live = true;
         setServerEvents(events);
         setCachedAt(null);
-        if (isDesktopApp()) void writeCachedMonth(config, start, events);
+        if (hasNativeBackend()) void writeCachedMonth(config, start, events);
       })
       .catch(async (e) => {
         if (cancelled) return;

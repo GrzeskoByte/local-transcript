@@ -1,3 +1,4 @@
+import { canManageModels } from '../../platform/server';
 import { ParticipantsCard } from '../components/meeting/Participants.tsx';
 import { useEffect, useRef, useState } from 'react';
 import { useApp, formatDuration } from '../store.tsx';
@@ -150,7 +151,7 @@ export function WrapUp({ id, step }: { id: string; step?: WrapStepId }): React.J
                     className="btn btn-primary"
                     onClick={() => void setupAndTranscribe(id).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}
                   >
-                    {m.transcriptionStatus === 'failed' ? 'Retry' : installedModels.length || remoteAsrActive(remoteAsrConfig) ? 'Transcribe' : 'Download model & transcribe'}
+                    {m.transcriptionStatus === 'failed' ? 'Retry' : installedModels.length || remoteAsrActive(remoteAsrConfig) || !canManageModels() ? 'Transcribe' : 'Download model & transcribe'}
                   </button>
                 )}
                 {txDone && next && (

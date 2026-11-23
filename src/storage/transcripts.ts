@@ -1,6 +1,8 @@
 import type { TranscriptSegment } from '../domain/transcript';
 import type { Meeting } from '../domain/meeting';
 import { db } from './database';
+import { invokeDesktop } from '../platform/desktop';
+import { isServerApp } from '../platform/server';
 
 const STORE = 'segments';
 
@@ -15,6 +17,9 @@ export async function commitTranscript(
   segments: TranscriptSegment[],
   patch: Partial<Meeting> = {},
 ): Promise<boolean> {
+  if (isServerApp()) {
+    return invokeDesktop<boolean>('server_db_commit_transcript', { meetingId, segments, patch });
+  }
   let committed = false;
   await db.transaction(['meetings', STORE], 'readwrite', (t) => {
     const meetings = t.objectStore('meetings');
@@ -41,6 +46,12 @@ export async function getSegments(meetingId: string): Promise<TranscriptSegment[
 }
 
 export async function deleteSegments(meetingId: string): Promise<void> {
+  if (isServerApp()) {
+    // `server_db_commit_transcript` replaces segments only together with a
+    // meeting, so clear them one by one.
+    for (const row of await getSegments(meetingId)) await db.delete(STORE, row.id);
+    return;
+  }
   const rows = await getSegments(meetingId);
   for (const row of rows) {
     await db.delete(STORE, row.id);
@@ -56,6 +67,13 @@ export async function updateSegment(
   patch: Partial<Pick<TranscriptSegment, 'text' | 'speaker'>>,
 ): Promise<TranscriptSegment | undefined> {
   let updated: TranscriptSegment | undefined;
+  if (isServerApp()) {
+    const cur = await db.get<TranscriptSegment>(STORE, id);
+    if (!cur) return undefined;
+    updated = { ...cur, ...patch };
+    await db.put(STORE, updated);
+    return updated;
+  }
   await db.transaction([STORE], 'readwrite', (t) => {
     const segs = t.objectStore(STORE);
     const req = segs.get(id);
@@ -71,6 +89,13 @@ export async function updateSegment(
 
 /** Replace the speaker of every line at once (speaker detection result). */
 export async function setSegmentSpeakers(meetingId: string, speakers: Map<string, string>): Promise<void> {
+  if (isServerApp()) {
+    await invokeDesktop('server_db_set_segment_speakers', {
+      meetingId,
+      speakers: Object.fromEntries(speakers),
+    });
+    return;
+  }
   await db.transaction([STORE], 'readwrite', (t) => {
     const segs = t.objectStore(STORE);
     const req = segs.index('by-meeting').getAll(meetingId);

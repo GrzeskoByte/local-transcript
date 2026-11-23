@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { validateCalendarConfig, withCallLink, type ServerEvent } from '../integrations/calendar';
-import { isDesktopApp } from '../platform/desktop';
+import { hasNativeBackend } from '../platform/desktop';
 import { useApp } from './store.tsx';
 import { calendarPrefs, usePrefsVersion } from './preferences';
 import { parseAgendaText, type AgendaItem } from '../domain/agenda';
@@ -30,7 +30,7 @@ function publish(u: Upcoming): void {
 export function useUpcoming(): Upcoming {
   const { calendarConfig, fetchCalendarEvents } = useApp();
   usePrefsVersion();
-  const enabled = isDesktopApp() && calendarPrefs().comingUp && validateCalendarConfig(calendarConfig) === null;
+  const enabled = hasNativeBackend() && calendarPrefs().comingUp && validateCalendarConfig(calendarConfig) === null;
   const [state, setState] = useState(cache);
   useEffect(() => {
     listeners.add(setState);

@@ -1,4 +1,6 @@
 import { loadNativeSettings, setNativeSetting } from '../platform/native-settings';
+import { invokeDesktop } from '../platform/desktop';
+import { isServerApp } from '../platform/server';
 
 const DB_NAME = 'local-transcribe';
 const DB_VERSION = 1;
@@ -88,26 +90,43 @@ function tx<T>(
   );
 }
 
+/**
+ * Server edition: the per-user meeting database lives on the server
+ * (`server_db_*`, docs/SERVER.md) instead of IndexedDB.
+ */
+function remote<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+  return invokeDesktop<T>(cmd, args);
+}
+
 export const db = {
   get<T>(store: string, key: string): Promise<T | undefined> {
+    if (isServerApp()) {
+      return remote<T | null>('server_db_get', { store, key }).then((v) => v ?? undefined);
+    }
     return tx<T | undefined>([store], 'readonly', (t) =>
       t.objectStore(store).get(key),
     );
   },
   put<T>(store: string, value: T): Promise<void> {
+    if (isServerApp()) return remote<void>('server_db_put', { store, value }).then(() => undefined);
     return tx<void>([store], 'readwrite', (t) => t.objectStore(store).put(value)).then(
       () => undefined,
     );
   },
   delete(store: string, key: string): Promise<void> {
+    if (isServerApp()) return remote<void>('server_db_delete', { store, key }).then(() => undefined);
     return tx<undefined>([store], 'readwrite', (t) => t.objectStore(store).delete(key)).then(
       () => undefined,
     );
   },
   getAll<T>(store: string): Promise<T[]> {
+    if (isServerApp()) return remote<T[] | null>('server_db_get_all', { store }).then((v) => v ?? []);
     return tx<T[]>([store], 'readonly', (t) => t.objectStore(store).getAll());
   },
   getAllByIndex<T>(store: string, index: string, key: string): Promise<T[]> {
+    if (isServerApp()) {
+      return remote<T[] | null>('server_db_get_by_index', { store, index, key }).then((v) => v ?? []);
+    }
     return openDatabase().then(
       (dbInstance) =>
         new Promise<T[]>((resolve, reject) => {
@@ -123,6 +142,9 @@ export const db = {
    * `fn` may issue further requests from request callbacks.
    */
   transaction(stores: string[], mode: IDBTransactionMode, fn: (t: IDBTransaction) => void): Promise<void> {
+    // Multi-step transactions have dedicated server commands (updateMeeting,
+    // commitTranscript, …): callers check `isServerApp()` first.
+    if (isServerApp()) return Promise.reject(new Error('IndexedDB transactions are not available on the server.'));
     return openDatabase().then(
       (dbInstance) =>
         new Promise<void>((resolve, reject) => {

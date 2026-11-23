@@ -22,6 +22,8 @@ import { LevelBars, useLevelMonitor } from '../LevelMeter.tsx';
 import { getMicrophoneDevice } from '../../../audio/devices';
 import { playbackContext } from '../../../audio/player';
 import { isDesktopApp } from '../../../platform/desktop';
+import { isServerApp } from '../../../platform/server';
+import { UsageMeter } from '../server/Usage';
 import {
   appLogs,
   diarizeStatus,
@@ -467,6 +469,11 @@ export function StorageCards(): React.JSX.Element {
               </button>
             </div>
           </>
+        ) : isServerApp() ? (
+          <>
+            <UsageMeter />
+            <p className="muted small mb-0">Everything is stored on this server, in your account.</p>
+          </>
         ) : (
           <p className="muted mb-0">Meetings are stored in this browser's private storage.</p>
         )}
@@ -717,6 +724,7 @@ export function AppCards(): React.JSX.Element {
             setTest(v);
           }}
         />
+        {!isServerApp() && (
         <div className="set-row">
           <span className="grow">
             <b>Run setup again</b> <small className="muted">Microphone, calls, model, files.</small>
@@ -725,6 +733,7 @@ export function AppCards(): React.JSX.Element {
             Open setup
           </button>
         </div>
+        )}
         <div className="set-row">
           <span className="grow">
             <b>Something wrong?</b> <small className="muted">Copies versions, devices and the last errors — no audio or text.</small>

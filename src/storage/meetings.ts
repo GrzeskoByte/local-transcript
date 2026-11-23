@@ -1,5 +1,7 @@
 import type { Meeting } from '../domain/meeting';
 import { db } from './database';
+import { invokeDesktop } from '../platform/desktop';
+import { isServerApp } from '../platform/server';
 
 const STORE = 'meetings';
 
@@ -17,6 +19,11 @@ export async function listMeetings(): Promise<Meeting[]> {
 }
 
 export async function deleteMeetingRecord(id: string): Promise<void> {
+  // Server: the meeting and its segments go in one transaction.
+  if (isServerApp()) {
+    await invokeDesktop('server_db_delete_meeting', { id });
+    return;
+  }
   await db.delete(STORE, id);
 }
 
@@ -37,6 +44,13 @@ export async function updateMeeting(
   change: Partial<Meeting> | ((m: Meeting) => Meeting),
 ): Promise<Meeting | undefined> {
   let result: Meeting | undefined;
+  if (isServerApp()) {
+    const current = await db.get<Meeting>(STORE, id);
+    if (!current) return undefined;
+    const next = typeof change === 'function' ? change(current) : { ...current, ...change };
+    const stored = await invokeDesktop<boolean>('server_db_put_if_exists', { store: STORE, value: next });
+    return stored ? next : undefined;
+  }
   await db.transaction([STORE], 'readwrite', (t) => {
     const os = t.objectStore(STORE);
     const req = os.get(id);

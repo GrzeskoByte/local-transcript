@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useApp } from '../store.tsx';
 import { autoTranscribeEnabled, setAutoTranscribeEnabled } from '../auto-transcribe';
+import { canManageModels, isServerApp } from '../../platform/server';
 
 const mb = (bytes: number) => `${Math.round(bytes / 1_048_576)} MB`;
 
@@ -26,7 +27,7 @@ export function LiveTranscriptionSettings(): React.JSX.Element {
         {liveEnabled && liveChoice && <span className="badge badge-ok">On</span>}
       </div>
       <div className="muted">
-        Shows the transcript while you record, using the built-in whisper.cpp engine on this computer — no audio or
+        Shows the transcript while you record, using the built-in whisper.cpp engine on {isServerApp() ? 'this server' : 'this computer'} — no audio or
         text leaves it. The text is saved as the meeting&apos;s transcript when you stop; Re-transcribe on the meeting
         redoes it from the whole recording with your main model.
       </div>
@@ -64,7 +65,10 @@ export function LiveTranscriptionSettings(): React.JSX.Element {
         A small model (base or small) keeps up in real time on a CPU; large models give better text but may fall
         behind, and the rest is finished after you stop.
       </p>
-      {selected && !selected.ready && (
+      {selected && !selected.ready && !canManageModels() && (
+        <p className="muted mt-3 mb-0">Ask your administrator to install models.</p>
+      )}
+      {selected && !selected.ready && canManageModels() && (
         <div className="mt-3">
           {liveDownload ? (
             <div className="loader" role="status" aria-label="Live model download">
@@ -96,7 +100,9 @@ export function LiveTranscriptionSettings(): React.JSX.Element {
         </p>
       )}
       {liveEnabled && !liveChoice && (
-        <p className="warn mt-2 mb-0">Download a speech model to see text while recording.</p>
+        <p className="warn mt-2 mb-0">
+          {canManageModels() ? 'Download a speech model to see text while recording.' : 'No speech model is installed. Ask your administrator to install models.'}
+        </p>
       )}
       {recording && <p className="muted small mb-0">Changes apply to the next recording.</p>}
       {error && (
