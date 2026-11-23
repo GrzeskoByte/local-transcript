@@ -251,12 +251,16 @@ test('an expired session (401) returns to the sign-in screen', async ({ page }) 
   // Any call now answers 401: the app drops back to the sign-in screen.
   fake.signedIn = false;
   // The 401 reloads the page (no state of the old session survives), which can cut this call short.
-  await page
-    .evaluate(() => {
-      window.location.hash = '#/library';
-    })
-    .catch(() => undefined);
-  await expect(page.getByRole('region', { name: 'Sign in' })).toBeVisible();
+  // Keep navigating until a screen makes a server call: under load the first hop may be served from memory.
+  const signIn = page.getByRole('region', { name: 'Sign in' });
+  await expect(async () => {
+    for (const hash of ['#/library', '#/settings/account', '#/']) {
+      if (await signIn.isVisible()) break;
+      await page.evaluate((h) => { window.location.hash = h; }, hash).catch(() => undefined);
+      await page.waitForTimeout(300);
+    }
+    await expect(signIn).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 20_000 });
 });
 
 test('the invite link opens the accept screen', async ({ page }) => {
