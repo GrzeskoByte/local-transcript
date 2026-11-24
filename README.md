@@ -12,6 +12,10 @@ Core rule: **recorder first, transcription second.** Recording works with no ASR
 model installed. Transcription is manual, post-recording, and never destroys the
 audio.
 
+> **Server edition:** the same app as a self-hosted, multi-user web app in one
+> Docker container: accounts, optional single sign-on, private per-user storage.
+> See [Server edition (Docker)](#server-edition-docker).
+
 ## Features
 
 - **Three recording modes** — Speaker (microphone), Device Audio (everything the computer
@@ -39,6 +43,97 @@ audio.
   follows playback, 1×–2× speed without the chipmunk voice, copy buttons, keyboard keys
   (Space, ←/→, Ctrl+F, Ctrl+N, P), meetings grouped by day with status filters, and an
   optional **Transcribe after recording** setting (off by default).
+
+## Server edition (Docker)
+
+Run Local Transcribe on your own server so a team can use it from the browser.
+It is the desktop app's interface with a backend for accounts and storage, served
+by one container.
+
+- **Accounts:** invite-only local accounts, plus optional single sign-on through
+  any OpenID Connect provider (Keycloak, Authentik, Entra ID, Google). A group can
+  grant admin rights.
+- **Private per user:** every user's meetings, recordings and settings live in
+  their own folder in the `/data` volume. No one else can open them, admins
+  included. Saved tokens (GitLab, calendar, AI) are encrypted on disk.
+- **Shared transcription:** one whisper.cpp engine and one set of models
+  (downloaded by an admin), shared fairly between users. A CUDA image is available
+  for NVIDIA GPUs. Speaker detection is included.
+- **Stays on your server:** nothing leaves the host except sign-in with your SSO
+  provider and the integrations a user turns on.
+- **Recording:** recording runs in the browser, so system sound capture and the
+  desktop-only tools (local folders, Thunderbird, OpenCode, Claude Code) are not
+  available.
+
+### Try it on one machine
+
+Needs Docker. The app is reachable from this computer only, and the microphone
+works on `localhost` without HTTPS.
+
+```sh
+umask 077
+printf 'LT_ADMIN_EMAIL=you@example.com\nLT_ADMIN_PASSWORD=%s\n' "$(openssl rand -base64 18)" > lt.env
+cat lt.env   # your first admin login
+docker run -d --name local-transcribe --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 -v lt-data:/data --env-file lt.env \
+  ghcr.io/grzeskobyte/local-transcribe:latest
+```
+
+1. Open <http://localhost:8080> and sign in with the email and password from `lt.env`.
+2. **Settings → Models**: download a model (`large-v3-turbo-q5_0` is a good start;
+   `base` is fastest on a small CPU).
+3. **Settings → Users**: invite people. Each gets a one-time link to set a password.
+
+The admin account is created only when the database has no users, so you can
+delete `lt.env` after the first sign-in. To stop: `docker stop local-transcribe`.
+To remove everything, including all recordings:
+`docker rm -f local-transcribe && docker volume rm lt-data`.
+
+### Run it for a team (Docker Compose)
+
+Clone this repository, check out the `server` branch, and create `.env`:
+
+```sh
+git clone -b server https://github.com/GrzeskoByte/local-transcript.git
+cd local-transcript
+umask 077
+cp deploy/.env.example .env   # set LT_ADMIN_EMAIL and LT_ADMIN_PASSWORD
+docker compose up -d
+```
+
+Browsers allow the microphone only over HTTPS (or on `localhost`), so for other
+computers put the app behind HTTPS. The included Caddy proxy gets a certificate
+automatically: point a DNS name at the server, open ports 80 and 443, then set in `.env`:
+
+```dotenv
+LT_DOMAIN=transcribe.example.com
+LT_PUBLIC_URL=https://transcribe.example.com
+```
+
+```sh
+docker compose --profile https up -d
+```
+
+| To | Do |
+| --- | --- |
+| Turn on single sign-on | Set `LT_OIDC_ISSUER`, `LT_OIDC_CLIENT_ID`, `LT_OIDC_CLIENT_SECRET` (and `LT_OIDC_ADMIN_GROUP`), or use **Settings → Sign-in**. Redirect URI: `<LT_PUBLIC_URL>/auth/oidc/callback`. |
+| Use an NVIDIA GPU | `docker compose -f docker-compose.yml -f deploy/docker-compose.gpu.yml up -d` (needs the NVIDIA Container Toolkit). |
+| Limit storage per user | `LT_USER_QUOTA_MB=2000` (0 = unlimited). |
+| Reach a calendar on your internal network | `LT_CALENDAR_ALLOWED_HOSTS=calendar.company.local,10.0.0.0/8` (private addresses are blocked otherwise). |
+| Pin a version | `LT_IMAGE=ghcr.io/grzeskobyte/local-transcribe:0.1.27` (GPU: `0.1.27-cuda`). |
+| Upgrade | Back up, then `docker compose pull app && docker compose up -d app`. |
+| Reset a password | `docker compose exec app lt-server admin reset-password --email you@example.com` |
+
+Back up by archiving the `lt-data` volume while the app is stopped. It holds
+the accounts, recordings, transcripts, models and the encryption key.
+[`deploy/README.md`](deploy/README.md) has the full guide: HTTPS with your own
+proxy, the settings for each SSO provider, a Keycloak demo, backup and restore,
+and account recovery.
+
+**Images** (`ghcr.io/grzeskobyte/local-transcribe`): `latest` and `<version>` are
+the CPU image (Linux amd64 and arm64). `cuda` and `<version>-cuda` are the NVIDIA
+image (amd64). Release candidates such as `0.1.27-rc.1` get only their version tag.
+The server's design and API are in [`docs/SERVER.md`](docs/SERVER.md).
 
 ## Requirements
 
@@ -209,6 +304,8 @@ Verify order: typecheck → unit → e2e. See `bench/README.md` for the harness.
 - `DESIGN.md` — design tokens, components, spacing rules (single source of truth for UI).
 - `AGENTS.md` — contributor/agent notes: stack gotchas, command order, MVP rules.
 - `bench/README.md` — accuracy harness usage and fixture docs.
+- `deploy/README.md` — running the server edition (HTTPS, SSO, GPU, backups).
+- `docs/SERVER.md` — server edition design, data layout and API.
 
 ## License
 

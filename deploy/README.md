@@ -99,7 +99,7 @@ Use the same Compose files and profiles for ongoing operations, including `--pro
 
 ## Upgrade
 
-Back up `/data` first. Pull the new image and recreate the app while keeping the volume. Pin `app.image` to a version tag if you need control over the upgrade version.
+Back up `/data` first. Pull the new image and recreate the app while keeping the volume. To control the upgrade version, set `LT_IMAGE` in `.env` to a version tag, for example `ghcr.io/grzeskobyte/local-transcribe:0.1.27` (`0.1.27-cuda` with the GPU override). Release candidates do not move `latest` or `cuda`.
 
 ```sh
 docker compose pull app

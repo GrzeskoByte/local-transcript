@@ -140,5 +140,12 @@ jobs:
           CPU_DIGEST: ${{ needs.build.outputs.cpu-digest }}
           CUDA_DIGEST: ${{ needs.build.outputs.cuda-digest }}
         run: |
-          docker buildx imagetools create --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" "$IMAGE@$CPU_DIGEST"
-          docker buildx imagetools create --tag "$IMAGE:$VERSION-cuda" --tag "$IMAGE:cuda" "$IMAGE@$CUDA_DIGEST"
+          # Release candidates (1.2.3-rc.1) get version tags only; latest/cuda move on releases.
+          cpu_tags=(--tag "$IMAGE:$VERSION")
+          cuda_tags=(--tag "$IMAGE:$VERSION-cuda")
+          if [[ "$VERSION" != *-* ]]; then
+            cpu_tags+=(--tag "$IMAGE:latest")
+            cuda_tags+=(--tag "$IMAGE:cuda")
+          fi
+          docker buildx imagetools create "${cpu_tags[@]}" "$IMAGE@$CPU_DIGEST"
+          docker buildx imagetools create "${cuda_tags[@]}" "$IMAGE@$CUDA_DIGEST"

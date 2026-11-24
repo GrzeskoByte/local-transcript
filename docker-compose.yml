@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/grzeskobyte/local-transcribe:latest
+    image: ${LT_IMAGE:-ghcr.io/grzeskobyte/local-transcribe:latest}
     build:
       context: .
       args:
